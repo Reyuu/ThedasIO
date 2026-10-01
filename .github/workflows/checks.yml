@@ -1,0 +1,30 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync dev env
+        run: uv sync --group dev --frozen
+
+      - name: Ruff check
+        run: uv run ruff check src tests tools
+
+      - name: Ruff format
+        run: uv run ruff format --check src tests tools
+
+      - name: Fast tests
+        run: uv run pytest -m "not blender" -q
+
+      - name: Mypy
+        run: uv run --no-project --python 3.13 --with mypy --with pillow --with "numpy>=2.4.6" --with "pynvtt>=0.0.2" mypy src

@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "thedas_io"
+version = "0.1.0"
+name = "ThedasIO"
+tagline = "Import Dragon Age: Origins meshes and hierarchies"
+maintainer = "Reyuu <7038406+Reyuu@users.noreply.github.com>"
+type = "add-on"
+blender_version_min = "5.2.0"
+license = ["GPL-3.0-or-later"]
+website = "https://github.com/Reyuu/ThedasIO"
+tags = ["Import-Export"]
+wheels = ["./wheels/pillow-12.3.0-cp313-cp313-win_amd64.whl",
+          "./wheels/pynvtt-0.0.2-py3-none-any.whl"]

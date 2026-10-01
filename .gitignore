@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info
+
+wheels/
+dao_textures/
+.venv
+data/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.kilo/
+.vscode/

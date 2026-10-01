@@ -1,0 +1,52 @@
+[project]
+name = "thedas-io"
+version = "0.1.0"
+description = "Blender 5.2 extension importing and exporting Dragon Age: Origins .msh meshes and .mmh hierarchies"
+readme = "README.md"
+authors = [
+    { name = "Reyuu", email = "7038406+Reyuu@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+# runtime deps of the extension. pytest/ruff are dev tools and live in the
+# dev group; the Blender install gets its own copies via the manifest wheels
+dependencies = [
+    "pillow",
+    "pynvtt>=0.0.2",
+    "numpy>=2.4.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.14,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy",
+    "pytest",
+    "ruff>=0.16.9",
+    "fake-bpy-module>=20260925",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "blender: spawns a real `blender --background`; deselect with -m 'not blender'",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+explicit_package_bases = true
+mypy_path = "src"
+python_version = "3.13"
+# nvtt ships no py.typed; typed deps (numpy, Pillow) still checked normally
+disable_error_code = ["import-untyped"]
+# bpy-stubs need a 3.13+ host to parse; the dev env runs older. Blender
+# modules stay unchecked until the env moves to 3.13.
+[[tool.mypy.overrides]]
+module = ["bpy.*", "bpy", "mathutils.*", "mathutils"]
+ignore_missing_imports = true
+follow_imports = "skip"
+ignore_errors = true

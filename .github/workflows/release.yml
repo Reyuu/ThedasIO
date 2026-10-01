@@ -1,0 +1,156 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run - build only, skip tag / GitHub release / Nexus upload
+        required: false
+        type: boolean
+        default: true
+      environment:
+        description: Environment containing Nexus Mods secrets (only needed when dry run is off)
+        required: false
+        type: environment
+      is_hotfix:
+        description: Hotfix release - bumps the patch version (e.g. 0.2 -> 0.2.1) instead of the beta number
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      numeric: ${{ steps.version.outputs.numeric }}
+      note: ${{ steps.version.outputs.note }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute version tag
+        id: version
+        shell: pwsh
+        run: |
+          $hotfix = "${{ inputs.is_hotfix }}" -eq "true"
+
+          $versions = @()
+          git tag --list | ForEach-Object {
+            $t = $_
+            if ($t -match '^(\d+)\.(\d+)beta$') {
+              $versions += [version]::new([int]$Matches[1], [int]$Matches[2], 0)
+            } elseif ($t -match '^(\d+)\.(\d+)(?:\.(\d+))?$') {
+              $patch = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
+              $versions += [version]::new([int]$Matches[1], [int]$Matches[2], $patch)
+            }
+          }
+
+          $latest = $versions | Sort-Object | Select-Object -Last 1
+          if (-not $latest) { $latest = [version]::new(0, 0, 0) }
+
+          if ($hotfix) {
+            $tag = "$([version]::new($latest.Major, $latest.Minor, ($latest.Build + 1)).ToString())beta"
+          } else {
+            $maxBeta = 0
+            git tag --list '0.*beta' | ForEach-Object {
+              if ($_ -match '^0\.(\d+)beta$') {
+                $maxBeta = [Math]::Max($maxBeta, [int]$Matches[1])
+              }
+            }
+            $tag = "0.$($maxBeta + 1)beta"
+          }
+
+          $numeric = $tag -replace 'beta$', ''
+          while (($numeric.Split('.')).Count -lt 3) { $numeric += ".0" }
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "numeric=$numeric" >> $env:GITHUB_OUTPUT
+
+          $note = "This is release $tag of ThedasIO.`n`n**Full Changelog**: https://github.com/Reyuu/ThedasIO/commits/$tag"
+          "note<<EOF" >> $env:GITHUB_OUTPUT
+          $note >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Stamp version into manifest and pyproject
+        shell: pwsh
+        run: |
+          $numeric = "${{ steps.version.outputs.numeric }}"
+          foreach ($path in @("src\thedas_io\blender_manifest.toml", "pyproject.toml")) {
+            $content = Get-Content $path -Raw
+            $content = $content -replace '(?m)^version = "[^"]*"', "version = `"$numeric`""
+            Set-Content $path $content -NoNewline
+          }
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync dev env
+        run: uv sync --group dev
+
+      - name: Ruff check
+        run: uv run ruff check src tests tools
+
+      - name: Fast tests
+        run: uv run pytest -m "not blender" -q
+
+      - name: Package Blender extension
+        shell: pwsh
+        run: |
+          $zip = "ThedasIO-${{ steps.version.outputs.tag }}.zip"
+          uv run tools/deploy.py --package $zip
+          "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ThedasIO
+          path: ThedasIO-*.zip
+
+  release:
+    if: ${{ !inputs.dry_run }}
+    needs: build
+    runs-on: windows-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+    concurrency:
+      group: beta-release
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create release tag
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.build.outputs.tag }}"
+          git tag $tag
+          git push origin $tag
+
+      - name: Download release artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ThedasIO
+          path: release
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: ThedasIO - ${{ needs.build.outputs.tag }}
+          body: ${{ needs.build.outputs.note }}
+          files: release/ThedasIO-${{ needs.build.outputs.tag }}.zip
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUS_FILE_ID }}
+          mod_id: ${{ vars.NEXUS_MOD_ID }}
+          filename: ThedasIO-${{ needs.build.outputs.tag }}.zip
+          version: ${{ needs.build.outputs.tag }}
+          display_name: ThedasIO - ${{ needs.build.outputs.tag }}
+          description: This is release ${{ needs.build.outputs.tag }} of ThedasIO.
+          changelog: ${{ needs.build.outputs.note }}
