@@ -9,7 +9,7 @@ on:
         type: boolean
         default: true
       environment:
-        description: Environment containing Nexus Mods secrets (only needed when dry run is off)
+        description: Environment containing Nexus Mods secrets (only needed for Nexus upload with dry run off)
         required: false
         type: environment
       is_hotfix:
@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      upload_nexus:
+        description: Upload to Nexus Mods
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -141,6 +146,7 @@ jobs:
           files: release/ThedasIO-${{ needs.build.outputs.tag }}.zip
 
       - name: Upload to Nexus Mods
+        if: ${{ inputs.upload_nexus }}
         uses: Nexus-Mods/upload-action@v1.0.0-beta.10
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
