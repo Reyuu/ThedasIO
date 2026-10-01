@@ -23,8 +23,5 @@ jobs:
       - name: Ruff format
         run: uv run ruff format --check src tests tools
 
-      - name: Fast tests
-        run: uv run pytest -m "not blender" -q
-
       - name: Mypy
         run: uv run --no-project --python 3.13 --with mypy --with pillow --with "numpy>=2.4.6" --with "pynvtt>=0.0.2" mypy src

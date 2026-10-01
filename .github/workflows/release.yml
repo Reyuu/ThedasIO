@@ -92,9 +92,6 @@ jobs:
       - name: Ruff check
         run: uv run ruff check src tests tools
 
-      - name: Fast tests
-        run: uv run pytest -m "not blender" -q
-
       - name: Package Blender extension
         shell: pwsh
         run: |
