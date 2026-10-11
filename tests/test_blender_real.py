@@ -1096,11 +1096,11 @@ _SETUP = textwrap.dedent("""\
         import bpy
         sc = bpy.context.scene
         sc.thedas_io_db_path = db
-        bpy.ops.dao.refresh_assets()
+        bpy.ops.thedas_io.refresh_assets()
         for i, item in enumerate(sc.thedas_io_assets):
             if item.filename == "x.msh":
                 sc.thedas_io_index = i
-                bpy.ops.dao.import_asset()
+                bpy.ops.thedas_io.import_asset()
                 break  # loose + archive rows share a filename; import once
         return tmp
 
@@ -1231,7 +1231,7 @@ def test_export_untouched_roundtrip():
             import bpy
             out_dir = os.path.join(tmp, "out")
             try:
-                res = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 names = sorted(ex.ITEMS)
                 same = {n: open(os.path.join(out_dir, n), "rb").read()
                         == open(os.path.join(tmp, n), "rb").read() for n in names}
@@ -1396,7 +1396,7 @@ def test_export_edited_items():
             obj.data.update()
             out_dir = os.path.join(tmp, "out")
             try:
-                res = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 same = {n: open(os.path.join(out_dir, n), "rb").read()
                         == open(os.path.join(tmp, n), "rb").read()
                         for n in ("x.mao", "x.msh", "x_0d.dds", "x_0n.dds")}
@@ -1446,7 +1446,7 @@ def test_export_edited_mao():
                     swapped = node.name
             out_dir = os.path.join(tmp, "out")
             try:
-                res = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 out = parse_mao(open(os.path.join(out_dir, "x.mao"),
                                      encoding="utf-8").read())
                 same_msh = open(os.path.join(out_dir, "x.msh"), "rb").read() == open(
@@ -1499,12 +1499,12 @@ def test_import_mmh_material_by_6001():
             scan(tmp, db)
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             res = None
             for i, item in enumerate(sc.thedas_io_assets):
                 if item.filename == "y.mmh":
                     sc.thedas_io_index = i
-                    res = sorted(bpy.ops.dao.import_asset())
+                    res = sorted(bpy.ops.thedas_io.import_asset())
             try:
                 obj = bpy.data.objects["C_CORSPIDR_Mesh1"]
                 mat = obj.data.materials[0] if obj.data.materials else None
@@ -1812,7 +1812,7 @@ def test_export_edited_normal():
             img.pixels.foreach_set(px)
             out_dir = os.path.join(tmp, "out")
             try:
-                res = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 same = {n: open(os.path.join(out_dir, n), "rb").read()
                         == open(os.path.join(tmp, n), "rb").read()
                         for n in ("x.mao", "x.msh", "x_0d.dds", "x_0n.dds")}
@@ -1861,12 +1861,12 @@ _MMH_SETUP = textwrap.dedent("""\
         import bpy
         sc = bpy.context.scene
         sc.thedas_io_db_path = db
-        bpy.ops.dao.refresh_assets()
+        bpy.ops.thedas_io.refresh_assets()
         res = None
         for i, item in enumerate(sc.thedas_io_assets):
             if item.filename == "c_corspidra_0.mmh":
                 sc.thedas_io_index = i
-                res = sorted(bpy.ops.dao.import_asset())
+                res = sorted(bpy.ops.thedas_io.import_asset())
         return tmp, res
 
     def mmh_cleanup():
@@ -1890,7 +1890,7 @@ def test_export_untouched_mmh():
             out_dir = os.path.join(tmp, "out")
             try:
                 from thedas_io.export import ITEMS
-                exp = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                exp = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 names = sorted(ITEMS)
                 same = {n: open(os.path.join(out_dir, n), "rb").read()
                         == open(os.path.join("data", n), "rb").read() for n in names}
@@ -1936,7 +1936,7 @@ def test_export_edited_mmh():
             out_dir = os.path.join(tmp, "out")
             try:
                 from thedas_io.export import ITEMS
-                exp = sorted(bpy.ops.dao.export_assets(directory=out_dir))
+                exp = sorted(bpy.ops.thedas_io.export_assets(directory=out_dir))
                 names = sorted(ITEMS)
                 same = {n: open(os.path.join(out_dir, n), "rb").read()
                         == open(os.path.join("data", n), "rb").read() for n in names}
@@ -2107,7 +2107,7 @@ def test_extension_filter_is_a_combo_box():
             rows = {}
             for value in ("NONE", "MSH", "MMH"):
                 sc.thedas_io_filter_ext = value
-                bpy.ops.dao.refresh_assets()
+                bpy.ops.thedas_io.refresh_assets()
                 rows[value] = [r.filename for r in sc.thedas_io_assets]
             ext.unregister()
             return {"kind": kind, "items": items, "default": default, "rows": rows}
@@ -2150,10 +2150,10 @@ def test_export_edited_msh_from_edit_mode():
             scan(tmp, db)
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             i = next(k for k, r in enumerate(sc.thedas_io_assets) if r.filename == "c_corspidra_0.mmh")
             sc.thedas_io_index = i
-            imported = sorted(bpy.ops.dao.import_asset())
+            imported = sorted(bpy.ops.thedas_io.import_asset())
             try:
                 obj = next(o for o in bpy.context.scene.objects
                            if o.type == "MESH" and o.get("thedas_io_bone_index"))
@@ -2163,7 +2163,7 @@ def test_export_edited_msh_from_edit_mode():
                 bpy.ops.mesh.select_all(action="SELECT")
                 bpy.ops.transform.translate(value=(0, 0, 0.5))
                 out = os.path.join(tmp, "out")
-                res = sorted(bpy.ops.dao.export_assets(directory=out))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory=out))
                 names = sorted(os.listdir(out))
                 from thedas_io.export import ITEMS
                 edited = (open(os.path.join(out, "c_corspidr_0.msh"), "rb").read()
@@ -2334,7 +2334,7 @@ def test_reimport_edited_msh(tmp_path):
             obj.data.vertices[0].co[0] += 0.05
             obj.data.update()
             try:
-                res = sorted(bpy.ops.dao.export_assets(directory="@OUT@"))
+                res = sorted(bpy.ops.thedas_io.export_assets(directory="@OUT@"))
             finally:
                 cleanup()
             return {"res": res}
@@ -2360,12 +2360,12 @@ def test_reimport_edited_msh(tmp_path):
             scan("@OUT@", db)
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             res = None
             for i, item in enumerate(sc.thedas_io_assets):
                 if item.filename == "x.msh":
                     sc.thedas_io_index = i
-                    res = sorted(bpy.ops.dao.import_asset())
+                    res = sorted(bpy.ops.thedas_io.import_asset())
             try:
                 obj = bpy.data.objects["C_CORSPIDR_Mesh1"]
                 got = [tuple(v.co) for v in obj.data.vertices]
@@ -2424,7 +2424,7 @@ def test_reimport_edited_mmh(tmp_path):
             bone.name = "Spine02X"
             bpy.ops.object.mode_set(mode="OBJECT")
             try:
-                exp = sorted(bpy.ops.dao.export_assets(directory="@OUT@"))
+                exp = sorted(bpy.ops.thedas_io.export_assets(directory="@OUT@"))
             finally:
                 mmh_cleanup()
             return {"exp": exp}
@@ -2450,12 +2450,12 @@ def test_reimport_edited_mmh(tmp_path):
             scan("@OUT@", db)
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             res = None
             for i, item in enumerate(sc.thedas_io_assets):
                 if item.filename == "c_corspidra_0.mmh":
                     sc.thedas_io_index = i
-                    res = sorted(bpy.ops.dao.import_asset())
+                    res = sorted(bpy.ops.thedas_io.import_asset())
             try:
                 arm = next(o for o in bpy.context.scene.objects
                            if o.type == "ARMATURE")
@@ -2516,7 +2516,7 @@ def test_scan_button_populates_list():
             import bpy
             sc = bpy.context.scene
             sc.thedas_io_db_path = os.path.join(tmp, "t.sqlite")
-            res = sorted(bpy.ops.dao.scan_assets(directory=tmp))
+            res = sorted(bpy.ops.thedas_io.scan_assets(directory=tmp))
             names = [i.filename for i in sc.thedas_io_assets]
             subtypes = {p: bpy.types.Scene.bl_rna.properties[p].subtype
                         for p in ("thedas_io_export_dir",)}
@@ -2601,12 +2601,12 @@ def test_import_archived_names_clean():
             scan(tmp, db)
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             res = None
             for i, item in enumerate(sc.thedas_io_assets):
                 if item.filename == "x.msh" and item.package == "p.erf":
                     sc.thedas_io_index = i
-                    res = sorted(bpy.ops.dao.import_asset())
+                    res = sorted(bpy.ops.thedas_io.import_asset())
             try:
                 obj = bpy.data.objects["C_CORSPIDR_Mesh1"]
                 mat = obj.data.materials[0] if obj.data.materials else None
@@ -2653,10 +2653,10 @@ def test_browser_refresh_and_import():
             import bpy
             sc = bpy.context.scene
             sc.thedas_io_db_path = db
-            bpy.ops.dao.refresh_assets()
+            bpy.ops.thedas_io.refresh_assets()
             n = len(sc.thedas_io_assets)
             sc.thedas_io_index = 0
-            res = bpy.ops.dao.import_asset()
+            res = bpy.ops.thedas_io.import_asset()
             names = [i.filename for i in sc.thedas_io_assets]
             ext.unregister()
             return {"n": n, "res": sorted(res), "names": names}

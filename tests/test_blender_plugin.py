@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -13,6 +14,8 @@ import thedas_io as ext
 from thedas_io import ui
 
 EXT_DIR = Path(__file__).resolve().parent.parent / "src" / "thedas_io"
+# blender's own bpy.ops namespaces, not ours: anything else is addon drift
+_BLENDER_OP_PREFIXES = frozenset({"mesh", "object", "wm", "render", "transform"})
 
 
 def test_manifest():
@@ -20,6 +23,34 @@ def test_manifest():
     assert manifest["schema_version"] == "1.0.0"
     assert manifest["id"] == "thedas_io"
     assert manifest["type"] == "add-on"
+
+
+def test_blender_suite_only_calls_operators_this_extension_registers():
+    """The `blender` suite is deselected in CI, so a renamed bl_idname rots in
+    silence until someone runs it by hand. The blender suite drives the addon
+    through bpy.ops, so compare those calls to the registrations statically --
+    cheap enough to live in the fast suite that CI actually runs.
+
+    The builtin allowlist is the one gap: a call into a Blender namespace this
+    list misses would pass unchecked. It only guards addon drift, so that is an
+    acceptable trade for a test that never spawns Blender."""
+    manifest = tomllib.loads((EXT_DIR / "blender_manifest.toml").read_bytes().decode())
+    registered = set(
+        re.findall(r'bl_idname\s*=\s*"([\w.]+)"', (EXT_DIR / "ui.py").read_text(encoding="utf-8"))
+    )
+
+    suite = (Path(__file__).resolve().parent / "test_blender_real.py").read_text(encoding="utf-8")
+    called = set(re.findall(r"bpy\.ops\.(\w+)\.(\w+)", suite))
+    ours = {f"{prefix}.{op}" for prefix, op in called if prefix == manifest["id"]}
+    strays = sorted(
+        f"{prefix}.{op}"
+        for prefix, op in called
+        if prefix not in _BLENDER_OP_PREFIXES and prefix != manifest["id"]
+    )
+
+    assert ours, "the blender suite should drive the addon through bpy.ops"
+    assert not strays, f"addon operators called under a prefix we do not register: {strays}"
+    assert ours <= registered
     assert manifest["blender_version_min"] == "5.2.0"
     assert manifest["name"] and manifest["license"]
 
@@ -382,6 +413,118 @@ def test_tint_row_appears_and_renames_the_tnt():
         scene.thedas_io_rename_export = False
         ui._push_renames(scene)  # unticked clears it
         assert "as_tnt" not in ITEMS["d.mmh"]
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+
+
+def test_rename_sync_ignores_a_depsgraph_re_entry():
+    # _push_renames syncs from inside the export operator and _prune_export_items
+    # syncs from the depsgraph handler. An export that touches images can fire
+    # that handler in between, and rebuilding the collection twice over is what
+    # takes Blender down.
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+    from thedas_io.export import ITEMS
+
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    fired = []
+    try:
+        ITEMS["d.mmh"] = {
+            "file": "d.mmh",
+            "kind": "mmh",
+            "model": SimpleNamespace(values={}),
+            "meshes": [SimpleNamespace(name="o")],
+            "hosts": {},
+        }
+        scene = SimpleNamespace(
+            thedas_io_export_items=FakeCollection(),
+            thedas_io_rename_items=FakeCollection(),
+            thedas_io_export_tint=False,
+            thedas_io_tint_name="",
+            thedas_io_rename_export=True,
+        )
+        ui._sync_export_items(scene)
+
+        real = ui.connected
+
+        def reentering(checked):
+            fired.append(checked)
+            ui._sync_rename_items(scene)  # the depsgraph handler, mid-sync
+            return real(checked)
+
+        ui.connected = reentering
+        try:
+            ui._sync_rename_items(scene)
+        finally:
+            ui.connected = real
+
+        assert len(fired) == 1, "the inner sync must not re-enter connected()"
+        assert [r.filename for r in scene.thedas_io_rename_items] == ["d.mmh"]
+        assert not ui._SYNCING_RENAMES, "the guard must be released again"
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+
+
+def test_push_renames_survives_its_rows_being_rebuilt():
+    # The depsgraph handler can rebuild the rename list while _push_renames is
+    # still walking it; a snapshot keeps the walk honest.
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+    from thedas_io.export import ITEMS
+
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    try:
+        ITEMS["a.msh"] = {"file": "a.msh", "kind": "msh", "objects": []}
+        ITEMS["b.msh"] = {"file": "b.msh", "kind": "msh", "objects": []}
+
+        class Tripping:
+            # stands in for the depsgraph handler: reading the name empties the
+            # list that _push_renames is still walking
+            def __init__(self, rows, visits):
+                self.filename = ""
+                self._rows = rows
+                self._visits = visits
+
+            @property
+            def export_name(self):
+                self._visits.append(self.filename)
+                while len(self._rows):
+                    self._rows.remove(len(self._rows) - 1)
+                return ""
+
+        class Rebuilding(FakeCollection):
+            def __init__(self):
+                super().__init__()
+                self.visits: list = []
+
+            def add(self):
+                row = Tripping(self, self.visits)
+                self.append(row)
+                return row
+
+        renames = Rebuilding()
+        scene = SimpleNamespace(
+            thedas_io_export_items=FakeCollection(),
+            thedas_io_rename_items=renames,
+            thedas_io_export_tint=False,
+            thedas_io_tint_name="",
+            thedas_io_rename_export=True,
+        )
+        for name in ("a.msh", "b.msh"):
+            checked = scene.thedas_io_export_items.add()
+            checked.filename = name
+            checked.use = True
+
+        ui._push_renames(scene)
+
+        # both rows were walked even though the list emptied itself on the first
+        assert sorted(renames.visits) == ["a.msh", "b.msh"]
     finally:
         ITEMS.clear()
         ITEMS.update(saved)

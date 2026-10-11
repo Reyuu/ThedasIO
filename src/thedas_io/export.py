@@ -92,6 +92,15 @@ def reset():
     _LOADED_ITEMS.clear()
 
 
+def _why(name: str, exc: Exception) -> str:
+    # one failed file, never a failed batch; keep the plain text for the
+    # failure modes users act on (edit mode, missing MAO) and name the type
+    # for everything else so a traceback is one click away
+    if isinstance(exc, (OSError, ValueError)):
+        return f"{name}: {exc}"
+    return f"{name}: {type(exc).__name__}: {exc}"
+
+
 def export_bytes(item, tint=None, renames=None):
     # source bytes unless edited, then kind-specific re-encode
     check = _DIRTY.get(item["kind"])
@@ -131,24 +140,29 @@ def export_all(dest, tint=False, tint_name="", only=None):
             item = ITEMS[k]
             if item["kind"] != "mmh":
                 continue
-            found = _tint_by_material(item)
+            merged: dict = {}
+            try:
+                found = _tint_by_material(item)
+            except (AttributeError, ReferenceError, RuntimeError) as e:
+                errors.append(_why(item["file"], e))
+                continue
             if not found:
                 errors.append(
                     f"{item['file']}: no DAO Tint group on the imported "
                     "meshes (no tint mask texture?)"
                 )
                 continue
-            merged: dict = {}
             for values in found.values():
                 merged.update(values)
             model_tints[id(item)] = merged
             mao_tints.update(found)
+            name = ""
             try:
                 name = item.get("as_tnt") or _tnt_name(item, tint_name)
                 (dest / name).write_bytes(_tnt_bytes(merged))
                 written.append(name)
-            except (OSError, ValueError) as e:
-                errors.append(f"{_tnt_name(item, tint_name)}: {e}")
+            except Exception as e:  # noqa: BLE001 - one tint must not sink the batch
+                errors.append(_why(name or item["file"], e))
 
     for k in keys:
         if k in skip:
@@ -165,8 +179,10 @@ def export_all(dest, tint=False, tint_name="", only=None):
         try:
             (dest / out_name).write_bytes(export_bytes(item, values, renames))
             written.append(out_name)
-        except (OSError, ValueError) as e:
-            errors.append(f"{out_name}: {e}")
+        except Exception as e:  # noqa: BLE001 - a re-encoder may raise anything
+            # a mesh, mao or image that explodes must not take the batch with
+            # it; the file is named and the rest still lands
+            errors.append(_why(out_name, e))
 
     return written, errors
 
@@ -223,12 +239,17 @@ def check_model(only: set | None = None) -> list:
     for k in keys:
         item = ITEMS[k]
         kind = item.get("kind")
-        if kind == "msh":
-            notes.extend(_check_msh_item(item, mao_by_material))
-        elif kind == "mao":
-            notes.extend(_check_mao_item(item))
-        elif kind == "texture":
-            notes.extend(_check_texture_item(item))
+        try:
+            if kind == "msh":
+                notes.extend(_check_msh_item(item, mao_by_material))
+            elif kind == "mao":
+                notes.extend(_check_mao_item(item))
+            elif kind == "texture":
+                notes.extend(_check_texture_item(item))
+        except Exception as e:  # noqa: BLE001 - a checker that dies is worse
+            # a checker that dies is worse than one that complains; report and
+            # carry on so the operator still reaches the rest of the model
+            notes.append(_why(item.get("file") or k, e))
     return notes
 
 
@@ -254,8 +275,11 @@ def _check_msh_item(item: dict, mao_by_material: dict) -> list:
     for ci, chunk in enumerate(mesh.chunks):
         try:
             decoded = decode_chunk(mesh, chunk)
-        except ValueError as e:
-            notes.append(f"{name}: chunk {chunk.name or ci} unreadable ({e})")
+        except (ValueError, struct.error, IndexError, KeyError) as e:
+            # decode_chunk raises ValueError for known shapes and
+            # struct.error for a blob it cannot read; both just mean
+            # "this chunk is bad"
+            notes.append(f"{name}: chunk {chunk.name or ci} unreadable ({type(e).__name__}: {e})")
             continue
 
         label = f"{name}/{chunk.name or ci}"

@@ -761,9 +761,25 @@ def _sync_export_items(scene) -> None:
     _sync_rename_items(scene)
 
 
+_SYNCING_RENAMES = False
+
+
 def _sync_rename_items(scene) -> None:
     # rename table lists exported files of checked roots
 
+    # rebuilding the collection mutates data the UI list is bound to, so it must
+    # never re-enter
+    global _SYNCING_RENAMES
+    if _SYNCING_RENAMES:
+        return
+    _SYNCING_RENAMES = True
+    try:
+        _fill_rename_items(scene)
+    finally:
+        _SYNCING_RENAMES = False
+
+
+def _fill_rename_items(scene) -> None:
     try:
         rows = scene.thedas_io_export_items
         renames = scene.thedas_io_rename_items
@@ -818,7 +834,7 @@ def _push_renames(scene) -> None:
             if item.get("kind") == "mmh":
                 tnt_of[_tnt_name(item, tint_name).lower()] = key
 
-    for r in rows:
+    for r in list(rows):
         name = getattr(r, "filename", "")
         new = (getattr(r, "export_name", "") or "").strip()
         hit = ITEMS.get(name)
@@ -1551,16 +1567,16 @@ def _scale_live_images(model: dict, repacked: dict, failed: list) -> set:
         res = textures.get(slot)
         if not res:
             continue
-        image = by_name.get(Path(res).name)
-        if image is None:
+        live: Any = by_name.get(Path(res).name)
+        if live is None:
             continue
         try:
-            size = tuple(image.size)
+            size = tuple(live.size)
         except (AttributeError, ReferenceError):
             continue
         if size != tuple(pil.size):
             try:
-                image.scale(*pil.size)
+                live.scale(*pil.size)
             except (AttributeError, ReferenceError, RuntimeError) as e:
                 failed.append(f"{res}: cannot rescale live image: {e}")
                 skipped.add(slot)
@@ -2435,9 +2451,9 @@ def rebuild_registry(scene) -> list:
         except (OSError, ValueError, KeyError, sqlite3.Error):
             return None
 
-    meshes_by_name = {}
-    for obj in bpy.context.scene.objects if bpy.context.scene else []:
-        meshes_by_name[obj.name] = obj
+    meshes_by_name: dict[str, Any] = {}
+    for scene_obj in bpy.context.scene.objects if bpy.context.scene else []:
+        meshes_by_name[scene_obj.name] = scene_obj
     images_by_name = {img.name: img for img in bpy.data.images}
     mats_by_name = {mat.name: mat for mat in bpy.data.materials}
 
@@ -2465,7 +2481,7 @@ def rebuild_registry(scene) -> list:
             by_chunk = {c.name: c for c in mesh.chunks}  # type: ignore
             pairs = []
             for obj_name in entry.get("objs") or []:
-                obj = meshes_by_name.get(obj_name)
+                obj: Any = meshes_by_name.get(obj_name)
                 chunk = by_chunk.get(obj_name)
                 if obj is not None and chunk is not None:
                     pairs.append((obj, chunk))

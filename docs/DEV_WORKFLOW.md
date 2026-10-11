@@ -2,7 +2,8 @@
 
 ### Prerequisites
 
-- `uv`, Python 3.11+
+- `uv`, Python 3.13+ (the version Blender 5.2 ships; `bpy-stubs` needs a 3.13+
+  host to parse, so mypy will not run on an older interpreter)
 - Blender 5.2 (only needed for deploy + real-Blender proofs)
 - DAO game folder, set once in the add-on preferences. `Scan` indexes it into a SQLite asset database
 
@@ -20,6 +21,7 @@ git clone <this repo>
 uv run pytest -m "not blender"   # fast unit tests, no Blender needed
 uv run pytest                    # adds the real-Blender proofs (~2.5 min)
 uv run ruff check src tests tools
+uv run mypy src
 ```
 
 Real-Blender tests spawn `blender --background` and are marked `blender`. The executable resolves from `BLENDER_EXE`, then `PATH`, then the default install location.
