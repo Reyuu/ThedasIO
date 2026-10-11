@@ -241,6 +241,7 @@ def _scene(db="", index=0):
         thedas_io_import_source="GAME",
         thedas_io_export_tint=False,
         thedas_io_rename_export=False,
+        thedas_io_weld=True,
         window_manager=_wm,
         window=SimpleNamespace(),
     )

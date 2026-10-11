@@ -207,6 +207,7 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
         if self.layout is None:
             return
         self.layout.prop(scene, "thedas_io_import_source", expand=True)
+        self.layout.prop(scene, "thedas_io_weld")
         if scene.thedas_io_import_source == "GAME":
             self.layout.prop(scene, "thedas_io_filter_ext", text="Extension")
             self.layout.prop(scene, "thedas_io_filter_name", text="File name")
@@ -1131,7 +1132,9 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
             "ext": item.ext,
             "path": item.path,
         }
-        result = _import_row(context, row, scene.thedas_io_db_path or None, False, self.report)
+        result = _import_row(
+            context, row, scene.thedas_io_db_path or None, False, self.report, scene.thedas_io_weld
+        )
 
         if result == {"FINISHED"}:
             _store_registry(scene)
@@ -1156,7 +1159,14 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
             return {"CANCELLED"}
         p = Path(path)
         row = {"package": None, "filename": p.name, "ext": p.suffix, "path": str(p)}
-        result = _import_row(context, row, None, scene.thedas_io_disk_local, self.report)
+        result = _import_row(
+            context,
+            row,
+            None,
+            scene.thedas_io_disk_local,
+            self.report,
+            scene.thedas_io_weld,
+        )
 
         if result == {"FINISHED"}:
             _store_registry(scene)
@@ -1165,7 +1175,7 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
         return result
 
 
-def _import_row(context, row: dict, db, local_only: bool, emit) -> set:
+def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = True) -> set:
     # shared msh/mmh import for one row, emit reports to user
 
     local = extract(row)
@@ -1174,7 +1184,7 @@ def _import_row(context, row: dict, db, local_only: bool, emit) -> set:
         raw = local.read_bytes()
         mesh = MSHReader(raw).mesh
         objs = [
-            build_chunk_object(context, mesh, chunk, raw, row["filename"])
+            build_chunk_object(context, mesh, chunk, raw, row["filename"], weld)
             for chunk in mesh.chunks  # type: ignore
         ]
         notes: list = []
@@ -1203,7 +1213,7 @@ def _import_row(context, row: dict, db, local_only: bool, emit) -> set:
             sraw = sibling.read_bytes()
             smesh = MSHReader(sraw).mesh
             for chunk in smesh.chunks:  # type: ignore
-                chunks[chunk.name] = build_chunk_object(context, smesh, chunk, sraw, msh_name)
+                chunks[chunk.name] = build_chunk_object(context, smesh, chunk, sraw, msh_name, weld)
 
         reg = remember(row["filename"], "mmh", tree, raw)
         stats = build_hierarchy(context, tree, chunks)
@@ -2152,13 +2162,18 @@ def _bind_skin(chunk, names, arm_obj, node=None):
         mod.object = arm_obj
 
 
-def build_chunk_object(context, mesh, chunk, raw, source):
+def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
     # one blender object per chunk, registers source msh for export
 
     build = decode_chunk(mesh, chunk)
-    # weld co-located rows so edits move surface without cracking seams
-    positions, row_to_vert = weld_positions(build["positions"])
-    tris = [tuple(row_to_vert[v] for v in tri) for tri in build["triangles"]]
+    if weld:
+        # weld co-located rows so edits move surface without cracking seams
+        positions, row_to_vert = weld_positions(build["positions"])
+        tris = [tuple(row_to_vert[v] for v in tri) for tri in build["triangles"]]
+    else:
+        # every MSH row stays its own vertex; export takes the legacy 1:1 path
+        positions, row_to_vert = build["positions"], None
+        tris = build["triangles"]
 
     data = bpy.data.meshes.new(chunk.name or "chunk")
     data.from_pydata(positions, [], tris)
@@ -2185,7 +2200,7 @@ def build_chunk_object(context, mesh, chunk, raw, source):
     for bone, members in build["groups"].items():
         group = obj.vertex_groups.new(name=f"bone_{bone}")
         for vidx, weight in members:
-            group.add([row_to_vert[vidx]], weight, "REPLACE")
+            group.add([row_to_vert[vidx] if row_to_vert else vidx], weight, "REPLACE")
     remember(source, "msh", mesh, raw)["objects"].append((obj, chunk))
     return obj
 
@@ -2272,6 +2287,7 @@ _SCENE_PROPS = (
     "thedas_io_registry",
     "thedas_io_disk_file",
     "thedas_io_disk_local",
+    "thedas_io_weld",
     "thedas_io_sp_split_packed",
     "thedas_io_sp_keep_resolution",
 )
@@ -2359,6 +2375,13 @@ def register():
         default=True,
         description="Resolve the MAO, textures and sibling mesh from "
         "files next to the imported file, never the game",
+    )
+    bpy.types.Scene.thedas_io_weld = bpy.props.BoolProperty(  # type: ignore
+        default=True,
+        description="Weld rows that sit at the same position into one "
+        "vertex, so editing the surface does not crack the seams. "
+        "Off keeps every MSH row separate, which is what you "
+        "want when re-UVing or when the original split matters",
     )
     bpy.types.Scene.thedas_io_filter_ext = bpy.props.EnumProperty(  # type: ignore
         name="Extension",

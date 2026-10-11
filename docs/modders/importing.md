@@ -13,6 +13,8 @@ Textures are unpacked to a `thedas_io_textures/` folder beside the `.blend`. Edi
 
 Pose bones, vertex weights and UVs work normally in the viewport.
 
+**Weld** is on by default: rows sitting at the same position are merged into one vertex so editing the surface does not crack the seams. Turn it off to keep every row from the source file as its own vertex, which is what you want when re-UVing or when the original split matters. Export takes either layout.
+
 ## From disk
 
 Switch the source to Disk. Pick a File, tick Resolve imports from local files to pick up siblings from disk, and press Import from file.

@@ -26,6 +26,10 @@ USAGE_TANGENT = 6
 USAGE_BINORMAL = 7
 
 
+def index_width(verts: int) -> int:
+    return 4 if verts > 0xFFFF else 2
+
+
 def weld_positions(positions):
     # exact dupes only, export expands back through the map
     seen = {}
@@ -63,13 +67,15 @@ def decode_chunk(mesh, chunk):
     blob = bytes(mesh.vertex_data[v0 : v0 + verts * stride])
 
     ncounts = chunk.cells.get(8002, 0)
-    if ncounts > 0xFFFF:
-        width = 4
-    else:
-        width = 2
+    width = index_width(verts)
     i0 = chunk.cells.get(8009, 0) * width
     iblob = bytes(mesh.index_data[i0 : i0 + ncounts * width])
 
+    if len(iblob) != ncounts * width:
+        raise ValueError(
+            f"chunk {chunk.name}: index blob holds {len(iblob)}B, "
+            f"{verts} verts need {ncounts * width}B"
+        )
     if width == 4:
         indices = list(struct.unpack(f"<{ncounts}I", iblob))
     else:

@@ -23,6 +23,7 @@ from .geometry import (
     compose,
     decode_chunk,
     flatten,
+    index_width,
     node_local,
     node_paths,
     quat_mul,
@@ -775,12 +776,13 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
         bc = base.chunks[i]  # type: ignore
         bc.cells[8006] = len(vblob)
         vblob += vreg + b"\x00" * 16  # 16B tail: stored list counts cover it, like source
-        width = 4 if ncounts > 0xFFFF else 2
-        bc.cells[8009] = len(iblob) // width
+        # vertex counts first: 8009 is an element offset, so the width it scales
+        # by is the one the new region will actually be read at
+        bc.cells.update({8001: nrows, 8002: ncounts, 8007: 0, 8008: nrows})
+        bc.cells[8009] = len(iblob) // index_width(nrows)
         iblob += ireg + b"\x00" * 16
         while len(iblob) % 4:
             iblob.append(0)
-        bc.cells.update({8001: nrows, 8002: ncounts, 8007: 0, 8008: nrows})
         bc.bounds = bounds
         try:
             obj["thedas_io_row_to_vert"] = rmap
@@ -1054,8 +1056,7 @@ def _drift(a, b, tol: float = 1e-6) -> bool:
 def _patch_chunk(chunk, obj, state, decoded, base_blob, vblob, iblob):
     # overwrite editable fields, indices and bounds in a copy of the source blobs
     verts = chunk.cells.get(8001, 0)
-    count = chunk.cells.get(8002, 0)
-    width = 4 if count > 0xFFFF else 2
+    width = index_width(verts)
     vbase = chunk.cells.get(8006, 0)
     ibase = chunk.cells.get(8009, 0) * width
     weights = state["weights"]  # live mesh weights: the decoded ones would undo a repaint
@@ -1188,7 +1189,7 @@ def _rebuild_chunk(chunk, obj, bstate):
         vreg += row
 
     ncounts = 3 * len(new_tris)
-    width = "I" if ncounts > 0xFFFF else "H"
+    width = "I" if index_width(len(rows)) == 4 else "H"
     ireg = struct.pack(f"<{width * ncounts}", *[i for t in new_tris for i in t])
     return (
         bytes(vreg),

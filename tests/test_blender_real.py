@@ -863,6 +863,62 @@ def test_import_msh_sample():
     ) == {"verts": 330, "tris": 656, "uvs": 1, "groups": 64, "mapped": 1100, "stashed": True}
 
 
+def test_weld_can_be_turned_off():
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        def main():
+            sys.path.insert(0, "src")
+            import thedas_io as ext
+            try:
+                ext.unregister()
+            except Exception:
+                pass
+            ext.register()
+            import bpy
+            from thedas_io.msh.description import MSHReader
+            raw = open(os.path.join("data", "c_corspidr_3.msh"), "rb").read()
+            m = MSHReader(raw).mesh
+            chunk = m.chunks[0]
+            welded = ext.ui.build_chunk_object(bpy.context, m, chunk, raw, "w.msh", True)
+            split = ext.ui.build_chunk_object(bpy.context, m, chunk, raw, "s.msh", False)
+            try:
+                out = {
+                    "welded_verts": len(welded.data.vertices),
+                    "split_verts": len(split.data.vertices),
+                    "same_tris": len(welded.data.polygons) == len(split.data.polygons),
+                    "welded_mapped": len(list(welded.get("thedas_io_row_to_vert") or [])),
+                    "split_mapped": len(list(split.get("thedas_io_row_to_vert") or [])),
+                    "split_groups": len(split.vertex_groups),
+                    "welded_groups": len(welded.vertex_groups),
+                    "welded_unique_pos": len({tuple(round(c, 6) for c in v.co)
+                                             for v in welded.data.vertices}),
+                    "split_unique_pos": len({tuple(round(c, 6) for c in v.co)
+                                            for v in split.data.vertices}),
+                    "weld_default": bpy.context.scene.bl_rna.properties[
+                        "thedas_io_weld"].default,
+                }
+            finally:
+                for o in (welded, split):
+                    bpy.data.objects.remove(o, do_unlink=True)
+                ext.unregister()
+            return out
+        """)
+    ) == {
+        "welded_verts": 330,
+        "split_verts": 1100,
+        "same_tris": True,
+        "welded_mapped": 1100,
+        "split_mapped": 0,
+        "welded_groups": 64,
+        "split_groups": 64,
+        "welded_unique_pos": 330,
+        "split_unique_pos": 330,
+        "weld_default": True,
+    }
+
+
 def test_import_mmh_pair():
     assert run(
         textwrap.dedent("""\

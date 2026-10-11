@@ -31,6 +31,7 @@ dev = [
 testpaths = ["tests"]
 markers = [
     "blender: spawns a real `blender --background`; deselect with -m 'not blender'",
+    "corpus: walks a real game install; set THEDAS_MSH_CORPUS to enable",
 ]
 
 [tool.ruff]

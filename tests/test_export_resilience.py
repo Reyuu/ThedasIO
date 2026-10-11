@@ -79,19 +79,19 @@ def test_actionable_failures_keep_their_plain_text(only_item, tmp_path):
 
 
 def test_check_model_reports_an_unreadable_chunk_instead_of_raising(only_item):
-    # 8002 promises more indices than the blob holds: the decode that trips the
-    # real import path, surfaced as a note rather than a traceback
+    # the vertex blob stops short of the rows 8001 promises, so the row decode
+    # raises struct.error -- the failure mode that used to abort the check
     chunk = {
         2: "c",
         8000: 12,  # matches the FLOAT3 declarator below
         8001: 3,
-        8002: 300,  # blob below carries 3
+        8002: 3,
         8003: 0,
         8006: 0,
         8009: 0,
         8025: [{8026: 0, 8027: 0, 8028: 2, 8029: 0, 8030: 0, 8031: 0}],
     }
-    mesh = Mesh({2: "m", 8021: [chunk], 8022: [0] * 36, 8023: [0] * 6})
+    mesh = Mesh({2: "m", 8021: [chunk], 8022: [0] * 12, 8023: [0] * 6})
     only_item["a.msh"] = {
         "file": "a.msh",
         "kind": "msh",

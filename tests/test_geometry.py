@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from conftest import DATA_DIR
-from thedas_io.geometry import decode_chunk, weld_positions
-from thedas_io.msh.description import load
+from thedas_io.geometry import decode_chunk, index_width, weld_positions
+from thedas_io.msh.description import Mesh, load
 
 MSH_PATH = DATA_DIR / "c_corspidr_3.msh"
 
@@ -41,6 +43,61 @@ def test_rejects_non_trilist():
     mesh = load(MSH_PATH)
     mesh.chunks[0].cells[8003] = 1
     with pytest.raises(ValueError, match="trilist"):
+        decode_chunk(mesh, mesh.chunks[0])
+
+
+def _one_chunk(verts, index_bytes, index_count, stride=12, decl_type=2, decl_usage=0):
+    # a chunk with one FLOAT3 declarator and one hand-fed index blob. index_count
+    # is 8002 (elements, not bytes) and is passed in rather than derived, so a
+    # test can make it disagree with the blob on purpose
+    chunk = {
+        2: "c",
+        8000: stride,
+        8001: verts,
+        8002: index_count,
+        8003: 0,
+        8006: 0,
+        8008: verts,
+        8009: 0,
+        8025: [{8026: 0, 8027: 0, 8028: decl_type, 8029: decl_usage, 8030: 0, 8031: 0}],
+    }
+    return Mesh({2: "m", 8021: [chunk], 8022: [0] * (stride * verts), 8023: list(index_bytes)})
+
+
+def test_index_width_follows_the_vertex_count_not_the_index_count():
+    # c_giantbr_0.msh shape: 96795 indices over 22105 vertices, stored as u16.
+    # Keying the width off 8002 reads half a u16 blob as u32 and dies.
+    tris = 21846  # 65538 indices, just past the u16 ceiling
+    assert tris * 3 > 0xFFFF
+    mesh = _one_chunk(
+        verts=4, index_bytes=struct.pack(f"<{tris * 3}H", *([0, 1, 2] * tris)), index_count=tris * 3
+    )
+
+    build = decode_chunk(mesh, mesh.chunks[0])
+
+    assert build["vert_count"] == 4
+    assert len(build["triangles"]) == tris
+
+
+def test_index_width_goes_wide_past_65535_vertices():
+    mesh = _one_chunk(verts=65536, index_bytes=struct.pack("<3I", 0, 65535, 1), index_count=3)
+
+    build = decode_chunk(mesh, mesh.chunks[0])
+
+    assert build["vert_count"] == 65536
+    assert build["triangles"] == [(0, 65535, 1)]
+
+
+def test_index_width_switches_exactly_at_the_boundary():
+    assert index_width(0xFFFF) == 2
+    assert index_width(0x10000) == 4
+
+
+def test_index_blob_shorter_than_the_chunk_claims():
+    # a clear message beats struct.error's "requires a buffer of N bytes"
+    mesh = _one_chunk(verts=4, index_bytes=struct.pack("<3H", 0, 1, 2), index_count=6)
+
+    with pytest.raises(ValueError, match="index blob holds 6B, 4 verts need 12B"):
         decode_chunk(mesh, mesh.chunks[0])
 
 
