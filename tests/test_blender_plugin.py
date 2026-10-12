@@ -87,6 +87,7 @@ def test_every_input_has_a_tooltip():
             assert prop.kwargs.get("description"), name
         operators = [
             ui.THEDAS_IO_OT_scan_assets,
+            ui.THEDAS_IO_OT_add_collision,
             ui.THEDAS_IO_OT_refresh_assets,
             ui.THEDAS_IO_OT_import_asset,
             ui.THEDAS_IO_OT_import_file,
@@ -96,7 +97,7 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_import_substance,
             ui.THEDAS_IO_OT_reload_textures,
         ]
-        assert len(operators) == 9
+        assert len(operators) == 10
         for cls in operators:
             assert cls.bl_label, cls.bl_idname
             assert cls.bl_description, cls.bl_idname
@@ -124,6 +125,7 @@ def test_register_unregister():
         ui.THEDAS_IO_PT_substance,
         ui.THEDAS_IO_AddonPreferences,
         ui.THEDAS_IO_OT_scan_assets,
+        ui.THEDAS_IO_OT_add_collision,
         ui.THEDAS_IO_OT_refresh_assets,
         ui.THEDAS_IO_OT_import_asset,
         ui.THEDAS_IO_OT_import_file,
@@ -191,7 +193,14 @@ def test_addon_preferences():
     prefs = cast(Any, ui.THEDAS_IO_AddonPreferences())
     assert prefs.bl_idname == ui.__package__
     prefs.draw(SimpleNamespace())
-    assert prefs.layout.props == [(prefs, "thedas_io_game_dir", "")]
+    assert prefs.layout.props == [
+        (prefs, "thedas_io_game_dir", ""),
+        (prefs, "thedas_io_enable_phy", ""),
+    ]
+    # experimental collider work stays off until the user turns it on
+    ann = cast(Any, ui.THEDAS_IO_AddonPreferences).__annotations__
+    phy_prop = ann.get("thedas_io_enable_phy")
+    assert phy_prop is not None and phy_prop.kwargs.get("default") is False
 
 
 def test_substance_subpanel():
@@ -287,11 +296,23 @@ def test_browser_refresh_and_draw(tmp_path):
     ) == {"FINISHED"}
     assert [i.filename for i in scene.thedas_io_assets] == ["a.msh", "b.txt"]
 
+    # the collision row is gated behind the experimental PHY switch
     panel = cast(Any, ui.THEDAS_IO_PT_import())
     panel.draw(SimpleNamespace(scene=scene))
+    assert "thedas_io.add_collision" not in panel.layout.operators
+
+    phy_ctx = SimpleNamespace(
+        scene=scene,
+        preferences=SimpleNamespace(addons={
+            "thedas_io": SimpleNamespace(preferences=SimpleNamespace(
+                thedas_io_enable_phy=True))}),
+    )
+    panel = cast(Any, ui.THEDAS_IO_PT_import())
+    panel.draw(phy_ctx)
     assert panel.layout.operators == [
         "thedas_io.refresh_assets",
         "thedas_io.scan_assets",
+        "thedas_io.add_collision",
         "thedas_io.import_asset",
     ]
     assert panel.layout.lists == [("THEDAS_IO_UL_assets", "thedas_io_assets")]

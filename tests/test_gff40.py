@@ -107,6 +107,67 @@ def test_get_struct_missing():
         reader.get_struct(0xDEADBEEF)
 
 
+def _generic_ref_file(struct_index: int, address: int) -> bytes:
+    """A two-instance GFF whose first struct holds one generic reference.
+
+    The cell is not a pointer. It is two u32s stored inline in the instance:
+    (flags << 16 | type) then the instance address, with the cell sitting at the
+    field's data_index. Reading the first u32 as an offset instead is what made
+    250 of 400 .phy files and every .ani in the game fail with
+    "unpack_from requires a buffer of at least 1073743796 bytes".
+
+    instance 0 (struct_size 12): [0:4] unused | [4:8] packed | [8:12] address
+    instance 1 (struct_size 4): an empty struct for the generic to point at
+    """
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 2, data_at)
+    defs = struct.pack("<IIII", int.from_bytes(b"mdlh", "little"), 1, fields_at, 12)
+    defs += struct.pack("<IIII", int.from_bytes(b"data", "little"), 0, fields_at + 12, 4)
+    field = struct.pack("<IHHI", 6999, 0xFFFF, 0x2000, 4)  # label, type, flags, index
+    body = b"\x00\x00\x00\x00"
+    body += struct.pack("<II", (0x4000 << 16) | struct_index, address)
+    body += b"\x00\x00\x00\x00"  # the empty instance at offset 12
+    return header + defs + field + body
+
+
+def test_generic_reference_is_an_inline_pair_not_a_pointer():
+    raw = _generic_ref_file(struct_index=1, address=12)
+    # the packed word sits in the cell, at the field's data_index
+    cell = 28 + 2 * 16 + 12 + 4
+    assert raw[cell : cell + 4] == struct.pack("<I", (0x4000 << 16) | 1)
+    assert raw[cell + 4 : cell + 8] == struct.pack("<I", 12)
+
+    reader = GFFReader(raw)
+    root = reader.get_from_data_block(0, 0)
+    generic = root[6999]
+    # flags and type came out of the cell itself, and the address followed it
+    assert generic["struct_index"] == 1
+    assert generic["flags"] == 0x4000
+    assert generic["offset"] == 12
+    assert generic["value"] == {}
+
+
+def test_generic_reference_rejects_a_nonsense_type():
+    # a type that names no struct is a clean error, not a wild unpack. the old
+    # pointer read turned the packed word 0x4000_0001 into offset 1073741825.
+    reader = GFFReader(_generic_ref_file(struct_index=9999, address=12))
+    with pytest.raises(ValueError, match="struct index 9999 out of range"):
+        reader.get_from_data_block(0, 0)
+
+
+def test_generic_reference_null_address_is_none():
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 2, data_at)
+    defs = struct.pack("<IIII", int.from_bytes(b"mdlh", "little"), 1, fields_at, 12)
+    defs += struct.pack("<IIII", int.from_bytes(b"data", "little"), 0, fields_at + 12, 4)
+    field = struct.pack("<IHHI", 6999, 0xFFFF, 0x2000, 4)
+    body = b"\x00\x00\x00\x00" + struct.pack("<II", (0x4000 << 16) | 1, 0xFFFFFFFF)
+    root = GFFReader(header + defs + field + body).get_from_data_block(0, 0)
+    assert root[6999]["value"] is None
+
+
 def test_invalid_magic():
     raw, _ = load("c_corspidr_3.msh")
     with pytest.raises(ValueError, match="Invalid GFF file magic"):

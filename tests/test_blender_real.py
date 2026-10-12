@@ -2111,6 +2111,227 @@ def test_imported_rig_is_internally_consistent():
     }
 
 
+_PHY_SETUP = textwrap.dedent("""\
+    import os
+    import shutil
+    import sys
+    import tempfile
+    def phy_setup():
+        sys.path.insert(0, "src")
+        import thedas_io as ext
+        tmp = tempfile.mkdtemp()
+        for name in ("qm_uhm_basb_0.mmh", "qm_uhm_basb_0.phy"):
+            shutil.copy(os.path.join("data", name), os.path.join(tmp, name))
+        ext.register()
+        # the experimental switch lives on the loaded extension's prefs
+        import bpy
+        for _addon in bpy.context.preferences.addons.values():
+            _prefs = getattr(_addon, "preferences", None)
+            if _prefs is not None and hasattr(_prefs, "thedas_io_enable_phy"):
+                _prefs.thedas_io_enable_phy = True
+        return tmp
+
+    def phy_cleanup(tmp):
+        import thedas_io as ext
+        import bpy
+        for o in list(bpy.context.scene.objects):
+            bpy.data.objects.remove(o, do_unlink=True)
+        ext.unregister()
+    """)
+
+
+def test_collision_proxies_bind_to_bones_and_round_trip():
+    # a .phy beside the .mmh becomes plain proxies on the bones it names, and
+    # edits come back out as the fields the toolset documents as hand-editable
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                proxies = item.get("collision") or []
+                out = {
+                    "count": len(proxies),
+                    "bones": sorted(p.get("thedas_io_phy_bone") for p in proxies),
+                    "parented": all(p.parent_type == "BONE" for p in proxies),
+                    "static_geometry": proxies[0]["thedas_io_phy_mask_static_geometry"],
+                    "untouched_writes_nothing": export._phy_bytes(item) is None,
+                }
+                out_dir = os.path.join(tmp, "out")
+                written, errors = export.export_all(out_dir)
+                out["written_before"] = written
+                out["errors"] = errors
+                out["phy_absent_when_unchanged"] = not os.path.exists(
+                    os.path.join(out_dir, "qm_uhm_basb_0.phy"))
+
+                proxies[0]["thedas_io_phy_radius"] = 0.33
+                proxies[0]["thedas_io_phy_mask_placeables"] = 1
+                proxies[0].location = (0.5, 0.0, 0.0)
+
+                written, errors = export.export_all(out_dir)
+                out["written_after"] = written
+                out["errors_after"] = errors
+                src = open(os.path.join("data", "qm_uhm_basb_0.phy"), "rb").read()
+                after = open(os.path.join(out_dir, "qm_uhm_basb_0.phy"), "rb").read()
+                out["phy_changed"] = after != src
+                one = PhyReader(src).shapes[0]
+                two = PhyReader(after).shapes[0]
+                out["radius"] = [round(one.radius, 4), round(two.radius, 4)]
+                out["position"] = [round(v, 3) for v in two.position[:3]]
+                out["placeables"] = [one.masks["placeables"],
+                                     two.masks["placeables"]]
+                others = PhyReader(after).shapes[1]
+                keep = PhyReader(src).shapes[1]
+                out["other_shape_untouched"] = (
+                    others.radius == keep.radius and others.masks == keep.masks)
+                out["check_model"] = export.check_model()
+            finally:
+                phy_cleanup(tmp)
+            return out
+    """)
+    ) == {
+        "count": 2,
+        "bones": ["Head", "Neck1"],
+        "parented": True,
+        "static_geometry": 0,
+        "untouched_writes_nothing": True,
+        "written_before": ["qm_uhm_basb_0.mmh"],
+        "errors": [],
+        "phy_absent_when_unchanged": True,
+        "written_after": ["qm_uhm_basb_0.mmh", "qm_uhm_basb_0.phy"],
+        "errors_after": [],
+        "phy_changed": True,
+        "radius": [0.0817, 0.33],
+        "position": [0.5, 0.0, 0.0],
+        "placeables": [0, 1],
+        "other_shape_untouched": True,
+        "check_model": [],
+    }
+
+
+def test_collision_proxy_sits_exactly_at_the_files_transform():
+    # Blender's parent matrix for a bone is NOT bone.matrix_local: it is that
+    # matrix translated a further bone.length along the bone's local Y. Using
+    # the plain matrix leaves a bone-length error on every proxy, which no
+    # round-trip test can see because the file is written from the object's own
+    # basis. Pin the world result instead.
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from mathutils import Quaternion, Vector
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                bpy.context.view_layer.update()
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                proxies = item.get("collision") or []
+                arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+                reader = PhyReader(open(os.path.join(
+                    tmp, "qm_uhm_basb_0.phy"), "rb").read())
+                out = {"worst_position_error": 0.0, "worst_axis_error": 0.0}
+                for proxy, shape in zip(proxies, reader.shapes):
+                    bone = arm.data.bones[shape.bone]
+                    want = arm.matrix_world @ (
+                        bone.head_local + Vector(shape.position[:3]))
+                    err = (proxy.matrix_world.translation - want).length
+                    out["worst_position_error"] = max(
+                        out["worst_position_error"], err)
+                    q = shape.rotation
+                    local_x = Vector((1.0, 0.0, 0.0))
+                    qrot = Quaternion((q[3], q[0], q[1], q[2]))
+                    got = (proxy.matrix_world.to_3x3() @ local_x).normalized()
+                    out["worst_axis_error"] = max(
+                        out["worst_axis_error"], abs(got.dot(qrot @ local_x)))
+            finally:
+                phy_cleanup(tmp)
+            return {k: round(v, 6) for k, v in out.items()}
+    """)
+    ) == {"worst_position_error": 0.0, "worst_axis_error": 1.0}
+
+
+def test_add_collision_writes_a_new_shape_into_the_phy():
+    # adding is a structural rewrite, not an in-place patch: the parent's
+    # CHILDREN list is repointed at a larger region
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                before = PhyReader(item["phy_raw"]).summary()
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                bpy.context.view_layer.objects.active = arm
+                arm.select_set(True)
+                neck = arm.data.bones.get("Neck1")
+                for pb in arm.pose.bones:
+                    pb.select = pb.name == neck.name
+                added = sorted(bpy.ops.thedas_io.add_collision(
+                    kind="CAPSULE", radius=0.07, height=0.25))
+                out_dir = os.path.join(tmp, "out")
+                written, errors = export.export_all(out_dir)
+                after = PhyReader(open(os.path.join(out_dir,
+                                                     "qm_uhm_basb_0.phy"), "rb").read())
+                out = {
+                    "added": added,
+                    "errors": errors,
+                    "phy_written": "qm_uhm_basb_0.phy" in written,
+                    "shapes_before": before["shapes"],
+                    "shapes_after": after.summary()["shapes"],
+                    "originals": sorted(round(s.radius, 4) for s in after.shapes
+                                        if s.name.startswith("HED")),
+                    "names_unique": len({s.name for s in after.shapes})
+                                    == len(after.shapes),
+                    "added_name": sorted(s.name for s in after.shapes
+                                         if not s.name.startswith("HED")),
+                    "check_model": export.check_model(),
+                }
+            finally:
+                phy_cleanup(tmp)
+            return out
+    """)
+    ) == {
+        "added": ["FINISHED"],
+        "errors": [],
+        "phy_written": True,
+        "shapes_before": 2,
+        "shapes_after": 3,
+        "originals": [0.0817, 0.1061],
+        "names_unique": True,
+        "added_name": ["Capsule_Neck1"],
+        "check_model": [],
+    }
+
+
 def test_export_edited_mmh():
     assert run(
         _MMH_SETUP
@@ -2863,3 +3084,180 @@ def test_browser_refresh_and_import():
             return {"n": n, "res": sorted(res), "names": names}
         """)
     ) == {"n": 1, "res": ["FINISHED"], "names": ["a.msh"]}
+
+
+def test_mesh_shape_proxy_is_its_decoded_geometry():
+    # a mesh shape's proxy is the NXS geometry itself, not a marker box
+    assert run(
+        textwrap.dedent('''\
+        def main():
+            import os
+            import sys
+            sys.path.insert(0, "src")
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io.phy import scene
+                from thedas_io.phy.description import PhyReader
+                raw = open(os.path.join("data", "cai_lrgcrna_0.phy"), "rb").read()
+                out = []
+                for shape in PhyReader(raw).shapes:
+                    mesh = scene._mesh_for(shape)
+                    out.append((len(mesh.vertices), len(mesh.polygons)))
+                return out
+            finally:
+                for o in list(bpy.context.scene.objects):
+                    bpy.data.objects.remove(o, do_unlink=True)
+                ext.unregister()
+        ''')
+    ) == [[28, 52], [16, 28]]
+
+
+def test_scaling_a_proxy_resizes_the_exported_phy():
+    # dimensions are read through the object's scale, so scaling the proxy is
+    # the way to resize the shape (a capsule runs along X: radius across Y/Z,
+    # cylinder length along X)
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                proxies = item.get("collision") or []
+                proxies[0].scale = (2.0, 2.0, 2.0)
+                out_dir = os.path.join(tmp, "out")
+                written, errors = export.export_all(out_dir)
+                raw = open(os.path.join(out_dir, "qm_uhm_basb_0.phy"),
+                           "rb").read()
+                after = PhyReader(raw).shapes
+                return {
+                    "written": written,
+                    "errors": errors,
+                    "radius": [round(s.radius, 4) for s in after],
+                    "height": [round(s.height, 4) for s in after],
+                }
+            finally:
+                phy_cleanup(tmp)
+        """)
+    ) == {
+        "written": ["qm_uhm_basb_0.mmh", "qm_uhm_basb_0.phy"],
+        "errors": [],
+        "radius": [0.1635, 0.1061],
+        "height": [0.0503, 0.0598],
+    }
+
+
+def test_a_mesh_dropped_in_the_collision_collection_is_adopted():
+    # drop any mesh into the ThedasIO Collision collection and set
+    # thedas_io_phy_bone; export adopts it as a collision anchored to that bone
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                arm = item["armature"]
+                head = arm.data.bones["Head"]
+                cube = bpy.data.objects.new("DroppedHull", None)
+                cube.location = (0.5, 0.25, 1.0)
+                bpy.data.collections["ThedasIO Collision"].objects.link(cube)
+                cube["thedas_io_phy_bone"] = "Head"
+                cube["thedas_io_phy_kind"] = "capsule"
+                cube["thedas_io_phy_radius"] = 0.07
+                cube["thedas_io_phy_height"] = 0.1\n                bpy.context.view_layer.update()\n                out_dir = os.path.join(tmp, "out")
+                written, errors = export.export_all(out_dir)
+                raw = open(os.path.join(out_dir, "qm_uhm_basb_0.phy"),
+                           "rb").read()
+                shapes = PhyReader(raw).shapes
+                new = [s for s in shapes if s.name == "Capsule_Head"]
+                expect = tuple(round(cube.location[i] - head.head_local[i], 2)
+                               for i in range(3))
+                got = (tuple(round(v, 2) for v in new[0].position[:3])
+                       if new else None)
+                return {
+                    "written": written,
+                    "errors": errors,
+                    "count": len(shapes),
+                    "new_kind": new[0].kind if new else None,
+                    "new_bone": new[0].bone if new else None,
+                    "pos_ok": got == expect,
+                    "radius": round(new[0].radius, 4) if new else None,
+                }
+            finally:
+                phy_cleanup(tmp)
+        """)
+    ) == {
+        "written": ["qm_uhm_basb_0.mmh", "qm_uhm_basb_0.phy"],
+        "errors": [],
+        "count": 3,
+        "new_kind": "caps",
+        "new_bone": "Head",
+        "pos_ok": True,
+        "radius": 0.07,
+    }
+
+
+
+def test_phy_is_gated_until_the_experimental_switch_is_turned_on():
+    # everything collision related is off until the preference is set: import
+    # makes no proxies and export does not write the .phy
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import shutil
+        import sys
+        import tempfile
+        def main():
+            sys.path.insert(0, "src")
+            import bpy
+            import thedas_io as ext
+            tmp = tempfile.mkdtemp()
+            for name in ("qm_uhm_basb_0.mmh", "qm_uhm_basb_0.phy"):
+                shutil.copy(os.path.join("data", name), os.path.join(tmp, name))
+            ext.register()
+            try:
+                from thedas_io import export, ui
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                out = {
+                    "collision": len(item.get("collision") or []),
+                    "phy_additions": bool(item.get("phy_additions")),
+                }
+                out_dir = os.path.join(tmp, "out")
+                written, errors = export.export_all(out_dir)
+                out["phy_written"] = os.path.exists(
+                    os.path.join(out_dir, "qm_uhm_basb_0.phy"))
+                return out
+            finally:
+                for o in list(bpy.context.scene.objects):
+                    bpy.data.objects.remove(o, do_unlink=True)
+                ext.unregister()
+        main()
+        """)
+    ) == {"collision": 0, "phy_additions": False, "phy_written": False}

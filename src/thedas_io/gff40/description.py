@@ -203,21 +203,28 @@ class GFFReader:
                     output[f.label_id] = value
             return output
 
+        def cell_u32(instance_base, f):
+            # every read out of an instance goes through here. a corrupt or
+            # truncated file should raise a GFF error naming the label, not a
+            # bare struct.error from four frames down with no context.
+            at = self.data_offset + instance_base + f.data_index
+            if at + 4 > len(self.data):
+                raise ValueError(
+                    f"field {label_name(f.label_id)} ({f.label_id}) reads past "
+                    f"end of file at {at}"
+                )
+            return struct.unpack_from("<I", self.data, at)[0]
+
         def field(sd, instance_base, f):
             if f.flags == FLAGS["NONE"]:
                 if f.type_id == 14:
-                    (ref,) = struct.unpack_from(
-                        "<I", self.data, self.data_offset + instance_base + f.data_index
-                    )
-                    return ecstring(ref)
+                    return ecstring(cell_u32(instance_base, f))
                 return self.decode_scalar(f, instance_base)
 
             if f.flags == FLAGS["STRUCT"]:
                 return instance(struct_def(f.type_id), instance_base + f.data_index)
 
-            (ref,) = struct.unpack_from(
-                "<I", self.data, self.data_offset + instance_base + f.data_index
-            )
+            ref = cell_u32(instance_base, f)
             if ref == 0xFFFFFFFF:
                 return None
 
@@ -268,12 +275,26 @@ class GFFReader:
                         )
                     return out
                 if f.flags == FLAGS["REFERENCE"]:
-                    s, fl, off = struct.unpack_from("<HHI", self.data, self.data_offset + ref)
+                    # a single generic struct is written inline in the cell as
+                    # two u32s: (flags << 16 | type) then the instance address.
+                    # it is not a pointer, which is why reading it as one sent
+                    # the unpack off by billions of bytes.
+                    at = self.data_offset + instance_base + f.data_index
+                    if at + 8 > len(self.data):
+                        raise ValueError(
+                            f"generic field {label_name(f.label_id)} reads past "
+                            f"end of file at {at}"
+                        )
+                    packed, address = struct.unpack_from("<II", self.data, at)
+                    s = packed & 0xFFFF
+                    fl = (packed >> 16) & 0xFFFF
                     return {
                         "struct_index": s,
                         "flags": fl,
-                        "offset": off,
-                        "value": None if off == 0xFFFFFFFF else instance(struct_def(s), off),
+                        "offset": address,
+                        "value": None
+                        if address == 0xFFFFFFFF
+                        else instance(struct_def(s), address),
                     }
             elif f.flags == FLAGS["REFERENCE"]:
                 return instance(struct_def(f.type_id), ref)

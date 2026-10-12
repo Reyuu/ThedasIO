@@ -100,6 +100,10 @@ class _Props:
     def EnumProperty(**kwargs):
         return _PropDef(**kwargs)
 
+    @staticmethod
+    def FloatProperty(**kwargs):
+        return _PropDef(**kwargs)
+
 
 class _Types:
     Panel = Panel

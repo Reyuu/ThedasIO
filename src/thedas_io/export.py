@@ -5,6 +5,7 @@ import math
 import struct
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import bpy
 import numpy as np
@@ -189,7 +190,70 @@ def export_all(dest, tint=False, tint_name="", only=None):
             # it; the file is named and the rest still lands
             errors.append(_why(out_name, e))
 
+        # a .phy rides along with the .mmh that owns it, but only when a
+        # collision field actually changed and PHY support is switched on
+        if item["kind"] == "mmh" and item.get("phy_raw") and phy_enabled():
+            phy_name = item.get("phy_name") or ""
+            try:
+                patched = _phy_bytes(item)
+            except Exception as e:  # noqa: BLE001
+                errors.append(_why(phy_name, e))
+            else:
+                if patched is not None:
+                    (dest / phy_name).write_bytes(patched)
+                    written.append(phy_name)
+
     return written, errors
+
+
+def _phy_bytes(item: dict) -> "bytes | None":
+    # None means nothing changed, so the caller leaves the file out entirely.
+    # edits first (they address shapes by their path in the original file and
+    # change no structure), then additions on top of the edited bytes.
+    from .phy.export import add_shapes, phy_bytes
+    from .phy.scene import adopted_specs, edits_for
+
+    if not phy_enabled():
+        return None
+    raw = item["phy_raw"]
+    out = phy_bytes(raw, edits_for(item))
+    additions = list(item.get("phy_additions") or [])
+    additions.extend(adopted_specs(item))
+    if additions:
+        out = add_shapes(out or raw, additions) or out
+    return out
+
+
+def phy_enabled(context=None) -> bool:
+    # The "Enable experimental PHY support" switch in addon settings.
+    addons: Any = {}
+    if context is not None:
+        prefs = getattr(context, "preferences", None)
+        if prefs is not None:
+            addons = getattr(prefs, "addons", {}) or {}
+    if not addons:
+        try:
+            prefs = bpy.context.preferences
+            addons = prefs.addons if prefs is not None else {}
+        except AttributeError:
+            return False
+    candidates = []
+    get = getattr(addons, "get", None)
+    if get is not None:
+        for key in (__package__ or "", "thedas_io",
+                    "bl_ext.user_default.thedas_io"):
+            try:
+                candidates.append(get(key))
+            except (KeyError, TypeError):
+                continue
+    values = getattr(addons, "values", None)
+    if values is not None:
+        candidates.extend(values())
+    for addon in candidates:
+        prefs = getattr(addon, "preferences", None)
+        if prefs is not None and getattr(prefs, "thedas_io_enable_phy", False):
+            return True
+    return False
 
 
 def _tnt_name(item: dict, tint_name: str = "") -> str:
