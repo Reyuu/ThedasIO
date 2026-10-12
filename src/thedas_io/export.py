@@ -910,10 +910,11 @@ def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
     normals = None
     if corners is not None and len(corners) == len(loops) and decoded["normals"]:
         dnorms = decoded["normals"]
+        collapsed = _collapsed_rows(m, dtris)
         out = []
         for r in range(n):
             li = row_loop.get(r)
-            if li is not None:
+            if li is not None and r not in collapsed:
                 out.append(tuple(corners[li].vector)[:3])
             else:
                 out.append(dnorms[r] if r < len(dnorms) else (0.0, 0.0, 0.0))
@@ -927,6 +928,30 @@ def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
         "weights": [bstate["weights"][m[r]] for r in range(n)],
         "tangent_loops": _loop_tangents(data, row_loop),
     }
+
+
+def _collapsed_rows(row_map, triangles) -> set:
+    """Rows whose Blender normal is meaningless, so trust the stored one.
+
+    Welding puts two source rows on one Blender vertex, which turns any
+    triangle carrying both into a zero-area one. Blender answers such a corner
+    with an arbitrary vector, changing between runs, so reading it back would
+    mark an untouched file as edited and then write the arbitrary value out.
+    Those rows keep their source normal instead: no drift is reported and the
+    stored bytes survive a re-encode.
+    """
+    if row_map is None:
+        return set()
+    collapsed: set = set()
+    for tri in triangles:
+        counts: dict = {}
+        for r in tri:
+            v = row_map[r]
+            counts[v] = counts.get(v, 0) + 1
+        # only the corners sharing a vertex are unrepresentable; the third
+        # corner of a zero-area triangle still carries a real normal
+        collapsed.update(r for r in tri if counts[row_map[r]] > 1)
+    return collapsed
 
 
 def _loop_tangents(data, row_loop: dict) -> dict | None:

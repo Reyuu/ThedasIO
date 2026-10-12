@@ -13,7 +13,14 @@ import struct
 
 import pytest
 
-from thedas_io.export import _DIRTY, ITEMS, _normal_drift, check_model, export_all
+from thedas_io.export import (
+    _DIRTY,
+    ITEMS,
+    _collapsed_rows,
+    _normal_drift,
+    check_model,
+    export_all,
+)
 from thedas_io.msh.description import Mesh
 
 SRC_NORMAL = (0.0, 0.0, 1.0)
@@ -29,6 +36,22 @@ def test_a_normal_blender_cannot_represent_is_not_an_edit():
     assert _normal_drift((0.12, -0.61, 0.005), SRC_NORMAL) is False  # |n| 0.62
     assert _normal_drift(SRC_NORMAL, (0.0, 0.0, 0.0)) is False  # source zero
     assert _normal_drift((0.98, 0.0, 0.2), SRC_NORMAL) is True  # a genuine edit
+
+
+def test_rows_collapsed_by_welding_keep_their_stored_normal():
+    # welding puts two source rows on one blender vertex, so a triangle holding
+    # both goes zero-area and blender answers that corner with an arbitrary
+    # vector. those rows must read back as unchanged, or an untouched file gets
+    # re-encoded with the arbitrary value baked in.
+    assert _collapsed_rows(None, [(0, 1, 2)]) == set()
+    assert _collapsed_rows([0, 1, 2, 3, 4, 5], [(0, 1, 2), (3, 4, 5)]) == set()
+
+    # rows 1 and 3 share blender vertex 10
+    assert _collapsed_rows([10, 10, 2, 10], [(1, 2, 3)]) == {1, 3}
+
+    # every corner sharing a vertex, but never an innocent neighbour
+    assert _collapsed_rows([10, 10, 2, 10], [(0, 1, 2), (0, 1, 3)]) == {0, 1, 3}
+    assert _collapsed_rows([10, 10, 2, 3], [(0, 1, 2), (0, 1, 3)]) == {0, 1}
 
 
 @pytest.fixture
