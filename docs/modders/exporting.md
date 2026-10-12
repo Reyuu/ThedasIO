@@ -11,3 +11,16 @@ Export tint writes each model's DAO Tint values as a `.tnt` for the chargen vari
 Rename on export shows per-file rename fields; set names apply on export.
 
 Source `.erf`/`.rim` archives are read-only. Export never writes back into an archive.
+
+A mesh keeps the index width it was shipped with — 16-bit unless the file says
+otherwise. If an edit grows one chunk past 65535 vertices, export widens the
+**whole mesh** to 32-bit indices: every chunk's index region is re-packed and
+re-offset, because the per-chunk start is an offset shared by the whole file and
+one chunk widening alone would shift the rest. That doubles the index region
+size, which for a mesh just over the limit is a small cost.
+
+Only two shipped meshes are 32-bit, so this path is rare. Check model reports
+the vertex count before you commit to a heavy subdivision.
+
+One failing resource does not stop the batch — the rest still lands and the
+failure is listed with the file name.

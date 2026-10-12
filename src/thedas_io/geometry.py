@@ -26,8 +26,37 @@ USAGE_TANGENT = 6
 USAGE_BINORMAL = 7
 
 
-def index_width(verts: int) -> int:
+INDEX_FORMAT_U32 = 1
+
+# The file serializes its own index width: 8032 GFF_MESH_INDEXFORMAT on the mesh
+# (mirrored per chunk by 8004 GFF_MESH_CHUNK_INDEXFORMAT), 0 = u16, 1 = u32.
+# Confirmed against the corpus -- zz_wrf_rc_0.msh / zz_wrf_bc_c_0.msh are the only
+# shipped meshes with 8032 == 1, and they are the only ones over 65535 verts.
+#
+# Prefer it: it is what the engine unpacks with. Fall back to the vertex count
+# only where the field is absent or non-binary, so hand-built fixtures and any
+# file whose field we do not understand still decode.
+def index_width(verts: int, index_format=None) -> int:
+    if index_format is not None:
+        fmt = index_format[1] if isinstance(index_format, (list, tuple)) else index_format
+        if fmt in (0, INDEX_FORMAT_U32):
+            return 4 if fmt == INDEX_FORMAT_U32 else 2
     return 4 if verts > 0xFFFF else 2
+
+
+def chunk_index_width(chunk, mesh=None) -> int:
+    # 8004 is per chunk and mirrors 8032; trust whichever is present.
+    fmt = chunk.cells.get(8004)
+    if fmt is None and mesh is not None:
+        fmt = mesh.index_format
+    return index_width(chunk.cells.get(8001, 0), fmt)
+
+
+def chunk_index_format(chunk, mesh=None, width=None) -> int:
+    # the field to store back, so a widened chunk stops contradicting its blob
+    if width is None:
+        width = chunk_index_width(chunk, mesh)
+    return INDEX_FORMAT_U32 if width == 4 else 0
 
 
 def weld_positions(positions):
@@ -67,14 +96,14 @@ def decode_chunk(mesh, chunk):
     blob = bytes(mesh.vertex_data[v0 : v0 + verts * stride])
 
     ncounts = chunk.cells.get(8002, 0)
-    width = index_width(verts)
+    width = chunk_index_width(chunk, mesh)
     i0 = chunk.cells.get(8009, 0) * width
     iblob = bytes(mesh.index_data[i0 : i0 + ncounts * width])
 
     if len(iblob) != ncounts * width:
         raise ValueError(
             f"chunk {chunk.name}: index blob holds {len(iblob)}B, "
-            f"{verts} verts need {ncounts * width}B"
+            f"{verts} verts need {ncounts * width}B at width {width}"
         )
     if width == 4:
         indices = list(struct.unpack(f"<{ncounts}I", iblob))

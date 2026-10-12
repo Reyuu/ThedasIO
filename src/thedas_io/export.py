@@ -19,11 +19,13 @@ from . import tnt
 from .geometry import (
     FORMATS,
     IDENTITY_QUAT,
+    INDEX_FORMAT_U32,
     _decode_row,
+    chunk_index_format,
+    chunk_index_width,
     compose,
     decode_chunk,
     flatten,
-    index_width,
     node_local,
     node_paths,
     quat_mul,
@@ -768,24 +770,26 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
         if mode == "patch":
             _patch_chunk(base.chunks[i], obj, state, decoded, base_blob, vblob, iblob)  # type: ignore
 
+    # 8009 is a mesh-wide *element* offset into one shared index blob, so every
+    # chunk in a file has to agree on the width -- widening one chunk in place
+    # would move every other chunk's start. Run the rebuilds first to find out
+    # whether the mesh outgrew u16, then pack every chunk at one agreed width.
+    rebuilt = []
     for i, (obj, _, decoded, mode, state) in enumerate(planned):
-        if mode != "rebuild":
-            continue
-        vreg, ireg, nrows, ncounts, bounds, rmap = _rebuild_chunk(base.chunks[i], obj, state)  # type: ignore
-        while len(vblob) % 4:  # appended regions start %4: element offsets stay integral
-            vblob.append(0)
-        while len(iblob) % 4:
-            iblob.append(0)
+        if mode == "rebuild":
+            rebuilt.append((i, obj, _rebuild_chunk(base.chunks[i], obj, state)))  # type: ignore
+
+    widened = _widen_indices(base, rebuilt, iblob)
+
+    for i, obj, (vreg, indices, nrows, ncounts, bounds, rmap) in rebuilt:
         bc = base.chunks[i]  # type: ignore
+        while len(vblob) % 4:  # appended regions start %4: offsets stay integral
+            vblob.append(0)
         bc.cells[8006] = len(vblob)
         vblob += vreg + b"\x00" * 16  # 16B tail: stored list counts cover it, like source
-        # vertex counts first: 8009 is an element offset, so the width it scales
-        # by is the one the new region will actually be read at
         bc.cells.update({8001: nrows, 8002: ncounts, 8007: 0, 8008: nrows})
-        bc.cells[8009] = len(iblob) // index_width(nrows)
-        iblob += ireg + b"\x00" * 16
-        while len(iblob) % 4:
-            iblob.append(0)
+        if not widened:  # otherwise _widen_indices already packed every region
+            _append_index_region(bc, iblob, indices, ncounts)
         bc.bounds = bounds
         try:
             obj["thedas_io_row_to_vert"] = rmap
@@ -793,7 +797,65 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
             pass  # mapless blends still export; they just rebuild again next time
 
     base.vertex_data, base.index_data = list(vblob), list(iblob)  # type: ignore
+    # 8032 is mesh-wide and the writer round-trips it verbatim, so it must
+    # agree with the chunks: _widen_indices already set it, but only normalize
+    # when they actually differ, so an untouched mesh keeps its source bytes
+    widths = {chunk_index_width(c) for c in base.chunks}  # type: ignore
+    if widths == {4}:
+        base.index_format = INDEX_FORMAT_U32  # type: ignore
+    elif widths == {2} and base.index_format != 0:  # type: ignore
+        base.index_format = 0  # type: ignore
     return MSHWriter(base).write()
+
+
+def _append_index_region(chunk, iblob: bytearray, indices, ncounts: int) -> None:
+    # one chunk's index region appended to the shared blob, with 8009 left
+    # pointing at it as an *element* offset at the chunk's own width
+    width = chunk_index_width(chunk)
+    while len(iblob) % 4:
+        iblob.append(0)
+    chunk.cells[8009] = len(iblob) // width
+    code = "I" if width == 4 else "H"
+    iblob += struct.pack(f"<{code * ncounts}", *indices) + b"\x00" * 16
+    while len(iblob) % 4:
+        iblob.append(0)
+    # 8004/8032 must not contradict the bytes we just wrote
+    chunk.cells[8004] = chunk_index_format(chunk, width=width)
+
+
+def _widen_indices(base, rebuilt: list, iblob: bytearray) -> bool:
+    # pPromote the whole mesh to 32-bit indices if a rebuild outgrew u16
+    if not any(result[2] > 0xFFFF for _, _, result in rebuilt):
+        return False
+
+    fresh = {i: result for i, _obj, result in rebuilt}
+    new_blob = bytearray()
+    for i, chunk in enumerate(base.chunks):  # type: ignore
+        ncounts = chunk.cells.get(8002, 0)
+        if i in fresh:
+            indices = fresh[i][1]
+            ncounts = fresh[i][3]
+        else:
+            # re-read this chunk's untouched indices at its current width
+            width = chunk_index_width(chunk)
+            off = chunk.cells.get(8009, 0) * width
+            blob = bytes(iblob[off : off + ncounts * width])
+            if len(blob) != ncounts * width:
+                raise ValueError(
+                    f"chunk {chunk.name}: cannot widen, index region is truncated "
+                    f"({len(blob)}B of {ncounts * width}B)"
+                )
+            code = "I" if width == 4 else "H"
+            indices = list(struct.unpack(f"<{ncounts}{code}", blob))
+
+        # set 8004 *before* appending: _append_index_region reads it back to
+        # learn the width, and this is what packs the region at u32
+        chunk.cells[8004] = INDEX_FORMAT_U32  # every chunk follows the mesh
+        _append_index_region(chunk, new_blob, indices, ncounts)
+
+    iblob[:] = new_blob
+    base.index_format = INDEX_FORMAT_U32  # type: ignore
+    return True
 
 
 def _evaluated_mesh(obj):
@@ -1091,7 +1153,7 @@ def _drift(a, b, tol: float = 1e-6) -> bool:
 def _patch_chunk(chunk, obj, state, decoded, base_blob, vblob, iblob):
     # overwrite editable fields, indices and bounds in a copy of the source blobs
     verts = chunk.cells.get(8001, 0)
-    width = index_width(verts)
+    width = chunk_index_width(chunk)
     vbase = chunk.cells.get(8006, 0)
     ibase = chunk.cells.get(8009, 0) * width
     weights = state["weights"]  # live mesh weights: the decoded ones would undo a repaint
@@ -1224,11 +1286,12 @@ def _rebuild_chunk(chunk, obj, bstate):
         vreg += row
 
     ncounts = 3 * len(new_tris)
-    width = "I" if index_width(len(rows)) == 4 else "H"
-    ireg = struct.pack(f"<{width * ncounts}", *[i for t in new_tris for i in t])
+    # the index width is the caller's decision: 8009 is a mesh-wide element
+    # offset, so one chunk cannot widen alone. Return flat indices and let
+    # _msh_bytes pack every chunk at one agreed width.
     return (
         bytes(vreg),
-        ireg,
+        [i for t in new_tris for i in t],
         len(rows),
         ncounts,
         _rebounds([positions[v] for v, _ in rows], chunk.bounds),

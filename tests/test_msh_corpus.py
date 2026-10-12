@@ -8,6 +8,10 @@ Worth running after anything touching index width or declarators. The
 index-width rule was wrong for thirteen shipped meshes -- 96795 indices over
 22105 vertices, stored as u16 -- and no fixture in data/ looked like them, so
 nothing in the fast suite noticed.
+
+It also asserts the serialized index format never disagrees with the
+vertex-count heuristic, so a mod shipping a chunk shape we have not seen fails
+here instead of silently decoding as the wrong width.
 """
 
 from __future__ import annotations
@@ -37,7 +41,11 @@ def test_every_shipped_mesh_decodes():
     if root is None:
         pytest.skip("set THEDAS_MSH_CORPUS to a folder of .msh files")
 
-    files, chunks, failures = check(root)
+    files, chunks, failures, _formats, disagree = check(root)
 
     assert files, f"no .msh found under {root}"
     assert failures == [], f"{len(failures)} of {chunks} chunks failed to decode"
+    assert disagree == [], (
+        f"{len(disagree)} chunks declare an index format the vertex count "
+        f"contradicts: {disagree[:5]}"
+    )

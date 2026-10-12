@@ -5,7 +5,14 @@ import struct
 import pytest
 
 from conftest import DATA_DIR
-from thedas_io.geometry import decode_chunk, index_width, weld_positions
+from thedas_io.geometry import (
+    INDEX_FORMAT_U32,
+    chunk_index_format,
+    chunk_index_width,
+    decode_chunk,
+    index_width,
+    weld_positions,
+)
 from thedas_io.msh.description import Mesh, load
 
 MSH_PATH = DATA_DIR / "c_corspidr_3.msh"
@@ -46,10 +53,14 @@ def test_rejects_non_trilist():
         decode_chunk(mesh, mesh.chunks[0])
 
 
-def _one_chunk(verts, index_bytes, index_count, stride=12, decl_type=2, decl_usage=0):
+def _one_chunk(
+    verts, index_bytes, index_count, stride=12, decl_type=2, decl_usage=0, chunk_format=None,
+    mesh_format=None,
+):
     # a chunk with one FLOAT3 declarator and one hand-fed index blob. index_count
     # is 8002 (elements, not bytes) and is passed in rather than derived, so a
-    # test can make it disagree with the blob on purpose
+    # test can make it disagree with the blob on purpose. chunk_format is 8004
+    # and mesh_format is 8032; both omitted means the field is absent
     chunk = {
         2: "c",
         8000: stride,
@@ -61,7 +72,12 @@ def _one_chunk(verts, index_bytes, index_count, stride=12, decl_type=2, decl_usa
         8009: 0,
         8025: [{8026: 0, 8027: 0, 8028: decl_type, 8029: decl_usage, 8030: 0, 8031: 0}],
     }
-    return Mesh({2: "m", 8021: [chunk], 8022: [0] * (stride * verts), 8023: list(index_bytes)})
+    if chunk_format is not None:
+        chunk[8004] = chunk_format
+    root = {2: "m", 8021: [chunk], 8022: [0] * (stride * verts), 8023: list(index_bytes)}
+    if mesh_format is not None:
+        root[8032] = mesh_format
+    return Mesh(root)
 
 
 def test_index_width_follows_the_vertex_count_not_the_index_count():
@@ -91,6 +107,66 @@ def test_index_width_goes_wide_past_65535_vertices():
 def test_index_width_switches_exactly_at_the_boundary():
     assert index_width(0xFFFF) == 2
     assert index_width(0x10000) == 4
+
+
+def test_declared_format_beats_the_vertex_count():
+    # the file serializes its own width; the vertex count is only a fallback.
+    # u32 declared over 4 verts: the blob is genuinely 4 bytes per index and a
+    # vertex-count rule would read it as u16 and produce nonsense triangles.
+    mesh = _one_chunk(verts=4, index_bytes=struct.pack("<3I", 0, 2, 3), index_count=3, mesh_format=1)
+
+    assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 2, 3)]
+
+
+def test_declared_format_beats_the_vertex_count_the_other_way():
+    # zz_wrf_rc_0.msh shape in miniature: >65535 verts declared u16. The
+    # heuristic would pick u32 and blow up on a blob that is u16.
+    tris = 21846
+    mesh = _one_chunk(
+        verts=4,
+        index_bytes=struct.pack(f"<{tris * 3}H", *([0, 1, 2] * tris)),
+        index_count=tris * 3,
+        mesh_format=0,
+    )
+
+    assert len(decode_chunk(mesh, mesh.chunks[0])["triangles"]) == tris
+
+
+def test_chunk_format_wins_over_mesh_format():
+    # 8004 is per chunk and mirrors 8032; prefer the nearer declaration
+    mesh = _one_chunk(
+        verts=4, index_bytes=struct.pack("<3I", 0, 1, 2), index_count=3, chunk_format=1, mesh_format=0
+    )
+
+    assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 1, 2)]
+
+
+def test_absent_format_falls_back_to_the_vertex_count():
+    # hand-built fixtures carry neither 8004 nor 8032, so the rule still needs
+    # to work without them
+    mesh = _one_chunk(verts=4, index_bytes=struct.pack("<3H", 0, 1, 2), index_count=3)
+
+    assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 1, 2)]
+    assert chunk_index_width(mesh.chunks[0]) == 2
+
+
+def test_unrecognized_format_value_falls_back_to_the_vertex_count():
+    # index_format comes off disk unvalidated. A value we do not understand must
+    # degrade to the heuristic, never crash and never silently pick a width.
+    mesh = _one_chunk(
+        verts=4, index_bytes=struct.pack("<3H", 0, 1, 2), index_count=3, mesh_format=0xA5A5
+    )
+
+    assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 1, 2)]
+
+
+def test_chunk_index_format_round_trips_the_width_it_was_asked_about():
+    # export writes this back; it must never contradict the bytes next to it
+    mesh = _one_chunk(verts=4, index_bytes=struct.pack("<3H", 0, 1, 2), index_count=3)
+    chunk = mesh.chunks[0]
+
+    assert chunk_index_format(chunk, width=2) == 0
+    assert chunk_index_format(chunk, width=4) == INDEX_FORMAT_U32
 
 
 def test_index_blob_shorter_than_the_chunk_claims():
