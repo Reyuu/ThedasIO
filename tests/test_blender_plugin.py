@@ -238,6 +238,8 @@ def _scene(db="", index=0):
         thedas_io_export_dir="",
         thedas_io_scan_active=False,
         thedas_io_scan_progress=0,
+        thedas_io_scan_addins=False,
+        thedas_io_addins_dir="",
         thedas_io_import_source="GAME",
         thedas_io_export_tint=False,
         thedas_io_rename_export=False,
@@ -840,6 +842,66 @@ def test_scan_assets_prefers_game_dir(tmp_path):
     _seed_db(tmp_path)
     assert op.execute(ctx) == {"FINISHED"}
     assert [i.filename for i in scene.thedas_io_assets]
+
+
+def test_scan_assets_includes_addins_only_when_asked(tmp_path):
+    from types import SimpleNamespace
+
+    from thedas_io.asset_db.scanner import find_exact
+
+    game = tmp_path / "game"
+    addins = tmp_path / "AddIns"
+    game.mkdir()
+    addins.mkdir()
+    (game / "g.msh").write_bytes(b"g")
+    (addins / "d.msh").write_bytes(b"d")
+
+    scene = _scene(str(tmp_path / "t.sqlite"))
+    scene.thedas_io_addins_dir = str(addins)
+    ctx = SimpleNamespace(
+        scene=scene,
+        preferences=SimpleNamespace(addons={}),
+        window_manager=scene.window_manager,
+        window=SimpleNamespace(),
+    )
+
+    scene.thedas_io_scan_addins = False
+    op = cast(Any, ui.THEDAS_IO_OT_scan_assets())
+    op.directory = str(game)
+    assert op.execute(ctx) == {"FINISHED"}
+    # off: the AddIns folder is not indexed at all
+    assert {i.filename for i in scene.thedas_io_assets} == {"g.msh"}
+
+    # on: both folders, and the DLC copy is the one that resolves
+    scene.thedas_io_scan_addins = True
+    op = cast(Any, ui.THEDAS_IO_OT_scan_assets())
+    op.directory = str(game)
+    assert op.execute(ctx) == {"FINISHED"}
+    assert {i.filename for i in scene.thedas_io_assets} == {"g.msh", "d.msh"}
+    hit = find_exact("d.msh", db_path=str(tmp_path / "t.sqlite"))
+    assert hit is not None and hit["path"] == str(addins / "d.msh")
+
+
+def test_scan_assets_reports_a_missing_addins_folder(tmp_path):
+    from types import SimpleNamespace
+
+    game = tmp_path / "game"
+    game.mkdir()
+    scene = _scene(str(tmp_path / "t.sqlite"))
+    scene.thedas_io_scan_addins = True
+    scene.thedas_io_addins_dir = str(tmp_path / "nope")
+    reports: list = []
+    ctx = SimpleNamespace(
+        scene=scene,
+        preferences=SimpleNamespace(addons={}),
+        window_manager=scene.window_manager,
+        window=SimpleNamespace(),
+    )
+    op = cast(Any, ui.THEDAS_IO_OT_scan_assets())
+    op.report = lambda level, msg: reports.append(msg)
+    op.directory = str(game)
+    assert op.execute(ctx) == {"CANCELLED"}
+    assert any("AddIns folder not found" in m for m in reports)
 
 
 def test_mao_for_node_prefers_6001(tmp_path):

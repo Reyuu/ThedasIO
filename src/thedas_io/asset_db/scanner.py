@@ -8,7 +8,7 @@ from ..erf.description import ERFReader
 SCAN_EXTS = {".rim", ".erf"}
 LOOSE_EXTS = {".msh", ".mmh", ".mao", ".dds", ".tga"}
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path);"
+    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path, prio);"
     "CREATE INDEX IF NOT EXISTS idx_assets_ext_name ON assets(ext, filename);"
 )
 
@@ -40,14 +40,21 @@ def _entry_table(path):
 _ENTRY_TABLES: dict[tuple[str, int, int], bytes] = {}
 
 
+def _table(head, size, read_more):
+    # 32B header + entry_count * 72B rows, all of which have to fit in the file.
+    # the bound comes from the file rather than a guess: a truncated or foreign
+    # archive reports a garbage count, and read(count * 72) would then try to
+    # allocate up to 309GB and raise MemoryError mid-scan.
+    count = struct.unpack("<I", head[16:20])[0]
+    if 32 + count * 72 > size:
+        raise ValueError(f"entry count {count} does not fit in {size} bytes")
+    return head + read_more(count * 72)
+
+
 def _read_entry_table(path):
+    size = os.path.getsize(path)
     with open(path, "rb") as f:
-        head = f.read(32)
-        count = struct.unpack("<I", head[16:20])[0]
-        if count > 1000000:
-            raise ValueError(f"implausible entry count {count}")
-        rest = f.read(count * 72)
-    return head + rest
+        return _table(f.read(32), size, f.read)
 
 
 def _norm_ext(ext):
@@ -61,29 +68,54 @@ def _norm_ext(ext):
     return f".{ext}"
 
 
+def _priority(path, root, index: int) -> int:
+    # higher wins when two archives hold the same file name. roots come in load
+    # order, so a later root (AddIns, which the engine loads after the base
+    # game) beats an earlier one; within a root the deeper path wins, and an
+    # override/ folder wins outright because that is the last thing loaded.
+    try:
+        parts = Path(path).relative_to(root).parts
+    except ValueError:
+        parts = Path(path).parts
+    prio = index * 1000 + len(parts)
+    if any(p.lower() == "override" for p in parts):
+        prio += 100
+    return prio
+
+
 def scan(root, db_path=None, progress=None):
-    root = Path(root)
+    roots = [Path(root)] if isinstance(root, (str, Path)) else [Path(r) for r in root]
     db = _db_path(db_path)
     db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db)
     con.executescript(SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
+    if "prio" not in cols:  # a database written before the column existed
+        con.execute("ALTER TABLE assets ADD COLUMN prio INTEGER")
     con.execute("DELETE FROM assets")
 
     files = 0
     entries = 0
     skipped = []
+    missing = []
     targets = []
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
+    for i, r in enumerate(roots):
+        if not r.is_dir():
+            missing.append(str(r))
             continue
-        if p.suffix.lower() in SCAN_EXTS or p.suffix.lower() in LOOSE_EXTS:
-            targets.append(p)
+        for p in sorted(r.rglob("*")):
+            if p.is_file() and p.suffix.lower() in SCAN_EXTS | LOOSE_EXTS:
+                targets.append((p, r, i))
 
     total = len(targets)
-    for i, path in enumerate(targets):
+    for i, (path, root_i, index) in enumerate(targets):
         suffix = path.suffix.lower()
+        prio = _priority(path, root_i, index)
         if suffix not in SCAN_EXTS:
-            con.execute("INSERT INTO assets VALUES (?,?,?,?)", (None, path.name, suffix, str(path)))
+            con.execute(
+                "INSERT INTO assets VALUES (?,?,?,?,?)",
+                (None, path.name, suffix, str(path), prio),
+            )
         else:
             files += 1
             # only the contents, not the archive itself
@@ -91,18 +123,25 @@ def scan(root, db_path=None, progress=None):
             try:
                 package = []
                 for e in ERFReader(_entry_table(path)).entries:
-                    package.append((path.name, e.name, Path(e.name).suffix.lower(), str(path)))
+                    package.append(
+                        (path.name, e.name, Path(e.name).suffix.lower(), str(path), prio)
+                    )
             except (OSError, ValueError, struct.error):
                 skipped.append(str(path))
             else:
                 rows = package
                 entries += len(package)
-            con.executemany("INSERT INTO assets VALUES (?,?,?,?)", rows)
+            con.executemany("INSERT INTO assets VALUES (?,?,?,?,?)", rows)
         if progress is not None:
             progress(i + 1, total)
     con.commit()
     con.close()
-    return {"files": files, "entries": entries, "skipped": skipped}
+    return {
+        "files": files,
+        "entries": entries,
+        "skipped": skipped,
+        "missing": missing,
+    }
 
 
 def payload(archive, name):
@@ -146,7 +185,8 @@ def find(ext=None, name=None, package=None, db_path=None):
 
 
 def find_exact(name, db_path=None):
-    # loose files first so we skip extracting, then package name for stable picks
+    # loose files first so we skip extracting, then the latest-loaded package
+    # so a player's override beats the stock data it shadows
     if not name:
         return None
     db = _db_path(db_path)
@@ -159,7 +199,7 @@ def find_exact(name, db_path=None):
         row = con.execute(
             "SELECT package, filename, ext, path FROM assets "
             "WHERE ext = ? AND filename = ? COLLATE NOCASE "
-            "ORDER BY package IS NOT NULL, package, path LIMIT 1",
+            "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
             (_norm_ext(Path(name).suffix), name),
         ).fetchone()
     finally:

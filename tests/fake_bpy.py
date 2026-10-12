@@ -32,6 +32,9 @@ class FakeLayout:
     def split(self, factor=0.5, align=False):
         return self
 
+    def row(self, align=False):
+        return self
+
     def operator(self, opname, text=""):
         self.operators.append(opname)
         return SimpleNamespace()

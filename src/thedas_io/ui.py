@@ -3,6 +3,7 @@
 import io
 import json
 import math
+import os
 import shutil
 import sqlite3
 import struct
@@ -219,7 +220,11 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
             self.layout.prop(scene, "thedas_io_filter_name", text="File name")
             self.layout.prop(scene, "thedas_io_filter_package", text="Package")
             self.layout.operator("thedas_io.refresh_assets", text="Search")
-            self.layout.operator("thedas_io.scan_assets", text="Scan")
+            row = self.layout.row(align=True)
+            row.prop(scene, "thedas_io_scan_addins", text="Include AddIns")
+            row.operator("thedas_io.scan_assets", text="Scan")
+            if scene.thedas_io_scan_addins:
+                self.layout.prop(scene, "thedas_io_addins_dir", text="")
             if scene.thedas_io_scan_active:
                 self.layout.prop(scene, "thedas_io_scan_progress", text="Scanning", slider=True)
 
@@ -893,6 +898,12 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         self.layout.prop(self, "thedas_io_game_dir")
 
 
+def default_addins_dir() -> str:
+    # where the installer drops DLC and mods, next to the game data
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return str(Path(home) / "Documents" / "BioWare" / "Dragon Age" / "AddIns")
+
+
 def _prefs_game_dir(context) -> str:
     try:
         addons = context.preferences.addons
@@ -980,12 +991,23 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
     _scene = None
 
     def _resolve(self, context):
+        # one or two roots: the game folder, plus the AddIns folder if asked
+        roots = []
         root = bpy.path.abspath(getattr(self, "directory", "") or _prefs_game_dir(context))
         if not root:
-            return None, "Set a scan folder or the game folder in Preferences"
+            return [], "Set a scan folder or the game folder in Preferences"
         if not Path(str(root)).exists():
-            return None, f"Scan folder not found: {root}"
-        return str(root), ""
+            return [], f"Scan folder not found: {root}"
+        roots.append(str(root))
+
+        scene = context.scene
+        if getattr(scene, "thedas_io_scan_addins", False):
+            addins = bpy.path.abspath(scene.thedas_io_addins_dir or default_addins_dir())
+            if not Path(addins).is_dir():
+                return [], f"AddIns folder not found: {addins}"
+            if addins not in roots:
+                roots.append(addins)
+        return roots, ""
 
     def invoke(self, context, event) -> set:
         # scan in worker thread, progress via modal timer
@@ -993,7 +1015,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             self.report({"WARNING"}, "A scan is already running")
             return {"CANCELLED"}
 
-        root, err = self._resolve(context)
+        roots, err = self._resolve(context)
         if err:
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
@@ -1001,7 +1023,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         scene = context.scene
         self._db_path = str(scene.thedas_io_db_path or "")
         self._scene = scene
-        self._state = _scan_async(root, self._db_path or None)
+        self._state = _scan_async(roots, self._db_path or None)
         scene.thedas_io_scan_active = True
         scene.thedas_io_scan_progress = 0
 
@@ -1020,14 +1042,14 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             self.report({"WARNING"}, "A scan is already running")
             return {"CANCELLED"}
 
-        root, err = self._resolve(context)
+        roots, err = self._resolve(context)
         if err:
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
 
         self._db_path = str(context.scene.thedas_io_db_path or "")
         self._scene = context.scene
-        self._state = _scan_async(root, self._db_path or None)
+        self._state = _scan_async(roots, self._db_path or None)
         self._state["thread"].join()
         return self._finish(context)
 
@@ -1073,10 +1095,11 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             scene.thedas_io_filter_package or None,
         )
         stats = state.get("stats") or {}
+        note = f"Skipped {len(stats['missing'])} missing folder(s)" if stats.get("missing") else ""
         self.report(
             {"INFO"},
             f"Scanned {stats.get('files', 0)} archive files, "
-            f"{stats.get('entries', 0)} entries, {len(rows)} assets",
+            f"{stats.get('entries', 0)} entries, {len(rows)} assets. {note}".strip(),
         )
         return {"FINISHED"}
 
@@ -2229,7 +2252,12 @@ _CLASSES: tuple = (
     THEDAS_IO_OT_export_substance,
     THEDAS_IO_OT_import_substance,
 )
-_STRING_PROPS = ("thedas_io_filter_name", "thedas_io_filter_package", "thedas_io_db_path")
+_STRING_PROPS = (
+    "thedas_io_filter_name",
+    "thedas_io_filter_package",
+    "thedas_io_db_path",
+    "thedas_io_addins_dir",
+)
 _DIR_PROPS = ("thedas_io_export_dir", "thedas_io_sp_dir")
 # drawn inputs need name and tooltip, text at draw only relabels
 _PROP_TEXT = {
@@ -2246,6 +2274,14 @@ _PROP_TEXT = {
         (
             "Asset database file override; blank uses the default "
             "location under the application data folder"
+        ),
+    ),
+    "thedas_io_addins_dir": (
+        "AddIns folder",
+        (
+            "Where the installer drops DLC and mods; scanned "
+            "alongside the game folder when Include AddIns is on. "
+            "Blank uses Documents/BioWare/Dragon Age/AddIns"
         ),
     ),
     "thedas_io_export_dir": (
@@ -2279,6 +2315,7 @@ _SCENE_PROPS = (
     "thedas_io_rename_index",
     "thedas_io_scan_progress",
     "thedas_io_scan_active",
+    "thedas_io_scan_addins",
     *_STRING_PROPS,
     *_DIR_PROPS,
     "thedas_io_filter_ext",
@@ -2310,6 +2347,11 @@ def register():
         min=0, max=100, default=0, description="Archive scan progress in percent"
     )
     bpy.types.Scene.thedas_io_scan_active = bpy.props.BoolProperty(default=False)  # type: ignore
+    bpy.types.Scene.thedas_io_scan_addins = bpy.props.BoolProperty(  # type: ignore
+        default=False,
+        description="Scan the AddIns folder alongside the game folder, so DLC "
+        "and mod assets resolve too",
+    )
 
     bpy.types.Scene.thedas_io_export_tint = bpy.props.BoolProperty(  # type: ignore
         default=False,
