@@ -235,8 +235,23 @@ def node_local(values):
     return (float(trsl[0]), float(trsl[1]), float(trsl[2])), tuple(float(x) for x in rota)
 
 
+def bone_frame(quat) -> tuple:
+    # MMH runs a bone along its node's local X, and Blender wants that along Y.
+    # the remaining two axes have exactly one right-handed assignment:
+    # node Z -> bone X, node Y -> bone Z. the other permutation is left-handed
+    # on every bone in the game data, which would mirror the mesh.
+    return (
+        quat_rotate(quat, (0.0, 0.0, 1.0)),
+        quat_rotate(quat, (1.0, 0.0, 0.0)),
+        quat_rotate(quat, (0.0, 1.0, 0.0)),
+    )
+
+
 def compose(parent, local):
-    # legacy MSH_Tool rule
+    # world = parent * local, so the parent applies after the local rotation.
+    # the other order looks equivalent on a flat chain but drifts with depth:
+    # on qm_uhm_basb_0 it put deep bones a mean 1.38m from the geometry they
+    # deform, against 0.05m here.
     (ploc, prot), (lloc, lrot) = parent, local
     return (
         (
@@ -244,7 +259,7 @@ def compose(parent, local):
             ploc[1] + quat_rotate(prot, lloc)[1],
             ploc[2] + quat_rotate(prot, lloc)[2],
         ),
-        quat_mul(lrot, prot),
+        quat_mul(prot, lrot),
     )
 
 

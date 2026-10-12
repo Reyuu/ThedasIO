@@ -2045,6 +2045,72 @@ def test_export_untouched_mmh():
     }
 
 
+def test_imported_rig_is_internally_consistent():
+    # everything the rig needs to be right at once: heads, frame axes, handedness,
+    # parenting, naming and the export tags. two real bugs slipped past the byte
+    # identity tests, both only visible here.
+    assert run(
+        _MMH_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import math
+            mmh_setup()  # puts src on sys.path, so import after it
+            import bpy
+            from thedas_io.geometry import bone_frame, flatten
+            from thedas_io.mmh.description import load
+            arm = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
+            bones = {b.name: b for b in arm.data.bones}
+            rows = flatten(load(os.path.join("data", "c_corspidra_0.mmh")))
+            parents = {id(n): p for n, p, _l, _q in rows}
+            out = {"count": len(bones), "dupes": [], "zero": [], "head_err": 0.0,
+                   "frame_err": 0.0, "left_handed": 0, "bad_parent": 0, "untagged": 0}
+            for n, _p, l, q in rows:
+                if n.kind != "node" or not n.name or n.name not in bones:
+                    continue
+                b = bones[n.name]
+                out["head_err"] = max(out["head_err"],
+                                      math.dist(tuple(l), tuple(b.head_local)))
+                m = b.matrix_local.to_3x3()
+                got = [(m[0][i], m[1][i], m[2][i]) for i in range(3)]
+                for k in range(3):
+                    fa, ga = bone_frame(q)[k], got[k]
+                    out["frame_err"] = max(out["frame_err"], math.degrees(
+                        math.acos(max(-1.0, min(1.0, sum(fa[i] * ga[i] for i in range(3)))))))
+                x, y, z = got
+                det = (x[0] * (y[1] * z[2] - y[2] * z[1])
+                       - x[1] * (y[0] * z[2] - y[2] * z[0])
+                       + x[2] * (y[0] * z[1] - y[1] * z[0]))
+                if det < 0:
+                    out["left_handed"] += 1
+                if b.name.rsplit(".", 1)[-1].isdigit():
+                    out["dupes"].append(b.name)
+                if b.length < 1e-6:
+                    out["zero"].append(b.name)
+                anc = parents[id(n)]
+                while anc is not None and anc.kind != "node":
+                    anc = parents[id(anc)]
+                want = anc.name if (anc is not None and anc.name) else None
+                if want != (b.parent.name if b.parent else None):
+                    out["bad_parent"] += 1
+            out["untagged"] = sum(1 for p in arm.pose.bones
+                                  if p.get("thedas_io_node") is None)
+            out["head_err"] = round(out["head_err"], 4)
+            out["frame_err"] = round(out["frame_err"], 1)
+            mmh_cleanup()
+            return out
+    """)
+    ) == {
+        "count": 68,
+        "dupes": [],
+        "zero": [],
+        "head_err": 0.0,
+        "frame_err": 0.1,
+        "left_handed": 0,
+        "bad_parent": 0,
+        "untagged": 0,
+    }
+
+
 def test_export_edited_mmh():
     assert run(
         _MMH_SETUP

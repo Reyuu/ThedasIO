@@ -29,7 +29,14 @@ from .export import (
     reset,
     roots,
 )
-from .geometry import bone_names, decode_chunk, flatten, node_paths, quat_rotate, weld_positions
+from .geometry import (
+    bone_frame,
+    bone_names,
+    decode_chunk,
+    flatten,
+    node_paths,
+    weld_positions,
+)
 from .materials import (
     parse_mao,
     pil_to_blender,
@@ -2051,6 +2058,7 @@ def build_hierarchy(context, tree, chunks):
         rows = flatten(tree)
         parents = {id(n): p for n, p, _, _ in rows}
         paths = {id(n): path for n, path in node_paths(tree)}
+        lengths = _bone_lengths(rows)
 
         def host_of(node, want_bone=False):
             ancestor = parents[id(node)]
@@ -2067,9 +2075,17 @@ def build_hierarchy(context, tree, chunks):
             host = host_of(node, want_bone=(node.kind == "node"))
             if node.kind == "node":
                 bone = arm_data.edit_bones.new(node.name or "bone")
+                _bx, axis, bone_z = bone_frame(quat)
                 bone.head = loc
-                tail = quat_rotate(quat, (0.02, 0.0, 0.0))
-                bone.tail = (loc[0] + tail[0], loc[1] + tail[1], loc[2] + tail[2])
+                length = lengths.get(id(node), _LEAF_BONE_LEN)
+                bone.tail = (
+                    loc[0] + axis[0] * length,
+                    loc[1] + axis[1] * length,
+                    loc[2] + axis[2] * length,
+                )
+                # leaving roll to Blender is what made the face and claw bones
+                # look twisted; the node's own rotation says where Z should go
+                bone.align_roll(bone_z)
                 if host is not None:
                     bone.parent = host[1]
                 hosts[id(node)] = ("bone", bone)
@@ -2162,6 +2178,23 @@ def _attach_object(obj, arm_obj, bone_name=None, host_obj=None):
         obj.parent_bone = bone_name
     else:
         obj.parent = arm_obj
+
+
+# a bone with no child bone has no rig data to size it from
+_LEAF_BONE_LEN = 0.02
+
+
+def _bone_lengths(rows) -> dict:
+    heads = {id(n): loc for n, _, loc, _ in rows}
+    out: dict = {}
+    for node, _, loc, _ in rows:
+        child = next((c for c in node.children if c.kind == "node"), None)
+        if child is None:
+            continue
+        span = math.dist(loc, heads[id(child)])
+        if span > 1e-6:
+            out[id(node)] = span
+    return out
 
 
 def _bind_skin(chunk, names, arm_obj, node=None):

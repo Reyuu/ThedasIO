@@ -984,3 +984,74 @@ def test_stock_tint_survives_a_material_round_trip():
             ui._seed_tint(group, name, colour)
         merged.update(_group_tint(group))
     assert tnt.build(merged) == raw
+
+
+def _node(name, kind, loc, children=()):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        name=name, kind=kind, values={}, children=list(children), loc=loc
+    )
+
+
+def test_bone_length_is_the_distance_to_the_first_child_bone():
+    from thedas_io.ui import _bone_lengths
+
+    # a chain: spine -> chest -> neck. each bone spans to the next bone's head.
+    neck = _node("neck", "node", (0.0, 0.0, 1.40))
+    chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
+    spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
+    rows = [(spine, None, (0.0, 0.0, 0.0), None), (chest, spine, (0.0, 0.0, 1.2), None),
+            (neck, chest, (0.0, 0.0, 1.4), None)]
+
+    out = _bone_lengths(rows)
+    assert abs(out[id(spine)] - 1.20) < 1e-9
+    assert abs(out[id(chest)] - 0.20) < 1e-9
+    assert id(neck) not in out  # a leaf has nothing to measure to
+
+
+def test_bone_length_skips_non_bone_children():
+    from thedas_io.ui import _bone_lengths
+
+    # a hook empty is not a bone, so the chain continues past it
+    hand = _node("hand", "node", (0.0, 0.0, 1.0))
+    hook = _node("hook", "crst", (0.0, 0.0, 0.5))
+    arm = _node("arm", "node", (0.0, 0.0, 0.0), [hook, hand])
+    rows = [(arm, None, (0.0, 0.0, 0.0), None), (hand, arm, (0.0, 0.0, 1.0), None)]
+
+    assert abs(_bone_lengths(rows)[id(arm)] - 1.0) < 1e-9
+
+
+def test_a_child_sitting_on_its_parent_does_not_make_a_zero_length_bone():
+    from thedas_io.ui import _LEAF_BONE_LEN, _bone_lengths
+
+    # helper bones often share their parent's head; that measures 0, and a
+    # zero-length bone is degenerate in Blender
+    stub = _node("stub", "node", (0.0, 0.0, 1.0))
+    arm = _node("arm", "node", (0.0, 0.0, 1.0), [stub])
+    rows = [(arm, None, (0.0, 0.0, 1.0), None), (stub, arm, (0.0, 0.0, 1.0), None)]
+
+    assert id(arm) not in _bone_lengths(rows)  # falls back to the stub
+    assert _LEAF_BONE_LEN > 0.0
+
+
+def test_rig_does_not_depend_on_the_mesh_it_is_bound_to():
+    # DAO reuses one rig across LODs and outfit variations. the same mmh must
+    # produce the same bones no matter which msh is loaded with it, or LODs
+    # disagree and every .ani/.cub that targets the rig stops lining up.
+    from thedas_io.ui import _bone_lengths
+
+    neck = _node("neck", "node", (0.0, 0.0, 1.40))
+    chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
+    spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
+    rows = [(spine, None, (0.0, 0.0, 0.0), None), (chest, spine, (0.0, 0.0, 1.2), None),
+            (neck, chest, (0.0, 0.0, 1.4), None)]
+
+    import inspect
+
+    from thedas_io import ui
+
+    src = inspect.getsource(ui._bone_lengths)
+    for leak in ("chunks", "vertices", "bbox", "scale", "cloud"):
+        assert leak not in src, f"bone length must not read {leak} from the mesh"
+    assert _bone_lengths(rows) == _bone_lengths(rows)

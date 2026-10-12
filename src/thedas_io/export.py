@@ -1575,11 +1575,11 @@ def _patch_node_xf(gff, writer, base, node, local) -> None:
 
 
 def _inverse_compose(parent, world):
-    # local such that compose(parent, local) == world (legacy MSH_Tool rule)
+    # exact inverse of geometry.compose: local such that compose(parent, local) == world
     (ploc, prot), (wloc, wrot) = parent, world
     conj = (-prot[0], -prot[1], -prot[2], prot[3])
     delta = (wloc[0] - ploc[0], wloc[1] - ploc[1], wloc[2] - ploc[2])
-    return quat_rotate(conj, delta), quat_mul(wrot, conj)
+    return quat_rotate(conj, delta), quat_mul(conj, wrot)
 
 
 def _mat_state(matrix) -> tuple:
