@@ -1030,7 +1030,14 @@ def _chunk_edited(decoded: dict, state: dict, obj) -> bool:
 def _normal_drift(cur, want, tol: float = 0.02) -> bool:
     # blender can't hold a zero normal (it substitutes its own) and stores
     # near-unit normals a hair off
-    return bool(any(want)) and _drift(cur, want, tol)
+    #
+    # it also cannot always represent ours: a zero for loops it could not
+    # resolve, and occasionally a partial vector (one face-mesh row came back
+    # at |n| 0.62). a stored normal is always unit length, so a live one that is
+    # not carries no information and is not evidence of an edit -- and
+    # _encode_row already declines to rewrite a stored zero, so nothing would
+    # reach the file anyway
+    return bool(any(want)) and 0.81 < sum(c * c for c in cur) < 1.21 and _drift(cur, want, tol)
 
 
 def _weights_edited(decoded: dict, state: dict) -> bool:

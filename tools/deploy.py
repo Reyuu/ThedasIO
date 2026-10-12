@@ -8,15 +8,19 @@ import urllib.request
 import zipfile
 
 EXTENSION_ID = "thedas_io"
-TARGET = os.path.join(
+EXTENSIONS_DIR = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")),
     "Blender Foundation",
     "Blender",
     "5.2",
     "extensions",
-    "user_default",
-    EXTENSION_ID,
 )
+TARGET = os.path.join(EXTENSIONS_DIR, "user_default", EXTENSION_ID)
+# Blender's own wheel location, outside the extension directory. See
+# addon_utils._extension_sync_wheels. Anything unpacked *inside* the extension
+# trips its policy check ("Policy violation with top level module"), which is
+# why libs/ used to live there and no longer does.
+SITE_PACKAGES = os.path.join(EXTENSIONS_DIR, ".local", "lib", "python3.13", "site-packages")
 WHEELS = (("pillow", "12.3.0", "cp313-cp313-win_amd64"), ("pynvtt", "0.0.2", "py3-none-any"))
 
 
@@ -32,17 +36,20 @@ def fetch_wheels(dest):
 
 
 def install_wheels(target):
-    # Blender only installs manifest wheels on "Install from Disk".
-    # A plain copy into user_default/ skips that step, so unpack them into
-    # libs/; thedas_io/__init__.py puts libs/ on sys.path (see _libs).
+    # Blender only installs manifest wheels on "Install from Disk", so a plain
+    # copy into user_default/ skips that step. Unpack them into the same
+    # site-packages Blender would have used instead; that directory is outside
+    # the extension, so it raises no policy warning.
     libs = os.path.join(target, "libs")
-    os.makedirs(libs, exist_ok=True)
+    shutil.rmtree(libs, ignore_errors=True)  # left by an older deploy
+
+    os.makedirs(SITE_PACKAGES, exist_ok=True)
     for name in sorted(os.listdir(os.path.join(target, "wheels"))):
         if not name.endswith(".whl"):
             continue
         with zipfile.ZipFile(os.path.join(target, "wheels", name)) as z:
-            z.extractall(libs)
-        print(f"installed {name}")
+            z.extractall(SITE_PACKAGES)
+        print(f"installed {name} -> {SITE_PACKAGES}")
 
 
 def package(out):

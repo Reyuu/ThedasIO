@@ -13,8 +13,22 @@ import struct
 
 import pytest
 
-from thedas_io.export import _DIRTY, ITEMS, check_model, export_all
+from thedas_io.export import _DIRTY, ITEMS, _normal_drift, check_model, export_all
 from thedas_io.msh.description import Mesh
+
+SRC_NORMAL = (0.0, 0.0, 1.0)
+
+
+def test_a_normal_blender_cannot_represent_is_not_an_edit():
+    # untouched meshes must come out byte-identical, so a live normal blender
+    # could not reproduce must not read as a normal edit. some face meshes come
+    # back with a zero, some with a partial vector; both are blender's answer,
+    # not the modder's. a real edit lands a different *unit* vector.
+    assert _normal_drift(SRC_NORMAL, SRC_NORMAL) is False
+    assert _normal_drift((0.0, 0.0, 0.0), SRC_NORMAL) is False
+    assert _normal_drift((0.12, -0.61, 0.005), SRC_NORMAL) is False  # |n| 0.62
+    assert _normal_drift(SRC_NORMAL, (0.0, 0.0, 0.0)) is False  # source zero
+    assert _normal_drift((0.98, 0.0, 0.2), SRC_NORMAL) is True  # a genuine edit
 
 
 @pytest.fixture
