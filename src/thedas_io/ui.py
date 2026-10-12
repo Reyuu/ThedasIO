@@ -29,7 +29,13 @@ from .export import (
     roots,
 )
 from .geometry import bone_names, decode_chunk, flatten, node_paths, quat_rotate, weld_positions
-from .materials import parse_mao, role_of, slot_roles, thedas_io_normals_to_rgba
+from .materials import (
+    parse_mao,
+    pil_to_blender,
+    role_of,
+    slot_roles,
+    thedas_io_normals_to_rgba,
+)
 from .mmh.description import MMHReader
 from .msh.description import MSHReader
 from .substance import (
@@ -1596,9 +1602,8 @@ def _scale_live_images(model: dict, repacked: dict, failed: list) -> set:
 def _blit(image, pil, role: str | None) -> None:
     # push decoded dao pixels into image, normals unswizzled
 
-    shown = thedas_io_normals_to_rgba(pil) if role == "normal" else pil.convert("RGBA")
-    flat = np.asarray(shown).astype(np.float32).reshape(-1) / 255.0
-    image.pixels.foreach_set(flat)
+    shown = thedas_io_normals_to_rgba(pil) if role == "normal" else pil
+    image.pixels.foreach_set(pil_to_blender(shown))
     image.update()
 
 
@@ -1692,7 +1697,6 @@ def build_material(name, mao, images, color=None, tint=None):
 
 # fixed slots keep built materials arranged the same way
 _POS_UV = (-220.6, 72.9)
-_POS_MAPPING = (-17.4, 77.2)
 _POS_OUT = (1301.0, 46.2)
 _POS_BSDF = (1111.0, 102.7)
 _POS_TEX = {
@@ -1737,14 +1741,12 @@ def _wire_material(mat, mao, images, color=None, tint=None):
     bsdf.location = _POS_BSDF
     links = mat.node_tree.links
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    # viewport flip here so export stays byte-identical
+    # no mapping node: the image is stored the right way up (see _blit), so the
+    # raw UV renders correctly *and* texture paint lands where the preview shows
+    # it. a scale of (1,-1,1) here un-flipped the render but paint ignores it.
     uvmap = nodes.new("ShaderNodeTexCoord")
     uvmap.location = _POS_UV
-    mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = _POS_MAPPING
-    mapping.inputs["Scale"].default_value = (1.0, -1.0, 1.0)
-    links.new(uvmap.outputs["UV"], mapping.inputs["Vector"])
-    vector = mapping.outputs["Vector"]
+    vector = uvmap.outputs["UV"]
     base_feed = None
     normal_feed = None
     rough_feed = None

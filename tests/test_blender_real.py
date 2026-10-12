@@ -98,7 +98,6 @@ def test_material_build():
         "nodes": [
             "BSDF_PRINCIPLED",
             "EEVEE_SPECULAR",
-            "MAPPING",
             "MIX",
             "NORMAL_MAP",
             "OUTPUT_MATERIAL",
@@ -116,7 +115,6 @@ def test_material_build():
             "Normal",
             "Surface",
             "Surface",
-            "Vector",
             "Vector",
             "Vector",
         ],
@@ -245,11 +243,10 @@ def test_material_channel_packing():
                 ["Result", "Base Color"],
                 ["Result", "Color"],
                 ["UV", "Vector"],
-                ["Vector", "Vector"],
-                ["Vector", "Vector"],
-                ["Vector", "Vector"],
-                ["Vector", "Vector"],
-                ["Vector", "Vector"],
+                ["UV", "Vector"],
+                ["UV", "Vector"],
+                ["UV", "Vector"],
+                ["UV", "Vector"],
             ],
             "types": [
                 "BSDF_PRINCIPLED",
@@ -258,7 +255,6 @@ def test_material_channel_packing():
                 "GROUP",
                 "GROUP",
                 "INVERT",
-                "MAPPING",
                 "NORMAL_MAP",
                 "OUTPUT_MATERIAL",
                 "OUTPUT_MATERIAL",
@@ -285,13 +281,11 @@ def test_material_channel_packing():
                 ["Normal", "Normal"],
                 ["Normal", "Normal"],
                 ["UV", "Vector"],
-                ["Vector", "Vector"],
-                ["Vector", "Vector"],
+                ["UV", "Vector"],
             ],
             "types": [
                 "BSDF_PRINCIPLED",
                 "EEVEE_SPECULAR",
-                "MAPPING",
                 "NORMAL_MAP",
                 "OUTPUT_MATERIAL",
                 "OUTPUT_MATERIAL",
@@ -314,13 +308,11 @@ def test_material_channel_packing():
                 ["Color", "Base Color"],
                 ["Color", "Transparency"],
                 ["UV", "Vector"],
-                ["Vector", "Vector"],
             ],
             "types": [
                 "BSDF_PRINCIPLED",
                 "EEVEE_SPECULAR",
                 "INVERT",
-                "MAPPING",
                 "OUTPUT_MATERIAL",
                 "OUTPUT_MATERIAL",
                 "TEX_COORD",
@@ -343,13 +335,11 @@ def test_material_channel_packing():
                 ["Color", "Transparency"],
                 ["Green", "Specular"],
                 ["UV", "Vector"],
-                ["Vector", "Vector"],
             ],
             "types": [
                 "BSDF_PRINCIPLED",
                 "EEVEE_SPECULAR",
                 "INVERT",
-                "MAPPING",
                 "OUTPUT_MATERIAL",
                 "OUTPUT_MATERIAL",
                 "SEPARATE_COLOR",
@@ -372,13 +362,11 @@ def test_material_channel_packing():
                 ["Color", "Base Color"],
                 ["Color", "Transparency"],
                 ["UV", "Vector"],
-                ["Vector", "Vector"],
             ],
             "types": [
                 "BSDF_PRINCIPLED",
                 "EEVEE_SPECULAR",
                 "INVERT",
-                "MAPPING",
                 "OUTPUT_MATERIAL",
                 "OUTPUT_MATERIAL",
                 "TEX_COORD",
@@ -447,13 +435,18 @@ def test_transparency_follows_the_semantic_not_the_alpha():
     }
 
 
-def test_material_uv_flip_mapping():
+def test_material_uv_flip_is_in_the_image_not_the_nodes():
+    # The image is stored the right way up, so the material feeds the texture
+    # nodes straight from TexCoord. A Mapping node scaled (1,-1,1) also rendered
+    # correctly but texture paint ignores it, so paint landed mirrored against
+    # the preview.
     assert run(
         textwrap.dedent("""\
         import io
         import os
         import sys
         import tempfile
+        import numpy as np
         def main():
             sys.path.insert(0, "src")
             import thedas_io as ext
@@ -466,8 +459,12 @@ def test_material_uv_flip_mapping():
             import bpy
             from PIL import Image
             tmp = tempfile.mkdtemp()
+            src = Image.new("RGBA", (8, 8), (255, 0, 0, 255))   # top half red
+            for y in range(4, 8):                                  # bottom half blue
+                for x in range(8):
+                    src.putpixel((x, y), (0, 0, 255, 255))
             buf = io.BytesIO()
-            Image.new("RGBA", (8, 8), (200, 100, 50, 255)).save(buf, "DDS")
+            src.save(buf, "DDS")
             path = os.path.join(tmp, "f_0d.dds")
             open(path, "wb").write(buf.getvalue())
             mao = parse_mao('<MaterialObject Name="M"><Material Name="m.mat"></Material>'
@@ -475,17 +472,25 @@ def test_material_uv_flip_mapping():
                             '<Texture Name="d" ResName="f_0d.dds"></Texture>'
                             '</MaterialObject>')
             try:
-                mat = ext.ui.build_material("M", mao, {"d": ext.ui.load_image(path)})
-                mapping = next(n for n in mat.node_tree.nodes if n.type == "MAPPING")
+                image = ext.ui.load_image(path)
+                mat = ext.ui.build_material("M", mao, {"d": image})
+                flat = np.empty(8 * 8 * 4, dtype=np.float32)
+                image.pixels.foreach_get(flat)
+                px = flat.reshape(8, 8, 4)
                 uv = next(n for n in mat.node_tree.nodes if n.type == "TEX_COORD")
-                tex = next(n for n in mat.node_tree.nodes if n.type == "TEX_IMAGE")
-                uv_link = next(l for l in mat.node_tree.links
-                               if l.from_socket.name == "UV")
-                vec_links = [l for l in mat.node_tree.links
-                             if l.from_socket.name == "Vector"]
-                out = {"scale": list(mapping.inputs["Scale"].default_value),
-                       "uv_to": [uv_link.to_node.type, uv_link.to_socket.name],
-                       "tex_fed": sorted(l.to_node.type for l in vec_links)}
+                fed = sorted(
+                    l.to_node.type
+                    for l in mat.node_tree.links
+                    if l.from_node == uv and l.from_socket.name == "UV"
+                )
+                out = {
+                    # image.pixels row 0 is the *bottom* row; it must be the
+                    # source's bottom (blue), i.e. stored right way up
+                    "bottom": [round(float(v), 2) for v in px[0][0]],
+                    "top": [round(float(v), 2) for v in px[7][0]],
+                    "has_mapping": any(n.type == "MAPPING" for n in mat.node_tree.nodes),
+                    "uv_feeds": fed,
+                }
             finally:
                 for m in list(bpy.data.materials):
                     bpy.data.materials.remove(m)
@@ -495,7 +500,12 @@ def test_material_uv_flip_mapping():
                 ext.unregister()
             return out
         """)
-    ) == {"scale": [1.0, -1.0, 1.0], "uv_to": ["MAPPING", "Vector"], "tex_fed": ["TEX_IMAGE"]}
+    ) == {
+        "bottom": [0.0, 0.0, 1.0, 1.0],  # blue
+        "top": [1.0, 0.0, 0.0, 1.0],  # red
+        "has_mapping": False,
+        "uv_feeds": ["TEX_IMAGE"],
+    }
 
 
 def test_zero_alpha_diffuse_renders():
@@ -818,10 +828,80 @@ def test_tint_group_wiring():
             ["Result", "Base Color"],
             ["Result", "Color"],
             ["UV", "Vector"],
-            ["Vector", "Vector"],
-            ["Vector", "Vector"],
-            ["Vector", "Vector"],
+            ["UV", "Vector"],
+            ["UV", "Vector"],
         ],
+    }
+
+
+def test_edited_texture_exports_the_right_way_up():
+    # image.pixels is bottom-up, PIL is top-down. Reading a painted image back
+    # without undoing the flip writes a V-flipped texture into the game.
+    assert run(
+        textwrap.dedent("""\
+        import io
+        import os
+        import sys
+        import tempfile
+        import numpy as np
+        def main():
+            sys.path.insert(0, "src")
+            import thedas_io as ext
+            from thedas_io.export import _texture_bytes, remember, reset
+            try:
+                ext.unregister()
+            except Exception:
+                pass
+            ext.register()
+            import bpy
+            from PIL import Image
+            reset()
+            tmp = tempfile.mkdtemp()
+            src = Image.new("RGBA", (8, 8), (255, 0, 0, 255))    # top half red
+            for y in range(4, 8):                                   # bottom half blue
+                for x in range(8):
+                    src.putpixel((x, y), (0, 0, 255, 255))
+            buf = io.BytesIO()
+            src.save(buf, "DDS")
+            raw = buf.getvalue()
+            path = os.path.join(tmp, "f_0d.dds")
+            open(path, "wb").write(raw)
+            try:
+                image = ext.ui.load_image(path)
+                item = remember("f_0d.dds", "texture", None, raw)
+                item["objects"] = [image]
+                out = {"untouched_is_raw": _texture_bytes(item) is None}
+
+                # paint: fill blender's *bottom* row green, as the brush would
+                flat = np.empty(8 * 8 * 4, dtype=np.float32)
+                image.pixels.foreach_get(flat)
+                px = flat.reshape(8, 8, 4)
+                px[0, :] = (0.0, 1.0, 0.0, 1.0)
+                image.pixels.foreach_set(flat.reshape(-1))
+                image.update()
+
+                encoded = _texture_bytes(item)
+                out["encoded"] = encoded is not None
+                with Image.open(io.BytesIO(encoded)) as im:
+                    im.load()
+                    arr = np.asarray(im.convert("RGBA"))
+                out["top_left"] = [int(v) for v in arr[0, 0]]
+                out["bottom_left"] = [int(v) for v in arr[7, 0]]
+            finally:
+                reset()
+                img = bpy.data.images.get("f_0d.dds")
+                if img is not None:
+                    bpy.data.images.remove(img)
+                ext.unregister()
+            return out
+        """)
+    ) == {
+        "untouched_is_raw": True,
+        "encoded": True,
+        # the brush hit blender's bottom row, so green belongs at the bottom of
+        # the file. reading the buffer back as top-down would flip it to the top.
+        "top_left": [255, 0, 0, 255],
+        "bottom_left": [0, 255, 0, 255],
     }
 
 
@@ -1269,7 +1349,6 @@ def test_import_msh_with_material():
             "Normal",
             "Surface",
             "Surface",
-            "Vector",
             "Vector",
             "Vector",
         ],

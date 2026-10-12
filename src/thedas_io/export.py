@@ -53,6 +53,8 @@ from .geometry import (
 )
 from .gff40.description import GFFReader, GFFWriter
 from .materials import (
+    blender_to_pil,
+    pil_to_blender,
     resize_rgba,
     role_of,
     slot_roles,
@@ -642,13 +644,14 @@ def _texture_bytes(
     img.pixels.foreach_get(got)
 
     if tuple(pil.size) == (width, height):
-        source = thedas_io_normals_to_rgba(pil) if role == "normal" else pil.convert("RGBA")
-        want = np.asarray(source).astype(np.float32).reshape(-1) / 255.0
+        source = thedas_io_normals_to_rgba(pil) if role == "normal" else pil
+        # compare in blender's own orientation so the two cannot drift
+        want = pil_to_blender(source)
         if want.shape == got.shape and np.allclose(want, got, atol=0.5 / 255.0):
             return None
 
     _warn_size(item["file"], width, height)
-    edited = Image.fromarray((got.reshape(height, width, 4) * 255.0 + 0.5).astype(np.uint8))
+    edited = blender_to_pil(got, (width, height))
     return _encode_texture(item["raw"], edited, (width, height), role)
 
 

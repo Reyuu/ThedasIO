@@ -179,6 +179,24 @@ def thedas_io_normals_to_rgba(image):
     return PilImage.fromarray((rgba * 255.0 + 0.5).astype(np.uint8))
 
 
+def pil_to_blender(pil) -> np.ndarray:
+    """PIL image as the flat float32 array `image.pixels` expects.
+
+    `image.pixels` is row-major from the *bottom*; PIL is row-major from the
+    top. Both directions live here so they cannot drift apart -- the two must
+    agree exactly or export reads every texture back as edited.
+    """
+    array = np.asarray(pil.convert("RGBA"))
+    return np.ascontiguousarray(array[::-1]).astype(np.float32).reshape(-1) / 255.0
+
+
+def blender_to_pil(flat, size) -> PilImage.Image:
+    """Inverse of `pil_to_blender`: a Blender pixel buffer back to a PIL image."""
+    width, height = size
+    array = np.asarray(flat, dtype=np.float32).reshape(height, width, 4)[::-1]
+    return PilImage.fromarray((array * 255.0 + 0.5).astype(np.uint8))
+
+
 def resize_rgba(image, size):
     # resize rgb and alpha separately, pillow kills rgb where alpha is zero
     size = tuple(size)
