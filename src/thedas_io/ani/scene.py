@@ -107,11 +107,10 @@ def rest_local(arm_obj, name: str) -> tuple:
 # Evaluated in MMH node space, so no frame conversion anywhere: each bone is
 # driven to the target world transform the animation implies.
 def build_action(anim, arm_obj, fps: float = 30.0) -> bpy.types.Action:
-    action = bpy.data.actions.new(str(anim.name or "animation"))
-    # keyframe_insert writes into the armature's active action, so it has to
-    # be the one we are building before any keys land
-    arm_obj.animation_data_create().action = action
-
+    # Work out what the clip would drive before touching the armature. A clip
+    # whose channel names match nothing used to replace the action the user
+    # already had on this armature, which the caller then reports as a failed
+    # load -- the old action was orphaned at zero users and gone from the UI.
     rot_channels: dict = {}
     pos_channels: dict = {}
     by_export = bones_by_export(arm_obj)
@@ -125,8 +124,13 @@ def build_action(anim, arm_obj, fps: float = 30.0) -> bpy.types.Action:
         elif node.target == TRANSLATION:
             pos_channels.setdefault(bone, node)
 
+    times = sorted({time for node in anim.nodes
+                    if node.target in (ROTATION32, ROTATION64, TRANSLATION)
+                    for time, _value in node.keys})
     if not rot_channels and not pos_channels:
-        return action
+        return bpy.data.actions.new(str(anim.name or "animation"))
+    if not times:
+        return bpy.data.actions.new(str(anim.name or "animation"))
 
     def parent_chain(bone_name: str) -> list:
         out = []
@@ -161,37 +165,46 @@ def build_action(anim, arm_obj, fps: float = 30.0) -> bpy.types.Action:
             matrix = matrix @ local_matrix(name)
         node_rest[bone.name] = matrix
 
-    times = sorted({time for node in anim.nodes
-                    if node.target in (ROTATION32, ROTATION64, TRANSLATION)
-                    for time, _value in node.keys})
-    if not times:
-        return action
+    action = bpy.data.actions.new(str(anim.name or "animation"))
+    # keyframe_insert writes into the armature's active action, so it has to be
+    # the one we are building before any keys land
+    previous = None
+    if arm_obj.animation_data:
+        previous = arm_obj.animation_data.action
+    arm_obj.animation_data_create().action = action
+    keep_frame = bpy.context.scene.frame_current  # type: ignore[union-attr]
 
     # parent bones first, so a child solves against its parent's target
     by_depth: dict[int, list[str]] = {}
     for bone in arm_obj.data.bones:
         by_depth.setdefault(len(chains[bone.name]), []).append(bone.name)
 
-    for time in times:
-        frame = time * fps
-        whole = math.floor(frame)
-        bpy.context.scene.frame_set(whole, subframe=frame - whole)  # type: ignore[union-attr]
+    try:
+        for time in times:
+            frame = time * fps
+            whole = math.floor(frame)
+            bpy.context.scene.frame_set(whole, subframe=frame - whole)  # type: ignore[union-attr]
 
-        for depth in sorted(by_depth):
-            for name in by_depth[depth]:
-                node_anim = Matrix.Identity(4)
-                for ancestor in chains[name]:
-                    node_anim = node_anim @ local_matrix(ancestor, time)
+            for depth in sorted(by_depth):
+                for name in by_depth[depth]:
+                    node_anim = Matrix.Identity(4)
+                    for ancestor in chains[name]:
+                        node_anim = node_anim @ local_matrix(ancestor, time)
 
-                bone_rest = arm_obj.data.bones[name].matrix_local
-                target = node_anim @ node_rest[name].inverted() @ bone_rest
+                    bone_rest = arm_obj.data.bones[name].matrix_local
+                    target = node_anim @ node_rest[name].inverted() @ bone_rest
 
-                pb = arm_obj.pose.bones[name]
-                pb.rotation_mode = "QUATERNION"
-                pb.matrix = target
-                pb.keyframe_insert("rotation_quaternion", frame=frame, group=name)
-                pb.keyframe_insert("location", frame=frame, group=name)
-            bpy.context.view_layer.update()  # type: ignore[union-attr]
+                    pb = arm_obj.pose.bones[name]
+                    pb.rotation_mode = "QUATERNION"
+                    pb.matrix = target
+                    pb.keyframe_insert("rotation_quaternion", frame=frame, group=name)
+                    pb.keyframe_insert("location", frame=frame, group=name)
+                bpy.context.view_layer.update()  # type: ignore[union-attr]
+    except BaseException:
+        # half-keyed and abandoned: put the armature back the way it was
+        arm_obj.animation_data.action = previous
+        bpy.context.scene.frame_set(keep_frame)  # type: ignore[union-attr]
+        raise
 
     # the frames this function keyed on every bone; anything else on the action
     # was added by hand

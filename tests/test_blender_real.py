@@ -3821,3 +3821,49 @@ def test_tint_export_covers_every_tinted_material():
         "groups": ["DAO Tint Diffuse", "DAO Tint Specular"],
         "baked": {"1": [0.25, 0.5, 0.75, 0.9], "2": [0.25, 0.5, 0.75, 0.9]},
     }
+
+
+def test_a_clip_that_matches_no_bones_leaves_the_old_action_alone():
+    # build_action used to bind the fresh action before it knew whether the
+    # clip drove anything, so a clip whose channel names match nothing left the
+    # armature pointing at an empty action and the user's own at zero users.
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        def main():
+            sys.path.insert(0, "src")
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import ANIReader
+                from thedas_io.ani.scene import build_action
+                ui._import_row(bpy.context, {"package": None, "filename": "c_doga_0.mmh",
+                    "ext": ".mmh", "path": os.path.abspath(
+                        os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True)
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+
+                # something the user already had on the rig
+                mine = bpy.data.actions.new("mine")
+                arm.animation_data_create().action = mine
+
+                # a clip whose channels name nothing this rig has
+                anim = ANIReader(open(os.path.join("data", "c_dog.sit_p.ani"), "rb").read()).animation
+                for node in anim.nodes:
+                    node.name = "no_such_bone_" + node.name
+
+                build_action(anim, arm, 30.0)
+                still = arm.animation_data.action
+                return {
+                    "action_kept": still is mine,
+                    "still_named": still.name,
+                    "curves": len(list(still.fcurves)) if hasattr(still, "fcurves") else -1,
+                }
+            finally:
+                ext.unregister()
+        """),
+    ) == {"action_kept": True, "still_named": "mine", "curves": -1}
