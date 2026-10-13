@@ -128,8 +128,10 @@ class Declarator:
 
     @property
     def is_terminator(self):
-        # D3DDECL_END row
-        return self.stream == -1
+        # D3DDECL_END row. 8026 is typed INT in our schema and DWORD in others,
+        # so the terminator arrives as either -1 or 0xFFFFFFFF; it is all ones
+        # either way. Missing one folds a dead row into Chunk.stride.
+        return self.stream == -1 or self.stream == 0xFFFFFFFF
 
     @property
     def type_name(self):
@@ -563,12 +565,15 @@ class MSHWriter:
     @staticmethod
     def _declarator_bytes(chunk) -> bytes:
         try:
-            return struct.pack("<I", len(chunk.declarators)) + b"".join(
-                struct.pack(
-                    "<iiIIII", d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
-                )
-                for d in chunk.declarators
-            )
+            rows = []
+            for d in chunk.declarators:
+                # the terminator is all ones; write it as -1 so it fits the
+                # signed int the schema declares, whatever the source spelled it
+                stream = -1 if d.is_terminator else d.stream
+                rows.append(struct.pack(
+                    "<iiIIII", stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
+                ))
+            return struct.pack("<I", len(rows)) + b"".join(rows)
         except struct.error as e:
             raise ValueError(f"Chunk {chunk.name!r} has an unencodable declarator: {e}")
 

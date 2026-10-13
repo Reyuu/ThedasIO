@@ -194,3 +194,31 @@ def test_a_chunk_cell_outside_the_schema_survives_export():
     assert got == 0xABCDEF01
     # known as bytes in the file, but the Chunk model does not surface it
     assert 6999 not in out.mesh.chunks[0].cells
+
+
+def test_a_dword_terminator_is_still_a_terminator():
+    # 8026 is typed INT here and DWORD in other files. The D3DDECL_END row is
+    # all ones either way, and missing one folds a dead row into Chunk.stride.
+    raw = (DATA_DIR / "c_corspidr_0.msh").read_bytes()
+    chunk = MSHReader(raw).mesh.chunks[0]
+    last = chunk.declarators[-1]
+    assert last.stream == -1 and last.is_terminator
+
+    signed_stride = chunk.stride
+    last.stream = 0xFFFFFFFF
+    assert last.is_terminator
+    assert chunk.stride == signed_stride
+
+
+def test_a_dword_terminator_writes_back_as_the_signed_spelling():
+    # the declarator blob is packed as a signed int, so an all-ones DWORD has
+    # to be normalised on the way out. The writer is built first, as the export
+    # path does, so the change is seen as an edit and the chunk re-encoded.
+    reader = MSHReader((DATA_DIR / "c_corspidr_0.msh").read_bytes())
+    writer = MSHWriter.from_reader(reader)
+    writer.mesh.chunks[0].declarators[-1].stream = 0xFFFFFFFF
+
+    out = MSHReader(writer.write())
+
+    last = out.mesh.chunks[0].declarators[-1]
+    assert last.stream == -1 and last.is_terminator
