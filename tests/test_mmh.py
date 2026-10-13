@@ -121,3 +121,13 @@ def test_a_fourcc_with_a_high_byte_still_decodes():
     assert _kind_name(int.from_bytes(b"node", "little")) == "node"
     assert _kind_name(int.from_bytes(b"\xff\xfe\x00\x00", "little")) == "��\x00\x00"
     assert _kind_name(int.from_bytes(b"\x80\x81\x82\x83", "little")) == "����"
+
+
+def test_a_child_pointing_at_no_struct_def_is_a_named_error():
+    # the struct index comes out of a generic list entry, so it is whatever the
+    # file says; a bare IndexError gave the user nothing to act on
+    reader = MMHReader((DATA_DIR / "c_doga_0.mmh").read_bytes())
+    with pytest.raises(ValueError, match="struct index 9999 out of range"):
+        reader._node(9999, {}, set())
+
+    assert reader._struct_def(0) is reader.gff.struct_defs[0]

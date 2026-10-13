@@ -68,8 +68,17 @@ class MMHReader:
                 orphans.append(_kind_name(gff.struct_defs[i].type_fourcc))
         self.orphan_kinds = orphans
 
+    def _struct_def(self, struct_index):
+        # struct_index comes out of a generic list entry, so it is whatever the
+        # file says. Index the table directly and it is a bare IndexError;
+        # GFFReader already names this one.
+        defs = self.gff.struct_defs
+        if struct_index < 0 or struct_index >= len(defs):
+            raise ValueError(f"struct index {struct_index} out of range")
+        return defs[struct_index]
+
     def _node(self, struct_index, values, visited):
-        kind = _kind_name(self.gff.struct_defs[struct_index].type_fourcc)  # type: ignore
+        kind = _kind_name(self._struct_def(struct_index).type_fourcc)
         values = dict(values)
         name = values.pop(L_NAME, None)
         entries = values.pop(L_CHILDREN, None)
