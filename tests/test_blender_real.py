@@ -2536,7 +2536,8 @@ def test_extension_filter_is_a_combo_box():
         """)
     ) == {
         "kind": "ENUM",
-        "items": [["NONE", "(None)"], ["MSH", "MSH"], ["MMH", "MMH"]],
+        "items": [["NONE", "(None)"], ["MSH", "MSH"], ["MMH", "MMH"],
+              ["ANI", "ANI"], ["CUB", "CUB"]],
         "default": "NONE",
         "rows": {"NONE": ["a.msh", "b.mmh"], "MSH": ["a.msh"], "MMH": ["b.mmh"]},
     }
@@ -3261,3 +3262,384 @@ def test_phy_is_gated_until_the_experimental_switch_is_turned_on():
         main()
         """)
     ) == {"collision": 0, "phy_additions": False, "phy_written": False}
+
+
+
+
+def test_animation_loads_from_the_asset_list_like_any_other_import():
+    # the clip is picked from the scanned asset list - the same rows the .erf /
+    # .rim scan fills - and read through extract(), not from a separate file
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                arm = bpy.data.armatures.new("rig")
+                obj = bpy.data.objects.new("rig", arm)
+                bpy.context.collection.objects.link(obj)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.mode_set(mode="EDIT")
+                eb = arm.edit_bones.new("Chest")
+                eb.head = (0.0, 0.0, 1.0)
+                eb.tail = (0.0, 0.0, 1.1)
+                eb2 = arm.edit_bones.new("LeftClav")
+                eb2.parent = eb
+                eb2.head = (0.2, 0.0, 1.05)
+                eb2.tail = (0.25, 0.0, 1.05)
+                bpy.ops.object.mode_set(mode="OBJECT")
+                arm.bones["Chest"]["thedas_io_xprt"] = "chest_rotation"
+                row = bpy.context.scene.thedas_io_assets.add()
+                row.filename = "c_dog.sit_p.ani"
+                row.ext = ".ani"
+                row.package = ""
+                row.path = os.path.abspath(os.path.join("data", "c_dog.sit_p.ani"))
+                bpy.context.scene.thedas_io_index = (
+                    len(bpy.context.scene.thedas_io_assets) - 1)
+                out = {}
+                res = bpy.ops.thedas_io.load_animation(fps=30.0)
+                out["result"] = sorted(res)
+                act = obj.animation_data.action
+                out["action_name"] = (
+                    act.name if act and not act.name.rsplit(".", 1)[-1].isdigit()
+                    else act.name.rsplit(".", 1)[0] if act else None)
+                if act:
+                    from thedas_io.ani.scene import _fcurves
+                    curves = _fcurves(act)
+                    out["chest_rot"] = any(
+                        "Chest" in fc.data_path and
+                        "rotation_quaternion" in fc.data_path
+                        for fc in curves)
+                    out["fcurves"] = len(curves)
+                    bpy.context.scene.frame_set(0)
+                    bpy.context.view_layer.update()
+                    q0 = tuple(obj.pose.bones["Chest"].rotation_quaternion)
+                    bpy.context.scene.frame_set(28)
+                    bpy.context.view_layer.update()
+                    q1 = tuple(obj.pose.bones["Chest"].rotation_quaternion)
+                    out["plays"] = q0 != q1
+                    out["other_at_rest"] = all(
+                        abs(obj.pose.bones["LeftClav"].rotation_quaternion[i]
+                            - (1.0 if i == 0 else 0.0)) < 1e-6
+                        for i in range(4))
+                return out
+            finally:
+                for o in list(bpy.context.scene.objects):
+                    bpy.data.objects.remove(o, do_unlink=True)
+                ext.unregister()
+        main()
+        """)
+    ) == {
+        "result": ["FINISHED"],
+        "action_name": "c_dog.sit_p.ani",
+        "chest_rot": True,
+        "fcurves": 14,
+        "plays": True,
+        "other_at_rest": True,
+    }
+
+
+def test_ani_world_targets_match_the_mmh_node_chain():
+    # compare Blender's evaluated bones to the game-space chain evaluated from
+    # the MMH local transforms + ANI channel values. This catches axis/frame
+    # mistakes that a key-count test cannot see.
+    assert run(
+        textwrap.dedent('''\
+        import math
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            from mathutils import Matrix, Quaternion, Vector
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.geometry import node_local
+                from thedas_io.mmh.description import MMHReader
+                from thedas_io.ani.description import ANIReader
+                from thedas_io.ani.scene import _sample
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh",
+                     "ext": ".mmh", "path": os.path.abspath(
+                         os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                tree = MMHReader(open("data/c_doga_0.mmh", "rb").read()).tree
+                anim = ANIReader(open("data/c_dog.sit_p.ani", "rb").read()).animation
+                from thedas_io.ani.scene import build_action
+                fps = 30.0
+                build_action(anim, arm, fps)
+
+                parent = {}
+                xprts = {}
+                for n in tree.walk():
+                    for c in n.children:
+                        parent[id(c)] = n
+                    if n.kind == "node":
+                        xprts[n.name] = {
+                            str(c.values[6052]): c.values[6052]
+                            for c in n.children
+                            if c.kind == "xprt" and c.values.get(6052)
+                        }
+                channels = {n.name: n for n in anim.nodes}
+
+                def chain(node):
+                    out = []
+                    cur = node
+                    while cur is not None:
+                        if cur.kind == "node":
+                            out.append(cur)
+                        cur = parent.get(id(cur))
+                    return list(reversed(out))
+
+                def node_matrix(bone_name, time=None):
+                    m = Matrix.Identity(4)
+                    for n in chain(next(n for n in tree.walk()
+                                        if n.kind == "node" and n.name == bone_name)):
+                        pos, q = node_local(n.values)
+                        rest_pos = Vector(pos[:3])
+                        rest_quat = Quaternion((q[3], q[0], q[1], q[2]))
+                        for export_name in xprts.get(n.name, {}):
+                            ch = channels.get(export_name)
+                            if ch is None or time is None:
+                                continue
+                            if ch.target in (2, 4):
+                                q = _sample(ch.keys, time)
+                            elif ch.target == 6:
+                                off = Vector(_sample(ch.keys, time)[:3])
+                                pos = rest_pos + rest_quat @ off
+                        quat = Quaternion((q[3], q[0], q[1], q[2]))
+                        m = m @ Matrix.LocRotScale(Vector(pos[:3]), quat,
+                                                   (1.0, 1.0, 1.0))
+                    return m
+
+                errors = []
+                for bone_name, export_name in (("Chest", "chest_rotation"),
+                                               ("LeftFemor", "leftfemor_rotation"),
+                                               ("LeftClav", "leftclav_rotation")):
+                    ch = channels[export_name]
+                    t = ch.keys[min(7, len(ch.keys) - 1)][0]
+                    b = arm.data.bones[bone_name]
+                    rest_node = node_matrix(bone_name)
+                    anim_node = node_matrix(bone_name, t)
+                    target = anim_node @ rest_node.inverted() @ b.matrix_local
+                    frame = t * fps
+                    whole = math.floor(frame)
+                    bpy.context.scene.frame_set(whole, subframe=frame-whole)
+                    bpy.context.view_layer.update()
+                    got = arm.pose.bones[bone_name].matrix
+                    locerr = (got.to_translation() - target.to_translation()).length
+                    roterr = got.to_quaternion().rotation_difference(
+                        target.to_quaternion()).angle
+                    errors.append((locerr, roterr))
+                out = {
+                    "bones": len(errors),
+                    "max_loc": round(max(e[0] for e in errors), 6),
+                    "max_rot": round(max(e[1] for e in errors), 6),
+                }
+            finally:
+                for o in list(bpy.context.scene.objects):
+                    bpy.data.objects.remove(o, do_unlink=True)
+                ext.unregister()
+            return out
+    ''')
+    ) == {"bones": 3, "max_loc": 0.0, "max_rot": 0.0}
+
+def test_edited_pose_exports_back_into_the_ani():
+    # unedited export is byte-identical; an edited chest pose changes only the
+    # keys that moved, the file keeps its size, and the rest is untouched
+    assert run(
+        textwrap.dedent('''\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            from mathutils import Matrix
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import ANIReader
+                from thedas_io.ani.export import export_action
+                from thedas_io.ani.scene import build_action
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh", "ext": ".mmh",
+                     "path": os.path.abspath(os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                raw = open(os.path.join("data", "c_dog.sit_p.ani"), "rb").read()
+                anim = ANIReader(raw).animation
+                action = build_action(anim, arm, 30.0)
+                arm.animation_data_create().action = action
+                out = {}
+                out["unedited_identical"] = export_action(
+                    bpy.context, arm, raw, 30.0) == raw
+                chest = next(b.name for b in arm.data.bones
+                             if "chest_rotation" in (b.get("thedas_io_xprt") or "").split(","))
+                bpy.context.scene.frame_set(0)
+                pb = arm.pose.bones[chest]
+                pb.matrix = Matrix.Rotation(0.3, 4, "Z") @ pb.matrix
+                pb.keyframe_insert("rotation_quaternion", frame=0)
+                edited = export_action(bpy.context, arm, raw, 30.0)
+                after = ANIReader(edited).animation
+                before_chest = anim.by_name("chest_rotation").keys
+                after_chest = after.by_name("chest_rotation").keys
+                out["same_size"] = len(edited) == len(raw)
+                out["first_key_moved"] = before_chest[0][1] != after_chest[0][1]
+                out["later_keys_kept"] = before_chest[1:] == after_chest[1:]
+                out["other_channels_kept"] = all(
+                    n.keys == anim.by_name(n.name).keys
+                    for n in after.nodes if n.name != "chest_rotation")
+                return out
+            finally:
+                ext.unregister()
+        '''),
+    ) == {
+        "unedited_identical": True,
+        "same_size": True,
+        "first_key_moved": True,
+        "later_keys_kept": True,
+        "other_channels_kept": True,
+    }
+
+def test_hand_keyframes_at_any_time_become_new_keys():
+    # a keyframe between the file's own key times (3.5 s, 4.75 s) is exported
+    # as a new key; the other channels are unchanged
+    assert run(
+        textwrap.dedent('''\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            from mathutils import Matrix
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import ANIReader
+                from thedas_io.ani.export import export_action
+                import math
+                from thedas_io.ani.scene import build_action
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh", "ext": ".mmh",
+                     "path": os.path.abspath(os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                raw = open(os.path.join("data", "c_dog.sit_p.ani"), "rb").read()
+                anim = ANIReader(raw).animation
+                action = build_action(anim, arm, 30.0)
+                arm.animation_data_create().action = action
+                chest = next(b.name for b in arm.data.bones
+                             if "chest_rotation" in (b.get("thedas_io_xprt") or "").split(","))
+                pb = arm.pose.bones[chest]
+                for frame, angle in ((105.0, 0.3), (142.5, 0.5)):
+                    bpy.context.scene.frame_set(int(frame))
+                    bpy.context.scene.frame_subframe = frame - int(frame)
+                    bpy.context.view_layer.update()
+                    pb.matrix = Matrix.Rotation(angle, 4, "Z") @ pb.matrix
+                    pb.keyframe_insert("rotation_quaternion", frame=frame)
+                edited = export_action(bpy.context, arm, raw, 30.0)
+                after = ANIReader(edited).animation
+                keys = after.by_name("chest_rotation").keys
+                def near(t):
+                    return [(tt, q) for tt, q in keys if abs(tt - t) < 0.01]
+                orig = anim.by_name("chest_rotation").keys
+                out = {}
+                out["key_at_3_5"] = len(near(3.5)) == 1
+                out["key_at_4_75"] = len(near(4.75)) == 1
+                from mathutils import Quaternion
+                a = Quaternion((near(3.5)[0][1][3], *near(3.5)[0][1][:3]))
+                b = Quaternion((orig[-1][1][3], *orig[-1][1][:3]))
+                out["posed_at_3_5"] = a.rotation_difference(b).angle > 0.1
+                out["length"] = abs(after.length - 4.75) < 1e-3
+                def same(x, y):
+                    def close(q, r):
+                        if len(q) == 4:
+                            d = abs(sum(a * b for a, b in zip(q, r)))
+                            return 2 * math.acos(min(1.0, d)) < 1e-3
+                        return all(abs(a - b) < 1e-3 for a, b in zip(q, r))
+                    return len(x) == len(y) and all(
+                        abs(s - t) < 1e-3 and close(q, r)
+                        for (s, q), (t, r) in zip(x, y))
+                out["bad"] = [n.name for n in after.nodes if n.name != "chest_rotation" and not same(n.keys, anim.by_name(n.name).keys)]
+                out["others_kept"] = not out["bad"]
+                return out
+            finally:
+                ext.unregister()
+        '''),
+    ) == {
+        "key_at_3_5": True,
+        "key_at_4_75": True,
+        "posed_at_3_5": True,
+        "length": True,
+        "bad": [],
+        "others_kept": True,
+    }
+
+def test_import_buttons_play_an_ani_on_the_armature():
+    assert run(
+        textwrap.dedent('''\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.scene import _fcurves
+                ui._import_row(bpy.context, {"package": None, "filename": "c_doga_0.mmh",
+                    "ext": ".mmh", "path": os.path.abspath(
+                        os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True)
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                bpy.context.view_layer.objects.active = arm
+                scene = bpy.context.scene
+                out = {}
+                row = scene.thedas_io_assets.add()
+                row.filename = "c_dog.sit_p.ani"
+                row.ext = ".ani"
+                row.package = ""
+                row.path = os.path.abspath(os.path.join("data", "c_dog.sit_p.ani"))
+                scene.thedas_io_index = len(scene.thedas_io_assets) - 1
+                out["selected"] = sorted(bpy.ops.thedas_io.import_asset())
+                act = arm.animation_data.action if arm.animation_data else None
+                out["selected_curves"] = len(_fcurves(act)) if act else 0
+                arm.animation_data.action = None
+                scene.thedas_io_disk_file = os.path.abspath(
+                    os.path.join("data", "c_dog.sit_p.ani"))
+                out["file"] = sorted(bpy.ops.thedas_io.import_file())
+                act = arm.animation_data.action if arm.animation_data else None
+                out["file_curves"] = len(_fcurves(act)) if act else 0
+                out["same"] = (out["selected_curves"] == out["file_curves"]
+                               and out["selected_curves"] > 0)
+                return out
+            finally:
+                ext.unregister()
+        '''),
+    ) == {
+        "selected": ["FINISHED"],
+        "selected_curves": 567,
+        "file": ["FINISHED"],
+        "file_curves": 567,
+        "same": True,
+    }

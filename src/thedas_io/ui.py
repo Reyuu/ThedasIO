@@ -1,5 +1,6 @@
 # blender ui panels, lists and operators
 
+import base64
 import io
 import json
 import math
@@ -16,6 +17,7 @@ import numpy as np
 from mathutils import Matrix, Quaternion
 from PIL import Image as PilImage
 
+from . import geometry
 from .asset_db.scanner import find, scan
 from .assets import extract, importer_for, resolve
 from .export import (
@@ -311,6 +313,8 @@ class THEDAS_IO_PT_export(bpy.types.Panel):
 
         self.layout.operator("thedas_io.reload_textures", text="Reload textures from files")
         self.layout.operator("thedas_io.check_model", text="Check model")
+        anim_row = self.layout.row(align=True)
+        anim_row.operator("thedas_io.export_animation", text="Export Animation")
         self.layout.operator("thedas_io.export_assets", text="Export")
 
 
@@ -1267,6 +1271,159 @@ def _spawn_added_proxy(context, item, spec) -> str:
     return obj.name
 
 
+def _play_animation(context, raw: bytes, name: str, fps: float, emit) -> set:
+    from .ani.description import ANIReader
+    from .ani.scene import _fcurves, build_action
+
+    arm = context.active_object
+    if arm is None or arm.type != "ARMATURE":
+        emit({"WARNING"}, "Select the armature that should play the animation")
+        return {"CANCELLED"}
+
+    try:
+        anim = ANIReader(raw).animation
+    except Exception as exc:  # noqa: BLE001 - a bad file must not crash
+        emit({"ERROR"}, f"Could not read {name}: {exc}")
+        return {"CANCELLED"}
+
+    try:
+        action = build_action(anim, arm, float(fps))
+    except Exception as exc:  # noqa: BLE001
+        emit({"ERROR"}, f"Could not build animation: {exc}")
+        return {"CANCELLED"}
+
+    curves = _fcurves(action)
+    if not curves:
+        emit({"WARNING"},
+             f"No bone in {arm.name} matched {anim.name}'s channels")
+        return {"CANCELLED"}
+
+    # the source travels with the action, so Export Animation can rewrite
+    # the file's keys from the edited pose later
+    action["thedas_io_ani_base64"] = base64.b64encode(raw).decode("ascii")
+    action["thedas_io_ani_fps"] = float(fps)
+    arm.animation_data_create().action = action
+
+    scene = context.scene
+    scene.render.fps = round(fps)
+    scene.render.fps_base = 1.0
+    scene.frame_start = 0
+    scene.frame_end = max(1, math.ceil(anim.length * fps))
+    scene.frame_set(0)
+
+    emit({"INFO"}, f"{arm.name}: {len(curves)} curves from {anim.name}")
+    return {"FINISHED"}
+
+
+class THEDAS_IO_OT_load_animation(bpy.types.Operator):
+    bl_idname = "thedas_io.load_animation"
+    bl_label = "Load animation"
+    bl_description = (
+        "Play the selected .ani on the active armature: one Action of pose-bone "
+        "quaternion and location keys. Reads the .ani from its archive the same "
+        "way every asset is imported - a raw disk path is only used when given"
+    )
+    filepath: bpy.props.StringProperty(default="", subtype="FILE_PATH")  # type: ignore
+    fps: bpy.props.FloatProperty(default=30.0, min=1.0,  # type: ignore
+                                 name="Frames per second")
+
+    def execute(self, context) -> set:
+        arm = context.active_object
+        if arm is None or arm.type != "ARMATURE":
+            self.report({"WARNING"},
+                        "Select the armature that should play the animation")
+            return {"CANCELLED"}
+        path = bpy.path.abspath(self.filepath or "")
+        name = ""
+        if path:
+            if not Path(path).is_file():
+                self.report({"WARNING"}, f"No such file: {path}")
+                return {"CANCELLED"}
+            name = Path(path).name
+        else:
+            # the standard asset route: the selected row came from a scan of
+            # the .erf/.rim archives, extract pulls its bytes from that archive
+            item = None
+            try:
+                item = context.scene.thedas_io_assets[context.scene.thedas_io_index]
+            except IndexError:
+                item = None
+            if item is None:
+                self.report({"WARNING"},
+                            "Pick an animation in the asset list first, or "
+                            "give a raw .ani path")
+                return {"CANCELLED"}
+            if str(item.ext).lower().lstrip(".") != "ani":
+                self.report({"WARNING"},
+                            f"{item.filename} is not an .ani animation")
+                return {"CANCELLED"}
+            row = {"package": item.package or None, "filename": item.filename,
+                   "ext": item.ext, "path": item.path}
+            try:
+                path = str(extract(row))
+            except Exception as exc:  # noqa: BLE001
+                self.report({"ERROR"},
+                            f"Could not extract {item.filename}: {exc}")
+                return {"CANCELLED"}
+            name = item.filename
+        try:
+            raw = Path(path).read_bytes()
+        except OSError as exc:
+            self.report({"ERROR"}, f"Could not read {name}: {exc}")
+            return {"CANCELLED"}
+        return _play_animation(context, raw, name, float(self.fps), self.report)
+
+
+class THEDAS_IO_OT_export_animation(bpy.types.Operator):
+    bl_idname = "thedas_io.export_animation"
+    bl_label = "Export animation"
+    bl_description = (
+        "Write the active armature's action back to a .ani: edited keys are "
+        "re-encoded, untouched channels keep their original bytes"
+    )
+    filepath: bpy.props.StringProperty(default="", subtype="FILE_PATH")  # type: ignore
+
+    def invoke(self, context, event) -> set:
+        action = self._action(context)
+        if action is None:
+            return {"CANCELLED"}
+        self.filepath = f"{action.name}.ani"
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def _action(self, context):
+        arm = context.active_object
+        if arm is None or arm.type != "ARMATURE" or arm.animation_data is None:
+            self.report({"WARNING"}, "Select the armature that plays the animation")
+            return None
+        action = arm.animation_data.action
+        if action is None or "thedas_io_ani_base64" not in action:
+            self.report({"WARNING"},
+                        "Its action was not imported from a .ani, so there is no source")
+            return None
+        return action
+
+    def execute(self, context) -> set:
+        from .ani.export import export_action
+
+        action = self._action(context)
+        if action is None:
+            return {"CANCELLED"}
+        if not self.filepath:
+            self.report({"WARNING"}, "No output path")
+            return {"CANCELLED"}
+        raw = base64.b64decode(action["thedas_io_ani_base64"])
+        try:
+            data = export_action(context, context.active_object, raw,
+                                 float(action["thedas_io_ani_fps"]))
+        except Exception as exc:  # noqa: BLE001 - report, do not crash Blender
+            self.report({"ERROR"}, f"Could not export {action.name}: {exc}")
+            return {"CANCELLED"}
+        Path(self.filepath).write_bytes(data)
+        self.report({"INFO"}, f"Wrote {self.filepath}")
+        return {"FINISHED"}
+
+
 class THEDAS_IO_OT_refresh_assets(bpy.types.Operator):
     bl_idname = "thedas_io.refresh_assets"
     bl_label = "Refresh DAO assets"
@@ -1293,8 +1450,9 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
     bl_idname = "thedas_io.import_asset"
     bl_label = "Import DAO asset"
     bl_description = (
-        "Import the selected asset with its sibling mesh, "
-        "material and textures resolved from the database"
+        "Import the selected asset: a model with its sibling mesh, "
+        "material and textures resolved from the database, "
+        "or a .ani played on the active armature"
     )
 
     def execute(self, context) -> set:
@@ -1310,6 +1468,15 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
             "ext": item.ext,
             "path": item.path,
         }
+        if str(item.ext).lower().lstrip(".") == "ani":
+            try:
+                raw = Path(str(extract(row))).read_bytes()
+            except Exception as exc:  # noqa: BLE001
+                self.report({"ERROR"},
+                            f"Could not extract {item.filename}: {exc}")
+                return {"CANCELLED"}
+            return _play_animation(context, raw, item.filename, 30.0,
+                                   self.report)
         result = _import_row(
             context, row, scene.thedas_io_db_path or None, False, self.report, scene.thedas_io_weld
         )
@@ -1325,17 +1492,25 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
     bl_idname = "thedas_io.import_file"
     bl_label = "Import DAO file"
     bl_description = (
-        "Import one .msh/.mmh file from disk, resolving its "
-        "siblings next to the file instead of from the game"
+        "Import one file from disk: a .msh/.mmh model, resolving its "
+        "siblings next to the file instead of from the game, "
+        "or a .ani played on the active armature"
     )
 
     def execute(self, context) -> set:
         scene = context.scene
         path = bpy.path.abspath(scene.thedas_io_disk_file or "")
         if not path or not Path(path).is_file():
-            self.report({"WARNING"}, "Pick a .msh or .mmh file first")
+            self.report({"WARNING"}, "Pick a file first")
             return {"CANCELLED"}
         p = Path(path)
+        if p.suffix.lower() == ".ani":
+            try:
+                raw = p.read_bytes()
+            except OSError as exc:
+                self.report({"ERROR"}, f"Could not read {p.name}: {exc}")
+                return {"CANCELLED"}
+            return _play_animation(context, raw, p.name, 30.0, self.report)
         row = {"package": None, "filename": p.name, "ext": p.suffix, "path": str(p)}
         result = _import_row(
             context,
@@ -2284,6 +2459,27 @@ def build_hierarchy(context, tree, chunks):
     finally:
         bpy.ops.object.mode_set(mode="OBJECT")
 
+    # stamp the export names before the anim importer arrives: each bone's
+    # "xprt" children carry the animation channel names (.chest_rotation etc.)
+    # the game drives that bone with
+    for node, _, _, _ in rows:
+        if node.kind != "node":
+            continue
+        bone = arm_obj.data.bones.get(node.name)
+        if bone is None:
+            continue
+        exports = [str(c.values.get(6052)) for c in node.children
+                   if c.kind == "xprt" and c.values.get(6052)]
+        if exports:
+            bone["thedas_io_xprt"] = ",".join(exports)
+        # the node's own parent-relative transform: the animation value at rest,
+        # so the anim importer can subtract it (pose = rest^-1 * channel)
+        bn_pos, bn_rot = geometry.node_local(node.values)
+        if bn_rot:
+            bone["thedas_io_node_rot"] = tuple(float(v) for v in bn_rot)
+        if bn_pos:
+            bone["thedas_io_node_pos"] = tuple(float(v) for v in bn_pos)
+
     # bone names stable in object mode, attach hooks then snapshot rest
 
     for node, loc, quat, ref, bone_name, host_obj in pending:
@@ -2393,6 +2589,14 @@ def _bind_skin(chunk, names, arm_obj, node=None):
         mod.object = arm_obj
 
 
+def _unit_normal(n) -> tuple:
+    x, y, z = (float(c) for c in n)
+    length = math.sqrt(x * x + y * y + z * z)
+    if not math.isfinite(length) or length < 1e-6:
+        return (0.0, 0.0, 1.0)
+    return (x / length, y / length, z / length)
+
+
 def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
     # one blender object per chunk, registers source msh for export
 
@@ -2400,18 +2604,30 @@ def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
     if weld:
         # weld co-located rows so edits move surface without cracking seams
         positions, row_to_vert = weld_positions(build["positions"])
-        tris = [tuple(row_to_vert[v] for v in tri) for tri in build["triangles"]]
     else:
         # every MSH row stays its own vertex; export takes the legacy 1:1 path
         positions, row_to_vert = build["positions"], None
-        tris = build["triangles"]
+    rows = build["triangles"]
+    if row_to_vert is not None:
+        rows_v = [tuple(row_to_vert[v] for v in tri) for tri in rows]
+    else:
+        rows_v = rows
+    # welding can collapse a triangle onto itself. from_pydata drops those
+    # silently, so the per-corner normals and UVs would run past the mesh's
+    # loops (the access violation in mesh_normals_corner_custom_set). Drop them
+    # here, so every per-corner array is built from the faces Blender keeps.
+    keep = [i for i, tri in enumerate(rows_v) if len(set(tri)) == 3]
+    tris = [rows_v[i] for i in keep]
+    corners = [rows[i] for i in keep]
 
     data = bpy.data.meshes.new(chunk.name or "chunk")
     data.from_pydata(positions, [], tris)
 
-    if build["normals"]:
+    # a zero or non-finite normal in the file crashes Blender's custom-normal
+    # setter, so those corners fall back to +Z
+    if build["normals"] and len(data.loops) == 3 * len(corners):
         data.normals_split_custom_set(
-            [build["normals"][v] for tri in build["triangles"] for v in tri]
+            [_unit_normal(build["normals"][v]) for tri in corners for v in tri]
         )
 
     for i, (uidx, coords) in enumerate(sorted(build["uvs"].items())):
@@ -2419,7 +2635,7 @@ def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
         if layer is None:
             continue
         layer.data.foreach_set(
-            "uv", [c for tri in build["triangles"] for v in tri for c in coords[v]]
+            "uv", [c for tri in corners for v in tri for c in coords[v]]
         )
     data.update()
     obj = bpy.data.objects.new(data.name, data)
@@ -2450,6 +2666,8 @@ _CLASSES: tuple = (
     THEDAS_IO_AddonPreferences,
     THEDAS_IO_OT_scan_assets,
     THEDAS_IO_OT_add_collision,
+    THEDAS_IO_OT_load_animation,
+    THEDAS_IO_OT_export_animation,
     THEDAS_IO_OT_refresh_assets,
     THEDAS_IO_OT_import_asset,
     THEDAS_IO_OT_import_file,
@@ -2512,6 +2730,8 @@ _EXT_ITEMS = (
     ("NONE", "(None)", "Every extension"),
     ("MSH", "MSH", "Mesh (.msh) only"),
     ("MMH", "MMH", "Model hierarchy (.mmh) only"),
+    ("ANI", "ANI", "Animation (.ani) only"),
+    ("CUB", "CUB", "Cutscene blend tree (.cub) only"),
 )
 _SCENE_PROPS = (
     "thedas_io_assets",

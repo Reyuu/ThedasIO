@@ -92,7 +92,6 @@ def _type_struct(gff, struct_index, base) -> tuple[int, int] | None:
 
 def phy_bytes(raw: bytes, edits: dict | None = None) -> bytes | None:
     # Patched bytes, or None when nothing changed.
-# 
     # ``edits`` maps a shape's ``path`` (recorded by :class:`PhyReader`) to the
     # field values to write. Returning None lets the caller pass the original
     # bytes through, which is how untouched files stay byte-identical.
