@@ -149,12 +149,19 @@ def test_row_map_rejects_stale():
 
 
 def test_expand_legacy_returns_state_verbatim():
+    # The legacy (un-welded) layout is already MSH-row indexed, so nothing is
+    # re-indexed. The tangents are added on top, keyed by the same row, or a
+    # moved vertex would keep the frame its old position implied.
     decoded = _decoded()
     obj = _Obj(_Data(6, [0, 1, 2, 3, 4, 5], _UVS), {})
     bstate = _blender_state()
     bstate["positions"] = list(_POSITIONS)
     bstate["triangles"] = [tuple(t) for t in _DTRIS]
-    assert _expand_rows(decoded, obj, bstate) is bstate
+
+    out = _expand_rows(decoded, obj, bstate)
+
+    assert {k: v for k, v in out.items() if k != "tangent_loops"} == bstate
+    assert "tangent_loops" in out
 
 
 def test_expand_welded_splits_seams():

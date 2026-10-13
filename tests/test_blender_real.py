@@ -3681,3 +3681,47 @@ def test_export_leaves_the_current_frame_alone():
                 ext.unregister()
         '''),
     ) == {"frame": 12, "subframe": 0.4}
+
+
+def test_export_refreshes_tangents_with_weld_off():
+    # With Weld off there is one Blender vertex per MSH row, so the row indices
+    # _patch_chunk walks are the Blender ones. Tangents still have to be
+    # recomputed for the rows that moved; they used to be left as the source
+    # bytes, silently, because the un-welded path never built them.
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        def main():
+            sys.path.insert(0, "src")
+            import thedas_io as ext
+            ext.register()
+            import bpy
+            from thedas_io import ui
+            from thedas_io.export import export_bytes
+            from thedas_io.geometry import decode_chunk, USAGE_TANGENT
+            from thedas_io.msh.description import MSHReader
+
+            raw = open(os.path.join("data", "c_corspidr_0.msh"), "rb").read()
+            src = MSHReader(raw).mesh
+            chunk = src.chunks[0]
+            obj = ui.build_chunk_object(bpy.context, src, chunk, raw,
+                                         "c_corspidr_0.msh", False)
+            item = {"file": "c_corspidr_0.msh", "kind": "msh", "model": src,
+                    "raw": raw, "objects": [(obj, chunk)]}
+            before = decode_chunk(src, chunk)["tangents"][USAGE_TANGENT]
+
+            vert = obj.data.vertices[0]
+            vert.co = (vert.co.x + 1.5, vert.co.y, vert.co.z)
+            bpy.context.view_layer.update()
+
+            out = MSHReader(export_bytes(item)).mesh
+            after = decode_chunk(out, out.chunks[0])["tangents"][USAGE_TANGENT]
+            return {
+                "mapped": len(list(obj.get("thedas_io_row_to_vert") or [])),
+                "before": len(before),
+                "after": len(after),
+                "changed": sum(1 for x, y in zip(before, after) if x != y),
+            }
+        """),
+    ) == {"mapped": 0, "before": 5448, "after": 5448, "changed": 3}

@@ -1015,12 +1015,32 @@ def _row_map(obj, n_rows: int, n_verts: int):
     return m
 
 
+def _live_row_loop(data) -> dict:
+    # vertex -> one representative loop index, for the per-loop reads
+    out: dict = {}
+    for poly in data.polygons:
+        base = poly.loop_start
+        for j, v in enumerate(poly.vertices):
+            out.setdefault(v, base + j)
+    return out
+
+
 def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
     # expand Blender-indexed state back to MSH-row indexing
     n = decoded["vert_count"]
     m = _row_map(obj, n, len(bstate["positions"]))
+
+    data = _evaluated_mesh(obj)
+    if data is None:
+        raise ValueError(f"{obj.name}: in Edit Mode — leave Edit Mode, then export")
+
     if m is None:
-        return bstate
+        # No weld map, and _row_map only allows that when the counts match, so
+        # MSH row == Blender vertex and the row indices _patch_chunk walks are
+        # the Blender ones. The tangents still have to be refreshed for rows
+        # that moved, keyed the same way; without this a moved vertex kept the
+        # frame its old position implied and nothing said so.
+        return {**bstate, "tangent_loops": _loop_tangents(data, _live_row_loop(data))}
 
     dtris = decoded["triangles"]
     btris = bstate["triangles"]
@@ -1029,10 +1049,6 @@ def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
     for t, bt in zip(dtris, btris):
         if tuple(m[r] for r in t) != tuple(bt):
             raise _TopologyChanged(f"{obj.name}: face topology changed")
-
-    data = _evaluated_mesh(obj)
-    if data is None:
-        raise ValueError(f"{obj.name}: in Edit Mode — leave Edit Mode, then export")
 
     try:
         have_layers = len(data.uv_layers)
