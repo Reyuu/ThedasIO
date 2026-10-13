@@ -243,9 +243,25 @@ class GFFReader:
             if f.flags == FLAGS["STRUCT_ARRAY"]:
                 sub_struct = struct_def(f.type_id)
                 (n,) = struct.unpack_from("<I", self.data, self.data_offset + ref)
-                return [
-                    instance(sub_struct, ref + 4 + i * sub_struct.struct_size) for i in range(n)
-                ]
+                size = sub_struct.struct_size
+                if size <= 0:
+                    # the rows cannot fit by construction, so range(n) would
+                    # build n empty dicts with nothing to stop it; the writer
+                    # already refuses a zero-sized struct
+                    raise ValueError(
+                        f"struct array field {label_name(f.label_id)} "
+                        f"({f.label_id}) has an element struct of size {size}"
+                    )
+                # the rows are contiguous, so a count that does not fit the
+                # file is a truncated or foreign header rather than a big array
+                limit = len(self.data) - self.data_offset - ref - 4
+                if n * size > limit:
+                    raise ValueError(
+                        f"struct array field {label_name(f.label_id)} "
+                        f"({f.label_id}) claims {n} rows of {size}B but only "
+                        f"{limit}B are left in the data block"
+                    )
+                return [instance(sub_struct, ref + 4 + i * size) for i in range(n)]
 
             if f.flags == FLAGS["LIST_OF_REFS"]:
                 sub_struct = struct_def(f.type_id)

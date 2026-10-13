@@ -19,7 +19,7 @@ import struct
 import pytest
 
 from conftest import fourcc_bytes, load
-from thedas_io.gff40.description import MAGIC, GFFReader
+from thedas_io.gff40.description import FLAGS, MAGIC, GFFReader
 
 # (filename, file_type, nstruct, data_offset)
 FILES = [
@@ -172,3 +172,40 @@ def test_invalid_magic():
     raw, _ = load("c_corspidr_3.msh")
     with pytest.raises(ValueError, match="Invalid GFF file magic"):
         GFFReader(b"BADMAGIC" + raw[8:])
+
+
+def _struct_array_file(count: int, element_size: int) -> bytes:
+    """A GFF whose root holds one struct-array field pointing at `count` rows."""
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 2, data_at)
+    defs = struct.pack("<IIII", int.from_bytes(b"mdlh", "little"), 1, fields_at, 8)
+    defs += struct.pack("<IIII", int.from_bytes(b"elem", "little"), 0, fields_at + 12,
+                        element_size)
+    field = struct.pack("<IHHI", 6021, 1, FLAGS["STRUCT_ARRAY"], 0)  # ref cell at [0:4]
+    body = struct.pack("<I", 4)              # the ref cell points at offset 4
+    body += struct.pack("<I", count)         # the block's row count
+    body += b"\x00" * (element_size * 3)     # three rows of room
+    return header + defs + field + body
+
+
+def test_struct_array_count_that_does_not_fit_is_a_named_error():
+    # a truncated or foreign header reports a garbage count; range(n) would
+    # try to build four billion dicts before instance() noticed
+    with pytest.raises(ValueError, match="claims 4000000000 rows"):
+        GFFReader(_struct_array_file(count=4_000_000_000, element_size=12)
+                  ).get_from_data_block(0, 0)
+
+
+def test_struct_array_of_zero_sized_elements_is_refused():
+    # instance()'s bounds check is vacuous at size 0, so nothing would stop
+    # the loop; the writer already rejects a zero-sized struct
+    with pytest.raises(ValueError, match="element struct of size 0"):
+        GFFReader(_struct_array_file(count=4_000_000_000, element_size=0)
+                  ).get_from_data_block(0, 0)
+
+
+def test_struct_array_still_reads_a_normal_one():
+    rows = GFFReader(_struct_array_file(count=3, element_size=12)
+                     ).get_from_data_block(0, 0)[6021]
+    assert rows == [{}, {}, {}]
