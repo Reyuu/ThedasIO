@@ -232,6 +232,48 @@ def test_import_export_subpanels():
     assert "DEFAULT_CLOSED" in ui.THEDAS_IO_PT_export.bl_options
 
 
+def test_every_drawn_input_shows_a_real_label():
+    """An unlabelled input falls back to Blender's auto label.
+
+    Blender derives the label from the identifier when neither name= nor
+    text= is set, so a bare registration shows up as "Thedas Io Weld" in the
+    panel. Draw the input panels and require every prop() call to carry a
+    label, either name= on registration or text= at the draw site.
+    """
+    from types import SimpleNamespace
+
+    ext.register()
+    try:
+        scene = _scene()
+        panels = [
+            ui.THEDAS_IO_PT_import(),
+            ui.THEDAS_IO_PT_export(),
+            ui.THEDAS_IO_PT_substance(),
+            ui.THEDAS_IO_AddonPreferences(),
+        ]
+        for panel in panels:
+            if isinstance(panel, ui.THEDAS_IO_AddonPreferences):
+                panel.draw(SimpleNamespace())
+            else:
+                panel.draw(SimpleNamespace(scene=scene))
+
+        for panel in panels:
+            for _holder, ident, text in panel.layout.props:
+                if text:
+                    continue
+                # the holder is the drawn instance, so its attributes are
+                # values; resolve the definition from where it is registered.
+                # scene props are setattr'd, prefs props are bare annotations
+                prop = getattr(fake_bpy.bpy.types.Scene, ident, None)
+                if prop is None:
+                    annotations = getattr(ui.THEDAS_IO_AddonPreferences, "__annotations__", {})
+                    prop = annotations.get(ident)
+                assert prop is not None, ident
+                assert prop.kwargs.get("name"), f"{ident} shows no label"
+    finally:
+        ext.unregister()
+
+
 def _scene(db="", index=0):
     from types import SimpleNamespace
 

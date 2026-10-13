@@ -227,7 +227,7 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
         if self.layout is None:
             return
         self.layout.prop(scene, "thedas_io_import_source", expand=True)
-        self.layout.prop(scene, "thedas_io_weld")
+        self.layout.prop(scene, "thedas_io_weld", text="Weld seams")
         if scene.thedas_io_import_source == "GAME":
             self.layout.prop(scene, "thedas_io_filter_ext", text="Extension")
             self.layout.prop(scene, "thedas_io_filter_name", text="File name")
@@ -918,6 +918,7 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         description="Dragon Age: Origins install folder; Scan indexes it when no folder is given",
     )
     thedas_io_enable_phy: bpy.props.BoolProperty(  # type: ignore
+        name="Enable PHY collision",
         default=False,
         description="Enable experimental PHY collision support: importing "
         "collision proxies, the Add Collision operator and collision export. "
