@@ -3643,3 +3643,41 @@ def test_import_buttons_play_an_ani_on_the_armature():
         "file_curves": 567,
         "same": True,
     }
+
+def test_export_leaves_the_current_frame_alone():
+    # export samples the pose across the clip, but must put the scene back
+    # exactly where it was, subframe included
+    assert run(
+        textwrap.dedent('''\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import ANIReader
+                from thedas_io.ani.export import export_action
+                from thedas_io.ani.scene import build_action
+                ui._import_row(bpy.context, {"package": None, "filename": "c_doga_0.mmh",
+                    "ext": ".mmh", "path": os.path.abspath(
+                        os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True)
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                raw = open(os.path.join("data", "c_dog.sit_p.ani"), "rb").read()
+                arm.animation_data_create().action = build_action(
+                    ANIReader(raw).animation, arm, 30.0)
+                bpy.context.scene.frame_set(12, subframe=0.4)
+                export_action(bpy.context, arm, raw, 30.0)
+                out = {
+                    "frame": bpy.context.scene.frame_current,
+                    "subframe": round(bpy.context.scene.frame_subframe, 4),
+                }
+                return out
+            finally:
+                ext.unregister()
+        '''),
+    ) == {"frame": 12, "subframe": 0.4}

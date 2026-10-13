@@ -99,10 +99,12 @@ def _differs(new, old, is_rot: bool) -> bool:
 
 def export_action(context, arm, raw: bytes, fps: float) -> bytes:
     scene = context.scene
-    keep_frame = scene.frame_current
+    keep = (scene.frame_current, scene.frame_subframe)
     bone_names = bones_by_export(arm)
     node_rests = _node_rests(arm)
-    action = arm.animation_data.action if arm.animation_data else None
+    action = None
+    if arm.animation_data:
+        action = arm.animation_data.action
     hand_keys = _hand_keys(action, fps)
     clip = ANIReader(raw).animation
     latest = max((t for times in hand_keys.values() for t in times), default=0.0)
@@ -126,15 +128,23 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
         return (quat.x, quat.y, quat.z, quat.w)
 
     def values(node):
+        own_times = [time for time, _ in node.keys]
+
+        # vfx channels are not bone-driven, so nothing here can edit them; a
+        # longer clip still needs their key times rescaled
         if node.target not in (ROTATION32, ROTATION64, TRANSLATION):
+            if extending:
+                return own_times, [v for _, v in node.keys]
             return None
 
         is_rot = node.target != TRANSLATION
-        own_times = [time for time, _ in node.keys]
         bone = _match(bone_names, node.name)
+
+        # unmapped nodes only re-encode when the clip grows
         if bone is None:
-            # unmapped nodes only re-encode when the clip grows
-            return (own_times, [v for _, v in node.keys]) if extending else None
+            if extending:
+                return own_times, [v for _, v in node.keys]
+            return None
 
         added = [time for time in hand_keys.get(bone, [])
                  if all(abs(time - own) > TIME_TOL / fps for own in own_times)]
@@ -148,19 +158,34 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
             old = old_at.get(time)
             if old is None:
                 planned.append(new)
+                continue
+
+            new = _same_sign(new, old, is_rot)
+            if _differs(new, old, is_rot):
+                planned.append(new)
             else:
-                new = _same_sign(new, old, is_rot)
-                planned.append(new if _differs(new, old, is_rot) else None)
+                planned.append(None)
 
         # same key times, so keep the key list and write only what moved
         if not extending and times == own_times:
-            return (own_times, planned) if any(v is not None for v in planned) else None
+            if any(v is not None for v in planned):
+                return own_times, planned
+            return None
 
         # a rebuilt key list needs a value at every time
-        return (times, [v if v is not None else old_at[time]
-                        for time, v in zip(times, planned)])
+        filled = []
+        for time, value in zip(times, planned):
+            if value is None:
+                filled.append(old_at[time])
+            else:
+                filled.append(value)
+        return times, filled
+
+    new_length_arg = None
+    if extending:
+        new_length_arg = new_length
 
     try:
-        return patch_ani(raw, values, new_length if extending else None)
+        return patch_ani(raw, values, new_length_arg)
     finally:
-        scene.frame_set(keep_frame)
+        scene.frame_set(keep[0], subframe=keep[1])

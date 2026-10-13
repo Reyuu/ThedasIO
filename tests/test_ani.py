@@ -9,14 +9,17 @@ decodes as cleanly as the 64-bit one.
 from __future__ import annotations
 
 import math
+import struct
 
-from conftest import DATA_DIR
+from conftest import DATA_DIR, fourcc
 from thedas_io.ani.description import (
     ROTATION32,
     ROTATION64,
     TRANSLATION,
     ANIReader,
+    patch_ani,
 )
+from thedas_io.gff40.description import FLAGS, GFFField, GFFReader, GFFStructDef, GFFWriter
 
 DOG = DATA_DIR / "c_dog.sit_p.ani"
 DOOR = DATA_DIR / "prp_door.dying.ani"
@@ -195,3 +198,80 @@ def test_patch_adds_a_key_between_the_originals_and_extends_the_clip():
         kept = after.by_name(node.name).keys
         assert len(kept) == len(node.keys)
         assert all(abs(a[0] - b[0]) < 1e-3 for a, b in zip(kept, node.keys))
+
+
+def _vfx_clip() -> bytes:
+    # the door clip plus one scalar vfx channel, built the way a real one is:
+    # a float key struct, a wrapper holding the key array, and a node (target
+    # 8) pointing at it. None of the two shipped fixtures carry a vfx channel.
+    reader = GFFReader(DOOR.read_bytes())
+    writer = GFFWriter.from_reader(reader)
+
+# same shape as the packed-quat key def, except KeyData0 is an f32
+    key_def = GFFStructDef(fourcc("vfxk"), 2, 0, 6)
+    key_def.field_instances.append(GFFField(4035, 2, 0, 0))  # KeyTime u16
+    key_def.field_instances.append(GFFField(4036, 8, 0, 2))  # KeyData0 f32
+    key_index = len(writer.struct_defs)
+    writer.struct_defs.append(key_def)
+
+    wrap_def = GFFStructDef(fourcc("vfxw"), 1, 0, 4)
+    wrap_def.field_instances.append(GFFField(4004, key_index, FLAGS["STRUCT_ARRAY"], 0))
+    wrap_index = len(writer.struct_defs)
+    writer.struct_defs.append(wrap_def)
+
+    rows = [(0, 1.5), (32768, 2.5), (65535, 3.5)]
+    blob = struct.pack("<I", len(rows))
+    for key_time, sample in rows:
+        blob += struct.pack("<Hf", key_time, sample)
+    wrap_offset = writer.alloc(struct.pack("<I", writer.alloc(blob)))
+
+    node = bytearray(16)
+    struct.pack_into("<I", node, 0, writer.alloc_ecstring("vfx_birthrate"))
+    node[12] = 8
+    struct.pack_into("<II", node, 4, (FLAGS["REFERENCE"] << 16) | wrap_index, wrap_offset)
+
+    nodes_ref = struct.unpack_from("<I", reader.data, reader.data_offset + 12)[0]
+    count = struct.unpack_from("<I", reader.data, reader.data_offset + nodes_ref)[0]
+    existing = bytes(writer.data_block[nodes_ref + 4 : nodes_ref + 4 + count * 16])
+    list_offset = writer.alloc(struct.pack("<I", count + 1) + existing + bytes(node))
+    struct.pack_into("<I", writer.data_block, 12, list_offset)
+    return writer.write()
+
+
+def test_the_fixture_carries_a_scalar_vfx_channel():
+    anim = ANIReader(_vfx_clip()).animation
+    vfx = anim.by_name("vfx_birthrate")
+    assert vfx is not None and vfx.target == 8 and vfx.kind == "scalar"
+    assert [v for _t, v in vfx.keys] == [1.5, 2.5, 3.5]
+
+
+def test_a_vfx_channel_does_not_block_a_clip_extension():
+    # every key time is a fraction of the length, so a longer clip has to
+    # rewrite the vfx node's key list too
+    raw = _vfx_clip()
+    before = ANIReader(raw).animation
+    vfx = before.by_name("vfx_birthrate")
+
+    def values(node):
+        own = [t for t, _ in node.keys]
+        return own, [v for _, v in node.keys]
+
+    after = ANIReader(patch_ani(raw, values, 4.0)).animation
+    assert abs(after.length - 4.0) < 1e-6
+
+    grown = after.by_name("vfx_birthrate")
+    assert len(grown.keys) == len(vfx.keys)
+    # the key list is rebuilt at the new length, but the samples stay put and
+    # land on the same second (one u16 step of the longer clip is ~6e-5 s)
+    for (old_t, old_v), (new_t, new_v) in zip(vfx.keys, grown.keys):
+        assert abs(old_v - new_v) < 1e-6
+        assert abs(old_t - new_t) < 1e-4
+
+
+def test_saturated_quat_fields_still_decode_to_unit_length():
+    from thedas_io.ani.description import decode_quat32, decode_quat64
+
+    # all three fields at their maximum is not a real key, but it must not
+    # decode to a quaternion off the unit sphere
+    assert abs(norm(decode_quat32(0xFFFFFFFF)) - 1.0) < 1e-9
+    assert abs(norm(decode_quat64(0xFFFFFFFFFFFFFFFF)) - 1.0) < 1e-9

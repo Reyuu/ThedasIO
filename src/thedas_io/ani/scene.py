@@ -74,16 +74,18 @@ def _sample(keys: list, time: float):
     return keys[-1][1]
 
 
-# action.fcurves is gone from modern actions; keys now live in channelbags.
+# Modern actions keep their curves in channelbags; action.fcurves is gone in
+# 5.x and is a first-slot-only accessor in the 4.4-4.5 window, so walk the bags
+# whenever there are any and only fall back to the flat accessor.
 def _fcurves(action) -> list:
-    if hasattr(action, "fcurves"):
-        return list(action.fcurves)
     out: list = []
-    for layer in action.layers:
+    for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
-            for bag in strip.channelbags:
+            for bag in getattr(strip, "channelbags", ()):
                 out.extend(bag.fcurves)
-    return out
+    if out:
+        return out
+    return list(getattr(action, "fcurves", []))
 
 
 # A bone's MMH node at rest; unstamped bones fall back to the Blender rest.
@@ -95,8 +97,9 @@ def rest_local(arm_obj, name: str) -> tuple:
     if pos and rot:
         return tuple(float(v) for v in pos[:3]), tuple(float(v) for v in rot)
 
-    rel = (bone.parent.matrix_local.inverted() @ bone.matrix_local
-           if bone.parent is not None else bone.matrix_local)
+    rel = bone.matrix_local
+    if bone.parent is not None:
+        rel = bone.parent.matrix_local.inverted() @ rel
     loc, quat, _scale = rel.decompose()
     return tuple(loc), (quat.x, quat.y, quat.z, quat.w)
 

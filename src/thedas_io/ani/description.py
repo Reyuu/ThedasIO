@@ -59,6 +59,12 @@ def _rebuild(index: int, ratios: Sequence) -> tuple:
     dropped = math.sqrt(max(0.0, 1.0 - sum(r * r for r in ratios)))
     parts = list(ratios)
     parts.insert(index, dropped)
+
+    # the three fields can each saturate, which would hand back a quaternion
+    # that is not unit; real keys already are, so this leaves them untouched
+    length = math.sqrt(sum(p * p for p in parts))
+    if abs(length - 1.0) > 1e-6:
+        parts = [p / length for p in parts]
     return tuple(parts)
 
 
@@ -192,14 +198,11 @@ class ANIReader:
         self.name = self.root.get(L_NAME)
         self.length = float(self.root.get(L_LENGTH) or 0.0)
         self.additive = bool(self.root.get(L_ADDITIVE))
-        self.animation = Animation(
-            self.name,
-            self.length,
-            self.additive,
-            [n for n in (_decode_node(node, self.length)
-                         for node in (self.root.get(L_NODES) or []))
-             if n is not None],
-        )
+        nodes = [
+            n for node in (self.root.get(L_NODES) or [])
+            if (n := _decode_node(node, self.length)) is not None
+        ]
+        self.animation = Animation(self.name, self.length, self.additive, nodes)
 
     @property
     def nodes(self) -> list:
@@ -312,19 +315,30 @@ def _locate_keys(reader: GFFReader) -> list:
 def _put(buf: bytearray, at: int, type_id: int, value) -> None:
     size = FIELD_TYPES[type_id]
     if isinstance(value, float):
-        struct.pack_into("<f" if size == 4 else "<d", buf, at, value)
+        struct.pack_into(_float_fmt(type_id), buf, at, value)
     else:
         buf[at : at + size] = int(value).to_bytes(size, "little")
 
 
 def _write_value(buf: bytearray, base: int, layout: _KeyLayout, target: int, value) -> None:
     if target in (ROTATION32, ROTATION64):
-        word = encode_quat32(value) if target == ROTATION32 else encode_quat64(value)
+        if target == ROTATION32:
+            word = encode_quat32(value)
+        else:
+            word = encode_quat64(value)
         rel, type_id = layout.data_rel[0]
         _put(buf, base + rel, type_id, word)
-    elif target == TRANSLATION:
-        for (rel, type_id), component in zip(layout.data_rel, value):
-            _put(buf, base + rel, type_id, float(component))
+        return
+
+    # translation is three f32 and a vfx channel is one or n of them, all laid
+    # out in the key's KeyData slots in order
+    cells = []
+    if isinstance(value, (tuple, list)):
+        cells = list(zip(layout.data_rel, value))
+    else:
+        cells.append((layout.data_rel[0], value))
+    for (rel, type_id), component in cells:
+        _put(buf, base + rel, type_id, float(component))
 
 
 def _quant_time(seconds: float, length: float) -> int:
@@ -339,7 +353,9 @@ def _stored_as(fmt: str, value: float) -> float:
 
 
 def _float_fmt(type_id: int) -> str:
-    return "<f" if FIELD_TYPES[type_id] == 4 else "<d"
+    if FIELD_TYPES[type_id] == 4:
+        return "<f"
+    return "<d"
 
 
 # Write new key values and key times into the file. values(node) gets each
@@ -352,7 +368,10 @@ def patch_ani(raw: bytes, values, length: float | None = None) -> bytes:
     reader = GFFReader(raw)
     root = reader.get_from_data_block(0, 0)
     old_len = float(root.get(L_LENGTH) or 0.0)
-    new_len = old_len if length is None else float(length)
+    new_len = old_len
+    if length is not None:
+        new_len = float(length)
+
     nodes = root.get(L_NODES) or []
     layouts = _locate_keys(reader)
     buf = bytearray(raw)
@@ -395,9 +414,6 @@ def patch_ani(raw: bytes, values, length: float | None = None) -> bytes:
 
         if any(v is None for v in new_values):
             raise ValueError(f"{anim_node.name}: a rebuilt key list needs every value")
-        if anim_node.target not in (ROTATION32, ROTATION64, TRANSLATION):
-            raise ValueError(f"{anim_node.name}: cannot rewrite target "
-                             f"{anim_node.target} keys")
 
         payload = bytearray()
         template = bytes(buf[layout.first : layout.first + layout.ksize])
