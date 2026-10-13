@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import DATA_DIR
-from thedas_io.gff40.description import GFFReader, GFFWriter
+from thedas_io.gff40.description import FLAGS, GFFReader, GFFWriter
 from thedas_io.msh.description import _SCHEMA, MSHReader, MSHWriter, load
 
 MSH_PATH = DATA_DIR / "c_corspidr_3.msh"
@@ -135,3 +135,36 @@ def test_an_edited_mesh_still_roundtrips_through_the_patch_path():
     assert back.name == "renamed"
     assert back.vertex_data == writer.mesh.vertex_data
     assert back.chunks
+
+
+def test_an_edited_chunk_region_is_written_back():
+    # 8021 is a LIST_OF_REFS, not a struct array: count then u32 offsets, with
+    # the chnk instance at offset 32. Reading that list as inline instances put
+    # the chunk base ~318KB off and the edited cells were patched into the
+    # wrong place entirely.
+    raw = (DATA_DIR / "c_corspidr_0.msh").read_bytes()
+    reader = MSHReader(raw)
+    base = reader.mesh
+    chunk = base.chunks[0]
+    writer = MSHWriter(base, reader)
+
+    vblob = bytearray(base.vertex_data)
+    vblob += b"\xaa" * chunk.stride
+    base.vertex_data = list(vblob)
+    chunk.cells[8001] = chunk.cells[8001] + 1
+    chunk.cells[8006] = len(vblob)
+
+    back = MSHReader(writer.write()).mesh
+    assert back.chunks[0].cells[8006] == len(vblob)
+    assert back.chunks[0].cells[8001] == chunk.cells[8001]
+    assert back.vertex_data[-1] == 0xAA
+
+
+def test_the_chunk_list_shape_is_read_from_the_flags():
+    from thedas_io.msh.description import _chunk_list
+
+    for name in ("c_corspidr_0.msh", "c_corspidr_3.msh", "qm_uhm_basb_0.msh"):
+        gff = MSHReader((DATA_DIR / name).read_bytes()).gff
+        field, _ref, _size, count = _chunk_list(gff)
+        assert field.flags == FLAGS["LIST_OF_REFS"], name
+        assert count == len(MSHReader((DATA_DIR / name).read_bytes()).mesh.chunks)

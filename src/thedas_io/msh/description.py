@@ -376,18 +376,33 @@ def _chunk_unchanged(a, orig) -> bool:
     return all(a.cells.get(label) == cells.get(label) for label in L_CHUNK_CELLS)
 
 
+def _chunk_list(gff: GFFReader):
+    # (flag field, block offset, element struct size, row count) for 8021.
+    # 8021 is a LIST_OF_REFS in the shipped files and a STRUCT_ARRAY in
+    # hand-built ones; the two have different layouts and reading one as the
+    # other puts the chunk bases hundreds of kilobytes off.
+    root = gff.struct_defs[0]
+    field = next((f for f in root.field_instances if f.label_id == L_CHUNKS), None)
+    if field is None:
+        return None, 0, 0, 0
+    ref = struct.unpack_from("<I", gff.data, gff.data_offset + field.data_index)[0]
+    (count,) = struct.unpack_from("<I", gff.data, gff.data_offset + ref)
+    return field, ref, gff.struct_defs[field.type_id].struct_size, count
+
+
 def _chunk_bases(gff: GFFReader) -> list:
     # data-block offsets of the root's chunk instances, in file order
-    root = gff.struct_defs[0]
-    fields = _field_offsets(root, (L_CHUNKS,))
-    if L_CHUNKS not in fields:
+    field, ref, size, count = _chunk_list(gff)
+    if field is None:
         return []
-    ref = struct.unpack_from("<I", gff.data, gff.data_offset + fields[L_CHUNKS])[0]
-    (count,) = struct.unpack_from("<I", gff.data, gff.data_offset + ref)
-    chunks_def = gff.struct_defs[
-        next(f.type_id for f in root.field_instances if f.label_id == L_CHUNKS)
-    ]
-    return [ref + 4 + i * chunks_def.struct_size for i in range(count)]
+    if field.flags == FLAGS["LIST_OF_REFS"]:
+        out = []
+        for i in range(count):
+            (r,) = struct.unpack_from("<I", gff.data, gff.data_offset + ref + 4 + 4 * i)
+            if r != 0xFFFFFFFF:
+                out.append(r)
+        return out
+    return [ref + 4 + i * size for i in range(count)]
 
 
 class MSHWriter:
@@ -487,6 +502,11 @@ class MSHWriter:
             else:
                 refs.append(w.alloc(self._chunk_bytes(w, chunk)))
         if L_CHUNKS in at and (len(refs) != len(bases) or refs != bases):
+            field, ref, _size, _count = _chunk_list(gff)
+            if field is not None and field.flags != FLAGS["LIST_OF_REFS"]:
+                # the instances are inline and contiguous, so a different count
+                # cannot be laid out by patching; rebuild instead
+                return self._rebuilt()
             blob = struct.pack("<I", len(refs)) + b"".join(
                 struct.pack("<I", r) for r in refs
             )

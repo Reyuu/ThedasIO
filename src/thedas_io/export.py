@@ -849,7 +849,12 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
     if not any(mode != "raw" for _, _, _, mode, _ in planned):
         return None
 
-    base = MSHReader(item["raw"]).mesh  # pristine copy: untouched bytes stay verbatim
+    reader = MSHReader(item["raw"])  # pristine copy: untouched bytes stay verbatim
+    base = reader.mesh
+    # Built before anything below touches base: the writer snapshots the source
+    # values to decide which cells to patch, and base is about to be overwritten
+    # with the edited blobs.
+    writer = MSHWriter(base, reader)
     vblob, iblob = bytearray(base.vertex_data), bytearray(base.index_data)  # type: ignore
     base_blob = bytes(vblob)
     targeted = _resolve_base_chunks(base, planned)
@@ -892,7 +897,7 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
         base.index_format = INDEX_FORMAT_U32  # type: ignore
     elif widths == {2} and base.index_format != 0:  # type: ignore
         base.index_format = 0  # type: ignore
-    return MSHWriter(base).write()
+    return writer.write()
 
 
 def _append_index_region(chunk, iblob: bytearray, indices, ncounts: int) -> None:
