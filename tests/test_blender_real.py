@@ -3725,3 +3725,99 @@ def test_export_refreshes_tangents_with_weld_off():
             }
         """),
     ) == {"mapped": 0, "before": 5448, "after": 5448, "changed": 3}
+
+def test_tint_export_covers_every_tinted_material():
+    # The DAO Tint group is shared by every material now. It used to be built
+    # per material, so Blender uniquified the name after the first ("DAO Tint
+    # Diffuse.001") and the exporter, which matches the name exactly, tinted
+    # only the first material and quietly wrote the rest untinted.
+    assert run(
+        textwrap.dedent("""\
+        import io
+        import os
+        import sys
+        import tempfile
+        def main():
+            sys.path.insert(0, "src")
+            import thedas_io as ext
+            try:
+                ext.unregister()
+            except Exception:
+                pass
+            ext.register()
+            import bpy
+            from PIL import Image
+            from thedas_io.export import ITEMS, export_all, remember
+            from thedas_io.materials import parse_mao
+            from thedas_io.mmh.description import MMHReader
+            from thedas_io.msh.description import MSHReader
+            from thedas_io.tnt import NAMES, alpha_input
+
+            tmp = tempfile.mkdtemp()
+            images = {}
+            for semantic, name, color in (("d", "q_0d", (200, 100, 50, 255)),
+                                          ("s", "q_0s", (40, 30, 20, 200)),
+                                          ("t", "q_0t", (10, 20, 30, 255))):
+                buf = io.BytesIO()
+                Image.new("RGBA", (8, 8), color).save(buf, "DDS")
+                path = os.path.join(tmp, f"{name}.dds")
+                open(path, "wb").write(buf.getvalue())
+                images[semantic] = ext.ui.load_image(path)
+
+            mao_text = ('<MaterialObject Name="M{n}"><Material Name="m{n}.mat"></Material>'
+                        '<DefaultSemantic Name="Default"></DefaultSemantic>'
+                        '<Texture Name="d" ResName="q_0d.dds"></Texture>'
+                        '<Texture Name="s" ResName="q_0s.dds"></Texture>'
+                        '<Texture Name="t" ResName="q_0t.dds"></Texture>'
+                        '</MaterialObject>')
+            sraw = open(os.path.join("data", "c_corspidr_0.msh"), "rb").read()
+            mesh = MSHReader(sraw).mesh
+            raw = open(os.path.join("data", "c_corspidra_0.mmh"), "rb").read()
+            remember("c_corspidra_0.mmh", "mmh", MMHReader(raw).tree, raw)
+
+            typed = {"Diffuse R": (0.25, 0.5, 0.75, 0.9),
+                     "Diffuse opacity": (0.5, 0.4, 0.3, 0.9)}
+            meshes = []
+            for n in (1, 2):
+                text = mao_text.format(n=n)
+                mao = parse_mao(text)
+                mat = ext.ui.build_material(f"M{n}", mao, images)
+                for node in mat.node_tree.nodes:
+                    if node.type != "GROUP":
+                        continue
+                    if not node.node_tree.name.startswith("DAO Tint Diffuse"):
+                        continue
+                    for key, colour in typed.items():
+                        node.inputs[key].default_value = colour
+                        if alpha_input(key):
+                            node.inputs[alpha_input(key)].default_value = colour[3]
+                obj = ext.ui.build_chunk_object(bpy.context, mesh, mesh.chunks[0],
+                                                sraw, f"c_corspidr_{n}.msh")
+                obj.data.materials.clear()
+                obj.data.materials.append(mat)
+                meshes.append(obj)
+                remember(f"m{n}.mao", "mao", mao, text.encode("utf-8"))
+
+            # _tint_by_material walks the mmh item's meshes
+            ITEMS["c_corspidra_0.mmh"]["meshes"] = meshes
+
+            # one shared group per side, whatever the material count
+            groups = sorted(g.name for g in bpy.data.node_groups
+                            if g.name.startswith("DAO Tint"))
+            out = os.path.join(tmp, "out")
+            export_all(out, tint=True)
+            baked = {}
+            for n in (1, 2):
+                doc = parse_mao(open(os.path.join(out, f"m{n}.mao"), encoding="utf-8").read())
+                array = [a for _, a in doc["extra"]
+                         if a.get("Name") == "mml_vTintMaskColours"]
+                flat = [float(x) for x in array[0]["value"].split()]
+                baked[str(n)] = [round(v, 3)
+                                 for v in flat[NAMES.index("Diffuse R") * 4:
+                                               NAMES.index("Diffuse R") * 4 + 4]]
+            return {"groups": groups, "baked": baked}
+        """),
+    ) == {
+        "groups": ["DAO Tint Diffuse", "DAO Tint Specular"],
+        "baked": {"1": [0.25, 0.5, 0.75, 0.9], "2": [0.25, 0.5, 0.75, 0.9]},
+    }

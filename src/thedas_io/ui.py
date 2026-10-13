@@ -2270,10 +2270,17 @@ def _wire_material(mat, mao, images, color=None, tint=None):
 
 
 def _tint_group(side: str):
-    # fresh dao tint group, one base colour tinted per mask channel
+    # One shared group per side, built once. Creating one per material made
+    # Blender uniquify the name ("DAO Tint Diffuse.001") for every material
+    # after the first, and the exporter finds the group by exact name, so those
+    # materials exported with no tint at all.
+    name = group_name(side)
+    tree: Any = bpy.data.node_groups.get(name)
+    if tree is not None:
+        return tree
 
     names = for_side(side)
-    tree: Any = bpy.data.node_groups.new(group_name(side), "ShaderNodeTree")
+    tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
     for name in ("Tint mask (RGB)", side, *names):
         sock = tree.interface.new_socket(name, in_out="INPUT", socket_type="NodeSocketColor")
         sock.default_value = DEFAULTS.get(name, (0.0, 0.0, 0.0, 1.0))
