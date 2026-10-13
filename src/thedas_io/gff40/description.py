@@ -131,6 +131,10 @@ class GFFReader:
         magic = self.data[0:8]
         if magic != MAGIC:
             raise ValueError("Invalid GFF file magic")
+        if len(self.data) < HEADER_SIZE:
+            raise ValueError(
+                f"GFF file is {len(self.data)} bytes; the header alone is {HEADER_SIZE}"
+            )
 
         self.platform, self.file_type, self.version, self.nstruct, self.data_offset = struct.unpack(
             "<4s4s4sII", self.data[len(MAGIC) : HEADER_SIZE]
@@ -139,14 +143,23 @@ class GFFReader:
         global_field_count = 0
         for i in range(self.nstruct):
             entry_offset = HEADER_SIZE + i * STRUCT_DEF_SIZE
-            entry_data = self.data[entry_offset : entry_offset + STRUCT_DEF_SIZE]
-            type_id, field_count, field_offset, struct_size = struct.unpack("<IIII", entry_data)
+            if entry_offset + STRUCT_DEF_SIZE > len(self.data):
+                raise ValueError(
+                    f"struct def {i} runs past the end of a {len(self.data)} byte file"
+                )
+            type_id, field_count, field_offset, struct_size = struct.unpack_from(
+                "<IIII", self.data, entry_offset
+            )
             struct_def = GFFStructDef(type_id, field_count, field_offset, struct_size)
             global_field_count += field_count
             for j in range(field_count):
-                label, type_, flags, index = struct.unpack_from(
-                    "<IHHI", self.data, field_offset + j * FIELD_SIZE
-                )
+                at = field_offset + j * FIELD_SIZE
+                if at + FIELD_SIZE > len(self.data):
+                    raise ValueError(
+                        f"struct def {i} field {j} runs past the end of a "
+                        f"{len(self.data)} byte file"
+                    )
+                label, type_, flags, index = struct.unpack_from("<IHHI", self.data, at)
                 field = GFFField(label, type_, flags, index)
                 struct_def.field_instances.append(field)
 
@@ -181,7 +194,7 @@ class GFFReader:
         def ecstring(block_offset):
             if block_offset == 0xFFFFFFFF:
                 return None
-            count = struct.unpack_from("<I", self.data, self.data_offset + block_offset)[0]
+            count = struct.unpack("<I", raw(block_offset, 4))[0]
             text = raw(block_offset + 4, count * 2).decode("utf-16-le")
             if text.endswith("\x00"):
                 return text[:-1]
@@ -229,7 +242,7 @@ class GFFReader:
                 return None
 
             if f.flags == FLAGS["SCALAR_LIST"]:
-                (n,) = struct.unpack_from("<I", self.data, self.data_offset + ref)
+                (n,) = struct.unpack("<I", raw(ref, 4))
                 if f.type_id == 14:
                     return [ecstring(r) for (r,) in struct.iter_unpack("<I", raw(ref + 4, n * 4))]
                 suffix = _SCALAR_FORMATS.get(f.type_id)
@@ -242,7 +255,7 @@ class GFFReader:
 
             if f.flags == FLAGS["STRUCT_ARRAY"]:
                 sub_struct = struct_def(f.type_id)
-                (n,) = struct.unpack_from("<I", self.data, self.data_offset + ref)
+                (n,) = struct.unpack("<I", raw(ref, 4))
                 size = sub_struct.struct_size
                 if size <= 0:
                     # the rows cannot fit by construction, so range(n) would
@@ -265,7 +278,7 @@ class GFFReader:
 
             if f.flags == FLAGS["LIST_OF_REFS"]:
                 sub_struct = struct_def(f.type_id)
-                (n,) = struct.unpack_from("<I", self.data, self.data_offset + ref)
+                (n,) = struct.unpack("<I", raw(ref, 4))
                 out = []
                 for (r,) in struct.iter_unpack("<I", raw(ref + 4, n * 4)):
                     if r == 0xFFFFFFFF:
@@ -276,7 +289,7 @@ class GFFReader:
 
             if f.type_id == 0xFFFF:
                 if f.flags == FLAGS["GENERIC_LIST"]:
-                    (n,) = struct.unpack_from("<I", self.data, self.data_offset + ref)
+                    (n,) = struct.unpack("<I", raw(ref, 4))
                     out = []
                     for s, fl, off in struct.iter_unpack("<HHI", raw(ref + 4, n * 8)):
                         out.append(

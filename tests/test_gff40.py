@@ -209,3 +209,46 @@ def test_struct_array_still_reads_a_normal_one():
     rows = GFFReader(_struct_array_file(count=3, element_size=12)
                      ).get_from_data_block(0, 0)[6021]
     assert rows == [{}, {}, {}]
+
+
+def test_a_file_shorter_than_the_header_is_a_named_error():
+    # used to die as struct.error: unpack requires a buffer of 20 bytes
+    for size in (8, 9, 20, 27):
+        with pytest.raises(ValueError, match="header alone is"):
+            GFFReader(MAGIC + b"\x00" * (size - 8))
+
+
+def test_a_truncated_struct_table_is_a_named_error():
+    # a header claiming more struct defs than the file holds
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 99, data_at)
+    with pytest.raises(ValueError, match="struct def .* runs past the end"):
+        GFFReader(header + b"\x00" * 40)
+
+
+def test_a_struct_pointing_its_fields_past_the_file_is_a_named_error():
+    # field_offset is a u32 straight out of the file; unvalidated it parses
+    # whatever bytes are there as field descriptors
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 2, data_at)
+    defs = struct.pack("<IIII", int.from_bytes(b"mdlh", "little"), 1, 999_999, 8)
+    defs += struct.pack("<IIII", int.from_bytes(b"elem", "little"), 0, fields_at + 12, 4)
+    field = struct.pack("<IHHI", 6021, 1, FLAGS["STRUCT_ARRAY"], 0)
+    body = struct.pack("<I", 4) + struct.pack("<I", 0) + b"\x00" * 4
+    with pytest.raises(ValueError, match="field 0 runs past the end"):
+        GFFReader(header + defs + field + body)
+
+
+def test_a_list_count_past_the_end_of_the_data_block_is_a_named_error():
+    # the count word itself now goes through the bounds-checked read
+    fields_at = 28 + 2 * 16
+    data_at = fields_at + 12
+    header = MAGIC + struct.pack("<4s4s4sII", b"PC  ", b"PHY ", b"V0.1", 2, data_at)
+    defs = struct.pack("<IIII", int.from_bytes(b"mdlh", "little"), 1, fields_at, 4)
+    defs += struct.pack("<IIII", int.from_bytes(b"elem", "little"), 0, fields_at + 12, 4)
+    field = struct.pack("<IHHI", 6021, 4, FLAGS["SCALAR_LIST"], 0)
+    body = struct.pack("<I", 900_000)  # ref points past the end of the data block
+    with pytest.raises(ValueError, match="data block read out of range"):
+        GFFReader(header + defs + field + body).get_from_data_block(0, 0)
