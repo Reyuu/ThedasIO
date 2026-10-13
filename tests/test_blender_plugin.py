@@ -1085,3 +1085,26 @@ def test_rig_does_not_depend_on_the_mesh_it_is_bound_to():
     for leak in ("chunks", "vertices", "bbox", "scale", "cloud"):
         assert leak not in src, f"bone length must not read {leak} from the mesh"
     assert _bone_lengths(rows) == _bone_lengths(rows)
+
+
+def test_scan_report_names_unreadable_archives(tmp_path):
+    # a corrupt .rim still counts in `files`, so without this the summary reads
+    # like a folder that simply held nothing
+    from types import SimpleNamespace
+
+    from thedas_io.asset_db.scanner import scan
+
+    db = _seed_db(tmp_path)
+    (tmp_path / "corrupt.rim").write_bytes(b"not an erf")
+    stats = scan(tmp_path, db)
+    assert stats["skipped"] == [str(tmp_path / "corrupt.rim")]
+
+    scene = _scene(db=str(db))
+    op = cast(Any, ui.THEDAS_IO_OT_scan_assets())
+    op._scene = scene
+    op._db_path = str(db)
+    op._state = {"stats": stats, "error": None}
+    op._finish(SimpleNamespace(scene=scene))
+
+    assert len(op.reports) == 1
+    assert "1 unreadable archive(s)" in op.reports[0][1]

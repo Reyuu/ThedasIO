@@ -1127,7 +1127,14 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             scene.thedas_io_filter_package or None,
         )
         stats = state.get("stats") or {}
-        note = f"Skipped {len(stats['missing'])} missing folder(s)" if stats.get("missing") else ""
+        notes = []
+        if stats.get("missing"):
+            notes.append(f"skipped {len(stats['missing'])} missing folder(s)")
+        if stats.get("skipped"):
+            # an archive that would not parse still counts in `files`, so
+            # without this it looks like a folder that simply held nothing
+            notes.append(f"{len(stats['skipped'])} unreadable archive(s)")
+        note = ", ".join(notes)
         self.report(
             {"INFO"},
             f"Scanned {stats.get('files', 0)} archive files, "
