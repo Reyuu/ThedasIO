@@ -32,7 +32,7 @@ from .export import (
     reset,
     roots,
 )
-from .fsio import write_bytes_atomic
+from .fsio import save_image_atomic, write_bytes_atomic, write_text_atomic
 from .geometry import (
     bone_frame,
     bone_names,
@@ -523,8 +523,8 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
             return {"CANCELLED"}
 
         dest.mkdir(parents=True, exist_ok=True)
-        (dest / "model.obj").write_text(
-            obj_text([(n, m, d) for n, d, m in chunks]), encoding="utf-8"
+        write_text_atomic(
+            dest / "model.obj", obj_text([(n, m, d) for n, d, m in chunks])
         )
         written, errors = ["model.obj"], []
         tex_dir = dest / "textures"
@@ -571,7 +571,7 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
 
             for stem, pil in maps.items():
                 path = out_dir / f"{stem}.png"
-                pil.save(path, "PNG")
+                save_image_atomic(pil, path, "PNG")
                 written.append(str(path.relative_to(dest)))
             mtl_maps[mat_name] = set(maps)
 
@@ -580,11 +580,11 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
                 meshmap_dir = dest / "meshmaps"
                 meshmap_dir.mkdir(parents=True, exist_ok=True)
                 meshmap = meshmap_dir / f"{mat_name}_normal_base.png"
-                maps[MAP_NORMAL].save(meshmap, "PNG")
+                save_image_atomic(maps[MAP_NORMAL], meshmap, "PNG")
                 written.append(str(meshmap.relative_to(dest)))
 
-        (dest / "model.mtl").write_text(
-            mtl_text([(m, mtl_maps.get(m, ())) for m in maos]), encoding="utf-8"
+        write_text_atomic(
+            dest / "model.mtl", mtl_text([(m, mtl_maps.get(m, ())) for m in maos])
         )
         written.append("model.mtl")
 
@@ -707,7 +707,7 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
                 # dao-layout pixels into cache, reload path re-packs into blend
                 try:
                     (folder / Path(res).name).parent.mkdir(parents=True, exist_ok=True)
-                    pil.save(folder / Path(res).name, "PNG")
+                    save_image_atomic(pil, folder / Path(res).name, "PNG")
                 except OSError as e:
                     failed.append(f"{mat_name}: {res}: {e}")
                     continue
