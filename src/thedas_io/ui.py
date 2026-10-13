@@ -32,6 +32,7 @@ from .export import (
     reset,
     roots,
 )
+from .fsio import write_bytes_atomic
 from .geometry import (
     bone_frame,
     bone_names,
@@ -1436,7 +1437,7 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
         except Exception as exc:  # noqa: BLE001 - report, do not crash Blender
             self.report({"ERROR"}, f"Could not export {action.name}: {exc}")
             return {"CANCELLED"}
-        Path(self.filepath).write_bytes(data)
+        write_bytes_atomic(Path(self.filepath), data)
         self.report({"INFO"}, f"Wrote {self.filepath}")
         return {"FINISHED"}
 
@@ -2015,7 +2016,7 @@ def _new_image(name, pil, raw):
             pass
     else:
         try:
-            cached.write_bytes(raw)
+            write_bytes_atomic(cached, raw)
         except OSError:
             pass
 

@@ -17,6 +17,7 @@ from nvtt.surface import Surface
 from PIL import Image
 
 from . import tnt
+from .fsio import write_bytes_atomic
 from .geometry import (
     FORMATS,
     IDENTITY_QUAT,
@@ -165,7 +166,7 @@ def export_all(dest, tint=False, tint_name="", only=None):
             name = ""
             try:
                 name = item.get("as_tnt") or _tnt_name(item, tint_name)
-                (dest / name).write_bytes(_tnt_bytes(merged))
+                write_bytes_atomic(dest / name, _tnt_bytes(merged))
                 written.append(name)
             except Exception as e:  # noqa: BLE001 - one tint must not sink the batch
                 errors.append(_why(name or item["file"], e))
@@ -183,7 +184,7 @@ def export_all(dest, tint=False, tint_name="", only=None):
             model = item.get("model")
             values = mao_tints.get(model.get("name")) if isinstance(model, dict) else None
         try:
-            (dest / out_name).write_bytes(export_bytes(item, values, renames))
+            write_bytes_atomic(dest / out_name, export_bytes(item, values, renames))
             written.append(out_name)
         except Exception as e:  # noqa: BLE001 - a re-encoder may raise anything
             # a mesh, mao or image that explodes must not take the batch with
@@ -197,7 +198,7 @@ def export_all(dest, tint=False, tint_name="", only=None):
             try:
                 patched = _phy_bytes(item)
                 if patched is not None:
-                    (dest / phy_name).write_bytes(patched)
+                    write_bytes_atomic(dest / phy_name, patched)
                     written.append(phy_name)
             except Exception as e:  # noqa: BLE001
                 # the write is inside the guard too: a full disk or a read-only
