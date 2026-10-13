@@ -372,3 +372,24 @@ def test_mesh_fixture_decodes_its_geometry():
     reader = PhyReader(MESH_PHY.read_bytes())
     meshes = [s.mesh for s in reader.shapes if s.mesh is not None]
     assert [(m.vertex_count, m.tri_count) for m in meshes] == [(28, 52), (16, 28)]
+
+
+def test_adding_a_primitive_the_file_defines_but_never_uses():
+    # cai_lrgcrna_0.phy defines boxs and has no box instance to copy. The old
+    # fallback cloned the mdlh root at data offset 0, which left one of the
+    # root's pointers in the primitive's unused tail.
+    raw = (DATA_DIR / "cai_lrgcrna_0.phy").read_bytes()
+    assert b"boxs" in raw
+
+    out = add_shapes(raw, [{"bone": "GOB", "kind": "box",
+                            "box_dim": (0.3, 0.4, 0.5), "name": "TESTBOX"}])
+    dims = struct.pack("<3f", 0.3, 0.4, 0.5)
+    at = out.find(dims)
+    assert at > 0
+    # boxs is 16 bytes and BOX_DIM is the first 12; the rest must be ours
+    assert out[at + 12 : at + 16] == b"\x00\x00\x00\x00"
+
+    reader = PhyReader(out)
+    assert reader.mmh_name == "cai_lrgcrna_0.mmh"
+    added = next(s for s in reader.shapes if s.name == "TESTBOX")
+    assert added.box_dim == pytest.approx((0.3, 0.4, 0.5), abs=1e-6)

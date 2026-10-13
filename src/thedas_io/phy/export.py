@@ -340,8 +340,18 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
         siblings = parent_children[key]
 
         # the primitive's own parameters
-        type_base = _clone(writer, gff, type_si,
-                           next((b for _p, si, b in instances if si == type_si), 0))
+        #
+        # A file can define a primitive struct without ever instantiating one
+        # (cai_lrgcrna_0.phy defines boxs and uses none), so there is nothing
+        # to copy. Offset 0 is the mdlh root, and copying that left one of the
+        # root's pointers sitting in the primitive's unused tail. Build the
+        # instance clean instead: every field in these structs is one we set
+        # below, so there is nothing worth inheriting.
+        source = next((b for _p, si, b in instances if si == type_si), None)
+        if source is None:
+            type_base = writer.alloc(bytes(gff.struct_defs[type_si].struct_size))
+        else:
+            type_base = _clone(writer, gff, type_si, source)
         if kind == "capsule":
             _set_inline(writer, gff, type_si, type_base, L_RADIUS, "<f",
                         float(spec.get("radius") or 0.05))
