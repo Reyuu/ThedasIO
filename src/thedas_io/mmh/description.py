@@ -11,7 +11,10 @@ L_CHILDREN = 6999
 
 
 def _kind_name(fourcc):
-    return fourcc.to_bytes(4, "little").decode("ascii")
+    # "replace" so a fourcc with a high byte decodes to a name instead of
+    # killing the read; this runs for every node and every orphan def. The msh
+    # module's copy of this helper already does this.
+    return fourcc.to_bytes(4, "little").decode("ascii", "replace")
 
 
 class Node:

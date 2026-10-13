@@ -110,3 +110,14 @@ def test_clone_roundtrip():
 def test_wrong_file_type_rejected():
     with pytest.raises(ValueError, match="Invalid MMH file_type"):
         MMHReader((DATA_DIR / "c_corspidr_3.msh").read_bytes())
+
+
+def test_a_fourcc_with_a_high_byte_still_decodes():
+    # _kind_name runs for every node and every orphan def, so one def with a
+    # non-ascii byte used to kill the whole read with a UnicodeDecodeError.
+    # The msh module's copy of this helper already passed errors="replace".
+    from thedas_io.mmh.description import _kind_name
+
+    assert _kind_name(int.from_bytes(b"node", "little")) == "node"
+    assert _kind_name(int.from_bytes(b"\xff\xfe\x00\x00", "little")) == "��\x00\x00"
+    assert _kind_name(int.from_bytes(b"\x80\x81\x82\x83", "little")) == "����"
