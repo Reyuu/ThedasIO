@@ -802,6 +802,27 @@ class _TopologyChanged(ValueError):
     pass
 
 
+def _chunk_identity(chunk) -> tuple:
+    # a name is not an identity: files repeat it
+    return (chunk.name, chunk.cells.get(8006), chunk.cells.get(8002))
+
+
+def _resolve_base_chunks(base, planned: list) -> list:
+    by_identity: dict = {}
+    for candidate in base.chunks:
+        by_identity.setdefault(_chunk_identity(candidate), []).append(candidate)
+
+    out = []
+    for obj, chunk, decoded, mode, state in planned:
+        if mode == "raw":
+            continue
+        matches = by_identity.get(_chunk_identity(chunk)) or []
+        if not matches:
+            raise ValueError(f"chunk {chunk.name!r} is not in the source file")
+        out.append((matches[0], obj, decoded, mode, state))
+    return out
+
+
 def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
     # re-encode when Blender geometry diverges from the decoded source
     mesh = item["model"]
@@ -831,24 +852,24 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
     base = MSHReader(item["raw"]).mesh  # pristine copy: untouched bytes stay verbatim
     vblob, iblob = bytearray(base.vertex_data), bytearray(base.index_data)  # type: ignore
     base_blob = bytes(vblob)
+    targeted = _resolve_base_chunks(base, planned)
 
-    for i, (obj, _, decoded, mode, state) in enumerate(planned):
+    for bc, obj, decoded, mode, state in targeted:
         if mode == "patch":
-            _patch_chunk(base.chunks[i], obj, state, decoded, base_blob, vblob, iblob)  # type: ignore
+            _patch_chunk(bc, obj, state, decoded, base_blob, vblob, iblob)
 
     # 8009 is a mesh-wide *element* offset into one shared index blob, so every
     # chunk in a file has to agree on the width -- widening one chunk in place
     # would move every other chunk's start. Run the rebuilds first to find out
     # whether the mesh outgrew u16, then pack every chunk at one agreed width.
     rebuilt = []
-    for i, (obj, _, decoded, mode, state) in enumerate(planned):
+    for bc, obj, decoded, mode, state in targeted:
         if mode == "rebuild":
-            rebuilt.append((i, obj, _rebuild_chunk(base.chunks[i], obj, state)))  # type: ignore
+            rebuilt.append((bc, obj, _rebuild_chunk(bc, obj, state)))
 
     widened = _widen_indices(base, rebuilt, iblob)
 
-    for i, obj, (vreg, indices, nrows, ncounts, bounds, rmap) in rebuilt:
-        bc = base.chunks[i]  # type: ignore
+    for bc, obj, (vreg, indices, nrows, ncounts, bounds, rmap) in rebuilt:
         while len(vblob) % 4:  # appended regions start %4: offsets stay integral
             vblob.append(0)
         bc.cells[8006] = len(vblob)
@@ -890,17 +911,19 @@ def _append_index_region(chunk, iblob: bytearray, indices, ncounts: int) -> None
 
 
 def _widen_indices(base, rebuilt: list, iblob: bytearray) -> bool:
-    # pPromote the whole mesh to 32-bit indices if a rebuild outgrew u16
-    if not any(result[2] > 0xFFFF for _, _, result in rebuilt):
+    # promote the whole mesh to 32-bit indices if a rebuild outgrew u16
+    if not any(result[2] > 0xFFFF for _chunk, _obj, result in rebuilt):
         return False
 
-    fresh = {i: result for i, _obj, result in rebuilt}
+    # keyed by the chunk itself: it is the same object _msh_bytes resolved, so
+    # no cell has to be read here that a rebuild might have changed
+    fresh = {chunk: result for chunk, _obj, result in rebuilt}
     new_blob = bytearray()
-    for i, chunk in enumerate(base.chunks):  # type: ignore
+    for chunk in base.chunks:  # type: ignore
         ncounts = chunk.cells.get(8002, 0)
-        if i in fresh:
-            indices = fresh[i][1]
-            ncounts = fresh[i][3]
+        if chunk in fresh:
+            indices = fresh[chunk][1]
+            ncounts = fresh[chunk][3]
         else:
             # re-read this chunk's untouched indices at its current width
             width = chunk_index_width(chunk)

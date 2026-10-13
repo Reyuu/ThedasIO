@@ -224,3 +224,42 @@ def test_write_mao_is_pretty_printed(tmp_path):
     assert (
         parse_mao(text)["textures"] == parse_mao(STOCK_MAO.read_bytes().decode("utf-8"))["textures"]
     )
+
+
+class _Chunk:
+    # stand-in for msh.Chunk: the resolver only reads name and two cells
+    def __init__(self, name, vertex_offset, index_count):
+        self.name = name
+        self.cells = {8006: vertex_offset, 8002: index_count}
+
+
+def test_chunks_are_matched_by_identity_not_by_position():
+    # A reload can drop the pairs whose object or chunk is gone, so
+    # item["objects"] can be shorter than the file's chunk list. Walking it by
+    # position then patches chunk A's geometry into chunk B's region.
+    from thedas_io.export import _resolve_base_chunks
+
+    file_chunks = [_Chunk("a", 0, 300), _Chunk("b", 900, 120), _Chunk("c", 1500, 60)]
+    base = SimpleNamespace(chunks=file_chunks)
+
+    # only b and c survived the reload, and c's entry came first
+    planned = [
+        ("obj_c", file_chunks[2], None, "patch", None),
+        ("obj_b", file_chunks[1], None, "patch", None),
+        ("obj_a", file_chunks[0], None, "raw", None),
+    ]
+    resolved = _resolve_base_chunks(base, planned)
+
+    assert [entry[1] for entry in resolved] == ["obj_c", "obj_b"]
+    assert resolved[0][0] is file_chunks[2]
+    assert resolved[1][0] is file_chunks[1]
+
+
+def test_a_chunk_missing_from_the_source_is_an_error_not_a_silent_shift():
+    from thedas_io.export import _resolve_base_chunks
+
+    base = SimpleNamespace(chunks=[_Chunk("a", 0, 300)])
+    planned = [("obj_x", _Chunk("gone", 0, 300), None, "patch", None)]
+
+    with pytest.raises(ValueError, match="not in the source file"):
+        _resolve_base_chunks(base, planned)
