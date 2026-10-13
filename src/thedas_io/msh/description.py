@@ -282,6 +282,7 @@ class MSHReader:
         self.gff = None
         self.root = {}
         self.mesh = None
+        self.unknown_fourccs = []
         self._parse()
 
     def _parse(self):
@@ -289,15 +290,15 @@ class MSHReader:
         if gff.file_type != FILE_TYPE:
             raise ValueError(f"Invalid MSH file_type {gff.file_type!r}, expected {FILE_TYPE!r}")
 
-        seen = set()
-        for sd in gff.struct_defs:
-            seen.add(sd.type_fourcc)
-        unknown = []
-        for f in seen:
-            if f not in KNOWN_FOURCCS:
-                unknown.append(f.to_bytes(4, "little").decode("ascii", "replace"))
-        if unknown:
-            raise ValueError(f"unknown struct kinds {sorted(unknown)}")
+        # Struct kinds outside the schema are carried, not refused: the def
+        # table is walked generically and the writer clones it, so a new kind in
+        # a patch must load and survive export. Refusing it here made one
+        # unknown fourcc -- even an unused one -- unreadable.
+        self.unknown_fourccs = sorted(
+            f.to_bytes(4, "little").decode("ascii", "replace")
+            for f in {sd.type_fourcc for sd in gff.struct_defs}
+            if f not in KNOWN_FOURCCS
+        )
 
         gff.get_struct(FOURCC_MESH)
         self.gff = gff
@@ -354,24 +355,145 @@ class MSHReader:
         return self.root.get(L_INSTANCED_STREAM)  # type: ignore
 
 
+def _field_offsets(struct_def, labels):
+    # data_index of each label inside a struct instance, missing ones skipped
+    wanted = set(labels)
+    out = {}
+    for f in struct_def.field_instances:
+        if f.label_id in wanted:
+            out[f.label_id] = f.data_index
+    return out
+
+
+def _chunk_unchanged(a, orig) -> bool:
+    if a.additional_streams is not None:
+        return False
+    decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
+             for d in a.declarators]
+    name, bounds, cells, decls0 = orig
+    if a.name != name or a.bounds != bounds or decls != decls0:
+        return False
+    return all(a.cells.get(label) == cells.get(label) for label in L_CHUNK_CELLS)
+
+
+def _chunk_bases(gff: GFFReader) -> list:
+    # data-block offsets of the root's chunk instances, in file order
+    root = gff.struct_defs[0]
+    fields = _field_offsets(root, (L_CHUNKS,))
+    if L_CHUNKS not in fields:
+        return []
+    ref = struct.unpack_from("<I", gff.data, gff.data_offset + fields[L_CHUNKS])[0]
+    (count,) = struct.unpack_from("<I", gff.data, gff.data_offset + ref)
+    chunks_def = gff.struct_defs[
+        next(f.type_id for f in root.field_instances if f.label_id == L_CHUNKS)
+    ]
+    return [ref + 4 + i * chunks_def.struct_size for i in range(count)]
+
+
 class MSHWriter:
     PLATFORM = b"PC  "
     VERSION = b"V0.1"
 
-    def __init__(self, mesh):
+    def __init__(self, mesh, reader=None):
         if not isinstance(mesh, Mesh):
             raise TypeError(f"need a Mesh, got {type(mesh)}")
         self.mesh = mesh
+        self._reader = reader
+        self._orig = None
+        if reader is not None:
+            src = reader.mesh
+            self._orig = {
+                "name": src.name,
+                "index_format": src.index_format,
+                "vertex": list(src.vertex_data),
+                "index": list(src.index_data),
+                "chunks": [
+                    (c.name, c.bounds, dict(c.cells),
+                     [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
+                      for d in c.declarators])
+                    for c in src.chunks
+                ],
+            }
 
     @classmethod
     def from_reader(cls, reader):
-        return cls(reader.mesh)
+        return cls(reader.mesh, reader)
 
     @classmethod
     def from_bytes(cls, data):
-        return cls(MSHReader(data).mesh)
+        reader = MSHReader(data)
+        return cls(reader.mesh, reader)
 
     def write(self):
+        if self._reader is not None:
+            return self._patched()
+        return self._rebuilt()
+
+    def _patched(self) -> bytes:
+        # clone-then-patch: only what actually changed is written, so an
+        # untouched mesh comes back the same size it went in
+        gff = self._reader.gff
+        w = GFFWriter.from_reader(gff)
+        mesh = self.mesh
+        orig = self._orig
+        at = _field_offsets(gff.struct_defs[0], (L_NAME, L_CHUNKS, L_VERTEX_DATA,
+                                                L_INDEX_DATA, L_INDEX_FORMAT,
+                                                L_INSTANCED_STREAM))
+
+        if L_NAME in at and mesh.name != orig["name"]:
+            value = NULL_REF
+            if mesh.name is not None:
+                value = w.alloc_ecstring(mesh.name)
+            struct.pack_into("<I", w.data_block, at[L_NAME], value)
+        if L_INDEX_FORMAT in at and (mesh.index_format or 0) != (orig["index_format"] or 0):
+            struct.pack_into("<I", w.data_block, at[L_INDEX_FORMAT], mesh.index_format or 0)
+        if L_INSTANCED_STREAM in at:
+            w.data_block[at[L_INSTANCED_STREAM]] = mesh.instanced_stream or 0
+        if L_VERTEX_DATA in at and list(mesh.vertex_data) != orig["vertex"]:
+            ref = w.alloc_scalar_list(0, list(mesh.vertex_data))
+            struct.pack_into("<I", w.data_block, at[L_VERTEX_DATA], ref)
+        if L_INDEX_DATA in at and list(mesh.index_data) != orig["index"]:
+            ref = w.alloc_scalar_list(0, list(mesh.index_data))
+            struct.pack_into("<I", w.data_block, at[L_INDEX_DATA], ref)
+
+        chnk_def = None
+        if L_CHUNKS in at:
+            type_id = next(f.type_id for f in gff.struct_defs[0].field_instances
+                           if f.label_id == L_CHUNKS)
+            chnk_def = gff.struct_defs[type_id]
+        offsets = {}
+        size = 0
+        if chnk_def is not None:
+            offsets = _field_offsets(
+                chnk_def, (L_NAME, L_CHUNK_DECLARATORS, L_CHUNK_STREAMS,
+                           8034, *L_CHUNK_CELLS)
+            )
+            size = chnk_def.struct_size
+
+        bases = _chunk_bases(gff)
+        refs = []
+        for i, chunk in enumerate(mesh.chunks):
+            if i < len(bases) and i < len(orig["chunks"]) and _chunk_unchanged(chunk, orig["chunks"][i]):
+                refs.append(bases[i])
+                continue
+            if i < len(bases):
+                # rewrite the file's own instance, keeping any bytes the schema
+                # does not model
+                self._check_chunk(chunk)
+                inst = bytearray(w.data_block[bases[i] : bases[i] + size])
+                self._fill_chunk(w, chunk, inst, offsets)
+                w.data_block[bases[i] : bases[i] + size] = inst
+                refs.append(bases[i])
+            else:
+                refs.append(w.alloc(self._chunk_bytes(w, chunk)))
+        if L_CHUNKS in at and (len(refs) != len(bases) or refs != bases):
+            blob = struct.pack("<I", len(refs)) + b"".join(
+                struct.pack("<I", r) for r in refs
+            )
+            struct.pack_into("<I", w.data_block, at[L_CHUNKS], w.alloc(blob))
+        return w.write()
+
+    def _rebuilt(self) -> bytes:
         w = GFFWriter(self.PLATFORM, FILE_TYPE, self.VERSION)
         for fourcc, size, fields in _SCHEMA:
             sd = GFFStructDef(fourcc, len(fields), 0, size)
@@ -403,7 +525,7 @@ class MSHWriter:
         return w.write()
 
     @staticmethod
-    def _write_chunk(w, chunk):
+    def _check_chunk(chunk):
         if chunk.bounds is None:
             raise ValueError(
                 f"Chunk {chunk.name!r} has no bounds (chnk 8020 is inline, never NULL)"
@@ -412,21 +534,16 @@ class MSHWriter:
             raise NotImplementedError(
                 "strm instances (chnk 8011) have no observed samples to encode against"
             )
-
         try:
-            bounds = b""
-            for l in (L_BOUNDS_MIN, L_BOUNDS_MAX, L_BOUNDS_SPHERE):
-                bounds += struct.pack("<4f", *chunk.bounds[l])
+            for label in (L_BOUNDS_MIN, L_BOUNDS_MAX, L_BOUNDS_SPHERE):
+                struct.pack("<4f", *chunk.bounds[label])
         except (KeyError, struct.error) as e:
             raise ValueError(f"chunk {chunk.name!r} has bad bounds: {e}")
 
-        if chunk.name is None:
-            name_ref = NULL_REF
-        else:
-            name_ref = w.alloc_ecstring(chunk.name)
-
+    @staticmethod
+    def _declarator_bytes(chunk) -> bytes:
         try:
-            decls = struct.pack("<I", len(chunk.declarators)) + b"".join(
+            return struct.pack("<I", len(chunk.declarators)) + b"".join(
                 struct.pack(
                     "<iiIIII", d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
                 )
@@ -434,14 +551,54 @@ class MSHWriter:
             )
         except struct.error as e:
             raise ValueError(f"Chunk {chunk.name!r} has an unencodable declarator: {e}")
-        decl_ref = w.alloc(decls)
 
+    def _chunk_bytes(self, w, chunk) -> bytes:
+        # a whole chunk instance, laid out from the schema offsets
+        self._check_chunk(chunk)
         inst = bytearray(b"\xff" * CHNK_STRUCT_SIZE)
-        inst[0:BNDS_STRUCT_SIZE] = bounds
+
+        bounds = b""
+        for label in (L_BOUNDS_MIN, L_BOUNDS_MAX, L_BOUNDS_SPHERE):
+            bounds += struct.pack("<4f", *chunk.bounds[label])
+        if len(inst) >= BNDS_STRUCT_SIZE:
+            inst[0:BNDS_STRUCT_SIZE] = bounds
+
+        decl_ref = w.alloc(self._declarator_bytes(chunk))
+        name_ref = NULL_REF
+        if chunk.name is not None:
+            name_ref = w.alloc_ecstring(chunk.name)
         struct.pack_into("<I", inst, 48, name_ref)
         for i, label in enumerate(range(8000, 8010)):
             struct.pack_into("<I", inst, 52 + 4 * i, chunk.cells.get(label, 0))
         struct.pack_into("<I", inst, 92, NULL_REF)
         struct.pack_into("<I", inst, 96, decl_ref)
         struct.pack_into("<I", inst, 100, chunk.cells.get(8034, 0))
-        return w.alloc(bytes(inst))
+        return bytes(inst)
+
+    def _fill_chunk(self, w, chunk, inst: bytearray, offsets: dict) -> None:
+        # patch only the fields the schema models, by label, so a file that
+        # lays its chnk out differently still writes correctly
+        self._check_chunk(chunk)
+        for label in (L_BOUNDS_MIN, L_BOUNDS_MAX, L_BOUNDS_SPHERE):
+            if label in offsets:
+                struct.pack_into("<4f", inst, offsets[label], *chunk.bounds[label])
+        if L_NAME in offsets:
+            value = NULL_REF
+            if chunk.name is not None:
+                value = w.alloc_ecstring(chunk.name)
+            struct.pack_into("<I", inst, offsets[L_NAME], value)
+        for label in L_CHUNK_CELLS:
+            if label in offsets:
+                struct.pack_into("<I", inst, offsets[label], chunk.cells.get(label, 0))
+        if 8034 in offsets:
+            struct.pack_into("<I", inst, offsets[8034], chunk.cells.get(8034, 0))
+        if L_CHUNK_STREAMS in offsets:
+            # strms is never carried (see _check_chunk); leaving the source
+            # bytes here would keep a garbage count the reader then chokes on
+            struct.pack_into("<I", inst, offsets[L_CHUNK_STREAMS], NULL_REF)
+        if L_CHUNK_DECLARATORS in offsets:
+            ref = w.alloc(self._declarator_bytes(chunk))
+            struct.pack_into("<I", inst, offsets[L_CHUNK_DECLARATORS], ref)
+
+    def _write_chunk(self, w, chunk):
+        return w.alloc(self._chunk_bytes(w, chunk))

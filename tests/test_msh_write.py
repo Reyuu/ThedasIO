@@ -79,3 +79,59 @@ def test_streams_refused_without_sample():
     mesh.chunks[0].additional_streams = []
     with pytest.raises(NotImplementedError, match="8011"):
         MSHWriter(mesh).write()
+
+
+def _splice_unknown_def(raw: bytes, fourcc: bytes) -> bytes:
+    """Add one struct def with a fourcc the schema does not know."""
+    import struct as _struct
+
+    r = GFFReader(raw)
+    # 16 bytes of defs are inserted before the field block, so every absolute
+    # offset into the file from there on shifts up by 16
+    header = raw[:8] + _struct.pack("<4s4s4sII", r.platform, r.file_type, r.version,
+                                  r.nstruct + 1, r.data_offset + 16)
+    defs = bytearray(raw[28 : 28 + r.nstruct * 16])
+    # every field_offset shifts by the 16 bytes just inserted
+    for i in range(r.nstruct):
+        at = 8 + i * 16
+        fo = _struct.unpack_from("<I", defs, at)[0]
+        _struct.pack_into("<I", defs, at, fo + 16)
+    fields = raw[28 + r.nstruct * 16 : r.data_offset]
+    extra = _struct.pack("<IIII", int.from_bytes(fourcc, "little"), 0, 0, 4)
+    return header + bytes(defs) + extra + fields + raw[r.data_offset:]
+
+
+def test_an_unknown_struct_kind_loads_and_survives_export():
+    # one new fourcc used to make the whole file unreadable; the reader walks
+    # the def table generically and the writer clones it, so it has to survive
+    raw = (DATA_DIR / "c_corspidr_3.msh").read_bytes()
+    spliced = _splice_unknown_def(raw, b"zzzz")
+
+    reader = MSHReader(spliced)
+    assert reader.unknown_fourccs == ["zzzz"]
+    assert reader.mesh.chunks  # the file still reads as a mesh
+
+    out = MSHWriter.from_reader(reader).write()
+    assert "zzzz" in {sd.type_fourcc.to_bytes(4, "little").decode("ascii", "replace")
+                      for sd in GFFReader(out).struct_defs}
+
+
+def test_an_untouched_mesh_keeps_its_size_and_def_table():
+    # clone-then-patch must not re-lay out a file that did not change
+    raw = (DATA_DIR / "c_corspidr_3.msh").read_bytes()
+    reader = MSHReader(raw)
+    out = MSHWriter.from_reader(reader).write()
+    assert len(out) == len(raw)
+    assert [sd.type_fourcc for sd in GFFReader(out).struct_defs] == \
+        [sd.type_fourcc for sd in reader.gff.struct_defs]
+
+
+def test_an_edited_mesh_still_roundtrips_through_the_patch_path():
+    raw = (DATA_DIR / "c_corspidr_3.msh").read_bytes()
+    writer = MSHWriter.from_bytes(raw)
+    writer.mesh.name = "renamed"
+    writer.mesh.vertex_data = list(writer.mesh.vertex_data)[:-8]
+    back = MSHReader(writer.write()).mesh
+    assert back.name == "renamed"
+    assert back.vertex_data == writer.mesh.vertex_data
+    assert back.chunks
