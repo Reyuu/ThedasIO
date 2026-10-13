@@ -1309,8 +1309,44 @@ def _patch_tangents(chunk, obj, state, base_blob, vblob, reframed: set) -> None:
             vblob[start : start + len(blob)] = blob
 
 
+def _modelled_usages() -> set:
+    # the vertex channels _encode_fresh can rebuild from Blender
+    return {
+        _USAGE_POSITION,
+        _USAGE_NORMAL,
+        _USAGE_TEXCOORD,
+        _USAGE_WEIGHT,
+        _USAGE_INDICES,
+        _USAGE_TANGENT,
+        _USAGE_BINORMAL,
+    }
+
+
+def _unmodelled_usages(chunk) -> list:
+    # Channels we would have to zero after a topology change. A rebuilt row
+    # starts as zeros and only the modelled usages get written over them, so
+    # anything else in the chunk (PSIZE, vertex colour, fog, depth) silently
+    # became 0. Say so instead.
+    modelled = _modelled_usages()
+    return sorted({
+        d.usage for d in chunk.declarators
+        if not d.is_terminator and d.usage not in modelled
+    })
+
+
 def _rebuild_chunk(chunk, obj, bstate):
     # fresh vertex/index regions after a topology change (subdivide, quads)
+
+    # a fresh vertex row starts zeroed, so anything we cannot re-encode has to
+    # be refused rather than quietly written out as zeros
+    unmodelled = _unmodelled_usages(chunk)
+    if unmodelled:
+        raise ValueError(
+            f"{obj.name}: cannot rebuild this chunk, it stores vertex channels "
+            f"this exporter does not model (usage {unmodelled}); make the edit "
+            f"without changing the mesh topology"
+        )
+
     data = _evaluated_mesh(obj)
     if data is None:
         raise ValueError(f"{obj.name}: in Edit Mode — leave Edit Mode, then export")

@@ -199,3 +199,23 @@ def test_weld_sample_matches_measured():
     remapped = [tuple(row_to_vert[v] for v in tri) for tri in build["triangles"]]
     assert all(v < 330 for tri in remapped for v in tri)
     assert len(remapped) == 656
+
+
+def test_unmodelled_vertex_channels_are_reported_not_zeroed():
+    # a rebuilt row starts as zeros and only modelled usages get written over
+    # them, so PSIZE / colour / fog / depth used to become 0 without a word
+    from types import SimpleNamespace
+
+    from thedas_io.export import _unmodelled_usages
+    from thedas_io.msh.description import MSHReader
+
+    chunk = MSHReader((DATA_DIR / "c_corspidr_0.msh").read_bytes()).mesh.chunks[0]
+    assert _unmodelled_usages(chunk) == []  # the shipped mesh only uses ones we model
+
+    chunk.declarators.append(SimpleNamespace(usage=4, is_terminator=False))
+    chunk.declarators.append(SimpleNamespace(usage=10, is_terminator=False))
+    assert _unmodelled_usages(chunk) == [4, 10]
+
+    # a terminator is not a channel and must not be reported
+    chunk.declarators.append(SimpleNamespace(usage=99, is_terminator=True))
+    assert _unmodelled_usages(chunk) == [4, 10]
