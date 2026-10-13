@@ -2754,6 +2754,7 @@ _SCENE_PROPS = (
     "thedas_io_disk_file",
     "thedas_io_disk_local",
     "thedas_io_weld",
+    "thedas_io_collision_bone",
     "thedas_io_sp_split_packed",
     "thedas_io_sp_keep_resolution",
 )
