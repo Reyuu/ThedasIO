@@ -152,7 +152,7 @@ jobs:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
           file_id: ${{ vars.NEXUS_FILE_ID }}
           mod_id: ${{ vars.NEXUS_MOD_ID }}
-          filename: ThedasIO-${{ needs.build.outputs.tag }}.zip
+          filename: release/ThedasIO-${{ needs.build.outputs.tag }}.zip
           version: ${{ needs.build.outputs.tag }}
           display_name: ThedasIO - ${{ needs.build.outputs.tag }}
           description: This is release ${{ needs.build.outputs.tag }} of ThedasIO.
