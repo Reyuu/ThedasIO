@@ -6,11 +6,13 @@ self-roundtrip, rename, and writer guardrails.
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from conftest import DATA_DIR
-from thedas_io.gff40.description import FLAGS, GFFReader, GFFWriter
-from thedas_io.msh.description import _SCHEMA, MSHReader, MSHWriter, load
+from thedas_io.gff40.description import FLAGS, GFFField, GFFReader, GFFWriter
+from thedas_io.msh.description import _SCHEMA, MSHReader, MSHWriter, _chunk_bases, load
 
 MSH_PATH = DATA_DIR / "c_corspidr_3.msh"
 
@@ -168,3 +170,27 @@ def test_the_chunk_list_shape_is_read_from_the_flags():
         field, _ref, _size, count = _chunk_list(gff)
         assert field.flags == FLAGS["LIST_OF_REFS"], name
         assert count == len(MSHReader((DATA_DIR / name).read_bytes()).mesh.chunks)
+
+
+def test_a_chunk_cell_outside_the_schema_survives_export():
+    # the chnk struct's tail is unused; a cell there is neither in
+    # L_CHUNK_CELLS nor written by _fill_chunk, so it only survives because the
+    # patch path rewrites the file's own instance in place
+    raw = bytearray((DATA_DIR / "c_corspidr_0.msh").read_bytes())
+    probe = MSHReader(bytes(raw))
+    base = _chunk_bases(probe.gff)[0]
+    at = probe.gff.data_offset + base + 104
+    struct.pack_into("<I", raw, at, 0xABCDEF01)
+
+    reader = MSHReader(bytes(raw))
+    chnk = next(sd for sd in reader.gff.struct_defs
+                if sd.type_fourcc == int.from_bytes(b"chnk", "little"))
+    chnk.field_instances.append(GFFField(6999, 4, 0, 104))
+
+    out = MSHReader(MSHWriter.from_reader(reader).write())
+    back_base = _chunk_bases(out.gff)[0]
+    got = struct.unpack_from("<I", out.gff.data,
+                             out.gff.data_offset + back_base + 104)[0]
+    assert got == 0xABCDEF01
+    # known as bytes in the file, but the Chunk model does not surface it
+    assert 6999 not in out.mesh.chunks[0].cells
