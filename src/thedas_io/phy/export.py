@@ -314,6 +314,10 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
     # once a parent's list has been rewritten it lives in the writer's block, not
     # in the source file, so the running list has to be carried here
     parent_children: dict = {}
+    # names already in the file, plus the ones this batch writes: a name written
+    # earlier in the loop only exists in the writer, so re-reading the source
+    # reader would hand the same name out twice
+    taken = _existing_names(gff)
     for spec in additions:
         kind = str(spec.get("kind") or "capsule").lower()
         if kind not in PRIMITIVES:
@@ -360,14 +364,18 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
                     [float(v) for v in tuple(pos)[:3]] + [1.0])
         _set_inline(writer, gff, shap_si, shape_base, L_SHAPE_ROT, "<4f",
                     [float(v) for v in tuple(rot)[:4]])
-        taken = _existing_names(gff)
-        base_name = str(spec["name"]) if spec.get("name") else \
-            f"{_add_label(kind)}_{bone}" if bone else _add_label(kind)
+        base_name = _add_label(kind)
+        if bone:
+            base_name = f"{_add_label(kind)}_{bone}"
+        if spec.get("name"):
+            base_name = str(spec["name"])
+
         name = base_name
         n = 1
         while name in taken:
             n += 1
             name = f"{base_name}{n}"
+        taken.add(name)
         _pack_string(writer, gff, shap_si, shape_base, L_SHAPE_NAME, name)
         masks = spec.get("masks") or {}
         for short, value in masks.items():

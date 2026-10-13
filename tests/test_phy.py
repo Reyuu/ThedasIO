@@ -222,6 +222,19 @@ def test_adding_twice_gives_two_shapes():
     assert {"A", "B"} <= names
 
 
+def test_two_additions_with_the_same_name_get_distinct_names():
+    # the dedupe has to see names written earlier in the same batch, and those
+    # live in the writer's data block rather than in the source file
+    raw = load_raw()
+    out = add_shapes(raw, [
+        {"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "DUP"},
+        {"bone": "Neck1", "kind": "capsule", "radius": 0.06, "height": 0.1, "name": "DUP"},
+    ])
+    names = [s.name for s in PhyReader(out).shapes]
+    assert names.count("DUP") == 1
+    assert "DUP2" in names
+
+
 def test_added_shape_can_then_be_edited_like_any_other():
     raw = load_raw()
     added = add_shapes(raw, [{"bone": "Neck1", "kind": "capsule",
