@@ -196,12 +196,14 @@ def export_all(dest, tint=False, tint_name="", only=None):
             phy_name = item.get("phy_name") or ""
             try:
                 patched = _phy_bytes(item)
-            except Exception as e:  # noqa: BLE001
-                errors.append(_why(phy_name, e))
-            else:
                 if patched is not None:
                     (dest / phy_name).write_bytes(patched)
                     written.append(phy_name)
+            except Exception as e:  # noqa: BLE001
+                # the write is inside the guard too: a full disk or a read-only
+                # folder here must not take the batch down and lose every
+                # other file this run already reported
+                errors.append(_why(phy_name, e))
 
     return written, errors
 

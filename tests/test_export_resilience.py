@@ -13,6 +13,7 @@ import struct
 
 import pytest
 
+from thedas_io import export as export_module
 from thedas_io.export import (
     _DIRTY,
     ITEMS,
@@ -113,6 +114,29 @@ def test_actionable_failures_keep_their_plain_text(only_item, tmp_path):
         del _DIRTY["boom"]
 
     assert errors == ["a.msh: in Edit Mode - leave Edit Mode, then export"]
+
+
+def test_a_failed_phy_write_does_not_take_the_batch_with_it(only_item, tmp_path, monkeypatch):
+    # the .phy write used to sit outside the guard, so an OSError from it
+    # escaped export_all and the user was told nothing about the other files
+    monkeypatch.setattr(export_module, "phy_enabled", lambda context=None: True)
+    monkeypatch.setattr(export_module, "_phy_bytes", lambda item: b"phy bytes")
+
+    # a folder where the .phy should go: writing the file raises OSError
+    (tmp_path / "c_dog.phy").mkdir()
+    only_item["c_dog.mmh"] = _item("c_dog.mmh", kind="mmh")
+    only_item["c_dog.mmh"].update({"phy_raw": b"raw", "phy_name": "c_dog.phy"})
+    only_item["good.msh"] = _item("good.msh", kind="quiet")
+    _DIRTY["mmh"] = lambda item, tint, renames: None
+    _DIRTY["quiet"] = lambda item, tint, renames: None
+    try:
+        written, errors = export_all(tmp_path)
+    finally:
+        del _DIRTY["quiet"], _DIRTY["mmh"]
+
+    assert written == ["c_dog.mmh", "good.msh"]
+    assert len(errors) == 1
+    assert "c_dog.phy" in errors[0]
 
 
 def test_check_model_reports_an_unreadable_chunk_instead_of_raising(only_item):
