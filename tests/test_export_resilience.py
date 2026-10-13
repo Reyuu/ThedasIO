@@ -122,17 +122,21 @@ def test_a_failed_phy_write_does_not_take_the_batch_with_it(only_item, tmp_path,
     monkeypatch.setattr(export_module, "phy_enabled", lambda context=None: True)
     monkeypatch.setattr(export_module, "_phy_bytes", lambda item: b"phy bytes")
 
+    # _DIRTY is module state and "mmh" is a real registration (_mmh_bytes), so
+    # it has to go back afterwards. The sibling tests delete their keys, which
+    # is safe only because "boom" and "quiet" are kinds nothing registers; doing
+    # that to "mmh" left the re-encoder gone for the rest of the session and a
+    # later rename test wrote a .mmh with its stock mesh reference.
+    monkeypatch.setitem(export_module._DIRTY, "mmh", lambda item, tint, renames: None)
+    monkeypatch.setitem(export_module._DIRTY, "quiet", lambda item, tint, renames: None)
+
     # a folder where the .phy should go: writing the file raises OSError
     (tmp_path / "c_dog.phy").mkdir()
     only_item["c_dog.mmh"] = _item("c_dog.mmh", kind="mmh")
     only_item["c_dog.mmh"].update({"phy_raw": b"raw", "phy_name": "c_dog.phy"})
     only_item["good.msh"] = _item("good.msh", kind="quiet")
-    _DIRTY["mmh"] = lambda item, tint, renames: None
-    _DIRTY["quiet"] = lambda item, tint, renames: None
-    try:
-        written, errors = export_all(tmp_path)
-    finally:
-        del _DIRTY["quiet"], _DIRTY["mmh"]
+
+    written, errors = export_all(tmp_path)
 
     assert written == ["c_dog.mmh", "good.msh"]
     assert len(errors) == 1
