@@ -3,8 +3,12 @@
 1. Open the ThedasIO tab, Export panel.
 2. Tick the rows to export.
 3. Set Export to: the folder standalone files land in. Untouched resources come out byte-identical to the source.
-4. Press Check model first. It reports what export would fix up silently or fail on: unweighted verts, missing materials and textures, degenerate faces, non-tri polygons, unapplied modifiers, shape keys and texture sizes. Read-only.
+4. Press Check model first. It reports what export would fix up silently or fail on: unweighted verts, missing materials and textures, degenerate faces, non-tri polygons, unapplied modifiers, shape keys and texture sizes. Read-only. Each note and what to do about it is listed in [Reference: Check model messages](reference.md#check-model-messages).
 5. Press Export.
+
+Export writes a `.phy` beside a model when you have changed collision and PHY support is on. See [Collision](collision.md).
+
+Animations are exported separately with **Export Animation** in the same panel. See [Animation](animation.md).
 
 Export tint writes each model's DAO Tint values as a `.tnt` for the chargen variation path. Tint resource names the `.tnt` file (e.g. `t3_arm_rlr.tnt`); leave blank for `<model>.tnt`.
 
