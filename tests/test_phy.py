@@ -52,8 +52,13 @@ def test_reads_the_documented_collision_masks():
     assert shape.masks["static_geometry"] == 0
     assert shape.masks["creatures"] == 1
     assert set(shape.editable) >= {
-        "name", "position", "rotation", "radius", "height",
-        "mask_placeables", "mask_static_geometry",
+        "name",
+        "position",
+        "rotation",
+        "radius",
+        "height",
+        "mask_placeables",
+        "mask_static_geometry",
     }
 
 
@@ -72,13 +77,16 @@ def test_the_documented_placeable_edit_round_trips():
     # exactly the four changes from the toolset tutorial
     raw = load_raw()
     shape = PhyReader(raw).shapes[0]
-    out = phy_bytes(raw, {
-        shape.path: {
-            "mask_placeables": 1,
-            "mask_static_geometry": 1,
-            "obj_type": 2,
+    out = phy_bytes(
+        raw,
+        {
+            shape.path: {
+                "mask_placeables": 1,
+                "mask_static_geometry": 1,
+                "obj_type": 2,
+            },
         },
-    })
+    )
     assert out is not None
     after = PhyReader(out)
     edited = after.shapes[0]
@@ -171,11 +179,20 @@ def test_every_fixture_names_a_model(name):
 def test_adding_a_capsule_appends_it_and_keeps_the_rest():
     raw = load_raw()
     before = PhyReader(raw)
-    out = add_shapes(raw, [{
-        "bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.12,
-        "position": (0.02, 0.0, 0.0), "name": "ADDED_CAP",
-        "masks": {"placeables": 1},
-    }])
+    out = add_shapes(
+        raw,
+        [
+            {
+                "bone": "Neck1",
+                "kind": "capsule",
+                "radius": 0.05,
+                "height": 0.12,
+                "position": (0.02, 0.0, 0.0),
+                "name": "ADDED_CAP",
+                "masks": {"placeables": 1},
+            }
+        ],
+    )
     assert out is not None
     after = PhyReader(out)
     assert after.summary()["shapes"] == before.summary()["shapes"] + 1
@@ -194,8 +211,7 @@ def test_adding_a_capsule_appends_it_and_keeps_the_rest():
 def test_adding_leaves_existing_shapes_untouched():
     raw = load_raw()
     before = {s.name: (s.radius, s.height, s.masks, s.position) for s in PhyReader(raw).shapes}
-    out = add_shapes(raw, [{"bone": "Head", "kind": "capsule",
-                            "radius": 0.2, "height": 0.2}])
+    out = add_shapes(raw, [{"bone": "Head", "kind": "capsule", "radius": 0.2, "height": 0.2}])
     assert out is not None
     after = PhyReader(out)
     assert after.mmh_name == PhyReader(raw).mmh_name
@@ -211,10 +227,13 @@ def test_adding_leaves_existing_shapes_untouched():
 def test_adding_twice_gives_two_shapes():
     raw = load_raw()
     start = PhyReader(raw).summary()["shapes"]
-    out = add_shapes(raw, [
-        {"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "A"},
-        {"bone": "Neck1", "kind": "capsule", "radius": 0.06, "height": 0.1, "name": "B"},
-    ])
+    out = add_shapes(
+        raw,
+        [
+            {"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "A"},
+            {"bone": "Neck1", "kind": "capsule", "radius": 0.06, "height": 0.1, "name": "B"},
+        ],
+    )
     assert out is not None
     after = PhyReader(out)
     assert after.summary()["shapes"] == start + 2
@@ -226,10 +245,13 @@ def test_two_additions_with_the_same_name_get_distinct_names():
     # the dedupe has to see names written earlier in the same batch, and those
     # live in the writer's data block rather than in the source file
     raw = load_raw()
-    out = add_shapes(raw, [
-        {"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "DUP"},
-        {"bone": "Neck1", "kind": "capsule", "radius": 0.06, "height": 0.1, "name": "DUP"},
-    ])
+    out = add_shapes(
+        raw,
+        [
+            {"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "DUP"},
+            {"bone": "Neck1", "kind": "capsule", "radius": 0.06, "height": 0.1, "name": "DUP"},
+        ],
+    )
     names = [s.name for s in PhyReader(out).shapes]
     assert names.count("DUP") == 1
     assert "DUP2" in names
@@ -237,8 +259,9 @@ def test_two_additions_with_the_same_name_get_distinct_names():
 
 def test_added_shape_can_then_be_edited_like_any_other():
     raw = load_raw()
-    added = add_shapes(raw, [{"bone": "Neck1", "kind": "capsule",
-                              "radius": 0.05, "height": 0.1, "name": "TUNE"}])
+    added = add_shapes(
+        raw, [{"bone": "Neck1", "kind": "capsule", "radius": 0.05, "height": 0.1, "name": "TUNE"}]
+    )
     shape = next(s for s in PhyReader(added).shapes if s.name == "TUNE")
     out = phy_bytes(added, {shape.path: {"radius": 0.4, "mask_placeables": 1}})
     assert out is not None
@@ -261,8 +284,7 @@ def test_adding_to_an_unknown_bone_is_an_error():
 def test_adding_a_kind_the_file_lacks_is_a_clear_error():
     # this fixture only carries a caps struct, so a box cannot be introduced
     with pytest.raises(ValueError, match="no boxs struct"):
-        add_shapes(load_raw(), [{"bone": "Neck1", "kind": "box",
-                                 "box_dim": (0.1, 0.1, 0.1)}])
+        add_shapes(load_raw(), [{"bone": "Neck1", "kind": "box", "box_dim": (0.1, 0.1, 0.1)}])
 
 
 def build_nxs(verts, tris, tail=b""):
@@ -276,20 +298,18 @@ def build_nxs(verts, tris, tail=b""):
     struct.pack_into("<I", header, 20, 255)
     struct.pack_into("<I", header, 24, 0)
     struct.pack_into("<II", header, 28, len(verts), len(tris))
-    positions = struct.pack(f"<{len(verts) * 3}f",
-                            *[c for v in verts for c in v])
+    positions = struct.pack(f"<{len(verts) * 3}f", *[c for v in verts for c in v])
     if len(verts) <= 256:
-        indices = struct.pack(f"<{3 * len(tris)}B",
-                              *[i for t in tris for i in t])
+        indices = struct.pack(f"<{3 * len(tris)}B", *[i for t in tris for i in t])
     else:
-        indices = struct.pack(f"<{3 * len(tris)}H",
-                              *[i for t in tris for i in t])
+        indices = struct.pack(f"<{3 * len(tris)}H", *[i for t in tris for i in t])
     return bytes(header) + positions + indices + tail
 
 
-TETRA = ([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
-          (0.0, 0.0, 1.0)],
-         [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)])
+TETRA = (
+    [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)],
+    [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)],
+)
 
 
 def test_nxs_parses_a_mesh():
@@ -354,11 +374,12 @@ def test_mesh_shape_exposes_its_decoded_mesh():
     # the capsule fixture has no mesh, but the reader must not crash and the
     # mesh attribute must be None for non-mesh shapes
     assert all(s.mesh is None for s in reader.shapes)
+
+
 MESH_PHY = DATA_DIR / "cai_lrgcrna_0.phy"
 
 
-@pytest.mark.parametrize("name", ["qm_uhm_basb_0.phy", "cai_lrgcrna_0.phy",
-                                  "cai_lrgroofa_0.phy"])
+@pytest.mark.parametrize("name", ["qm_uhm_basb_0.phy", "cai_lrgcrna_0.phy", "cai_lrgroofa_0.phy"])
 def test_untouched_phy_rewrites_byte_identical(name):
     # import -> export with nothing changed must reproduce the file exactly,
     # including the NXS mesh blobs (cai_lrgcrna_0 has two mesh shapes)
@@ -381,8 +402,9 @@ def test_adding_a_primitive_the_file_defines_but_never_uses():
     raw = (DATA_DIR / "cai_lrgcrna_0.phy").read_bytes()
     assert b"boxs" in raw
 
-    out = add_shapes(raw, [{"bone": "GOB", "kind": "box",
-                            "box_dim": (0.3, 0.4, 0.5), "name": "TESTBOX"}])
+    out = add_shapes(
+        raw, [{"bone": "GOB", "kind": "box", "box_dim": (0.3, 0.4, 0.5), "name": "TESTBOX"}]
+    )
     dims = struct.pack("<3f", 0.3, 0.4, 0.5)
     at = out.find(dims)
     assert at > 0

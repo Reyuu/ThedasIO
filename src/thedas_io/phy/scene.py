@@ -53,16 +53,14 @@ def _sphere(radius):
     for i in range(half):
         for j in range(SIDES):
             k = (j + 1) % SIDES
-            faces.append((i * SIDES + j, i * SIDES + k,
-                          (i + 1) * SIDES + k, (i + 1) * SIDES + j))
+            faces.append((i * SIDES + j, i * SIDES + k, (i + 1) * SIDES + k, (i + 1) * SIDES + j))
     return verts, faces
 
 
 def _box(radius):
     s = (float(radius) if radius else 0.25) / 2
     verts = [(x, y, z) for x in (-s, s) for y in (-s, s) for z in (-s, s)]
-    faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1),
-             (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
     return verts, faces
 
 
@@ -95,8 +93,7 @@ def _box_verts(size) -> list:
 
 
 def _box_faces() -> list:
-    return [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1),
-            (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    return [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
 
 
 def _mesh_for_kind(kind: str, radius=None, height=None, size=None) -> bpy.types.Mesh:
@@ -182,18 +179,21 @@ def build_proxies(context, reader: PhyReader, bones) -> list:
 
 def default_name(kind: str, bone: str = "") -> str:
     label = {
-        "caps": "Capsule", "capsule": "Capsule",
-        "sphs": "Sphere", "sphere": "Sphere",
-        "boxs": "Box", "box": "Box",
-        "mshs": "Mesh", "mesh": "Mesh",
+        "caps": "Capsule",
+        "capsule": "Capsule",
+        "sphs": "Sphere",
+        "sphere": "Sphere",
+        "boxs": "Box",
+        "box": "Box",
+        "mshs": "Mesh",
+        "mesh": "Mesh",
     }.get(kind, "Shape")
     return f"{label}_{bone}" if bone else label
 
 
 def add_proxy_for(context, spec, arm_obj, bone) -> bpy.types.Object:
     kind = str(spec.get("kind") or "capsule")
-    mesh = _mesh_for_kind(kind, spec.get("radius"), spec.get("height"),
-                          spec.get("size"))
+    mesh = _mesh_for_kind(kind, spec.get("radius"), spec.get("height"), spec.get("size"))
     name = str(spec.get("name") or default_name(kind, spec.get("bone") or ""))
     obj = bpy.data.objects.new(name, mesh)
     _collection(context).objects.link(obj)
@@ -244,21 +244,19 @@ def _values(obj) -> dict:
     sx, sy, sz = obj.scale
     radius = obj.get("thedas_io_phy_radius")
     if radius is not None:
-        out["radius"] = float(radius) * (sy + sz) / 2.0 if kind in ("caps",) \
-            else float(radius) * sx
+        out["radius"] = float(radius) * (sy + sz) / 2.0 if kind in ("caps",) else float(radius) * sx
     height = obj.get("thedas_io_phy_height")
     if height is not None and kind in ("caps",):
         out["height"] = float(height) * sx
     box = obj.get("thedas_io_phy_box_dim")
     if box is not None:
-        out["box_dim"] = tuple(float(v) * s
-                               for v, s in zip(box, (sx, sy, sz)))
+        out["box_dim"] = tuple(float(v) * s for v, s in zip(box, (sx, sy, sz)))
 
     # strip the prefix, not a suffix: mask names carry underscores of their
     # own, as in static_geometry
     for key in list(obj.keys()):
         if key.startswith(MASK_PREFIX):
-            out[f"mask_{key[len(MASK_PREFIX):]}"] = int(obj[key])
+            out[f"mask_{key[len(MASK_PREFIX) :]}"] = int(obj[key])
     if obj.get("thedas_io_phy_object_type") is not None:
         out["obj_type"] = int(obj["thedas_io_phy_object_type"])
     if obj.get("thedas_io_phy_group") is not None:
@@ -311,14 +309,17 @@ def _adopted_spec(obj, arm_obj, bone_name) -> dict:
     m = arm_inv @ obj.matrix_world
     q = m.to_quaternion()
     base = tuple(m.translation)
-    pos = (base[0] - bone.head_local[0],
-           base[1] - bone.head_local[1],
-           base[2] - bone.head_local[2])
+    pos = (base[0] - bone.head_local[0], base[1] - bone.head_local[1], base[2] - bone.head_local[2])
 
     kind = str(obj.get("thedas_io_phy_kind") or "box")
-    kind = {"capsule": "capsule", "caps": "capsule",
-            "sphere": "sphere", "sphs": "sphere",
-            "box": "box", "boxs": "box"}.get(kind, "box")
+    kind = {
+        "capsule": "capsule",
+        "caps": "capsule",
+        "sphere": "sphere",
+        "sphs": "sphere",
+        "box": "box",
+        "boxs": "box",
+    }.get(kind, "box")
 
     spec = {
         "bone": bone_name,
@@ -331,14 +332,15 @@ def _adopted_spec(obj, arm_obj, bone_name) -> dict:
         # an armature-aligned box that covers the mesh in its current (world)
         # pose, so scale and rotation are both honoured
         if hasattr(obj.data, "bound_box"):
-            corners = [arm_inv @ (obj.matrix_world @ Vector(c))
-                       for c in obj.data.bound_box]
+            corners = [arm_inv @ (obj.matrix_world @ Vector(c)) for c in obj.data.bound_box]
             lo = [min(c[i] for c in corners) for i in range(3)]
             hi = [max(c[i] for c in corners) for i in range(3)]
             spec["box_dim"] = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
-            spec["position"] = ((lo[0] + hi[0]) / 2 - bone.head_local[0],
-                                (lo[1] + hi[1]) / 2 - bone.head_local[1],
-                                (lo[2] + hi[2]) / 2 - bone.head_local[2])
+            spec["position"] = (
+                (lo[0] + hi[0]) / 2 - bone.head_local[0],
+                (lo[1] + hi[1]) / 2 - bone.head_local[1],
+                (lo[2] + hi[2]) / 2 - bone.head_local[2],
+            )
             spec["rotation"] = (0.0, 0.0, 0.0, 1.0)
     else:
         spec["radius"] = float(obj.get("thedas_io_phy_radius") or 0.05)

@@ -122,9 +122,11 @@ def test_bone_frame_mirrors_left_to_right():
         other = heads.get("R" + name[1:])
         if other is None:
             continue
-        if (abs(l[0] + other[0]) < 1e-3
-                and abs(l[1] - other[1]) < 1e-3
-                and abs(l[2] - other[2]) < 1e-3):
+        if (
+            abs(l[0] + other[0]) < 1e-3
+            and abs(l[1] - other[1]) < 1e-3
+            and abs(l[2] - other[2]) < 1e-3
+        ):
             pairs.append((name, frames[name], frames["R" + name[1:]]))
     assert len(pairs) >= 15, f"expected mirror pairs, found {len(pairs)}"
     for name, a, b in pairs:
@@ -159,7 +161,11 @@ def test_bone_heads_sit_on_the_geometry_they_deform():
             build = decode_chunk(mesh, chunk)
             every.extend(build["positions"])
             for local, members in build["groups"].items():
-                g = order[local] if 0 <= local < len(order) and isinstance(order[local], int) else local
+                g = (
+                    order[local]
+                    if 0 <= local < len(order) and isinstance(order[local], int)
+                    else local
+                )
                 clouds.setdefault(g, []).extend(build["positions"][v] for v, _w in members)
     assert clouds, "no weighted vertices decoded"
 
@@ -187,9 +193,11 @@ def test_bone_heads_sit_on_the_geometry_they_deform():
 
 
 def _det3(x, y, z):
-    return (x[0] * (y[1] * z[2] - y[2] * z[1])
-            - x[1] * (y[0] * z[2] - y[2] * z[0])
-            + x[2] * (y[0] * z[1] - y[1] * z[0]))
+    return (
+        x[0] * (y[1] * z[2] - y[2] * z[1])
+        - x[1] * (y[0] * z[2] - y[2] * z[0])
+        + x[2] * (y[0] * z[1] - y[1] * z[0])
+    )
 
 
 def test_node_local_defaults():

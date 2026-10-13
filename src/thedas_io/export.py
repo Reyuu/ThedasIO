@@ -243,8 +243,7 @@ def phy_enabled(context=None) -> bool:
     candidates = []
     get = getattr(addons, "get", None)
     if get is not None:
-        for key in (__package__ or "", "thedas_io",
-                    "bl_ext.user_default.thedas_io"):
+        for key in (__package__ or "", "thedas_io", "bl_ext.user_default.thedas_io"):
             try:
                 candidates.append(get(key))
             except (KeyError, TypeError):
@@ -1350,10 +1349,9 @@ def _unmodelled_usages(chunk) -> list:
     # anything else in the chunk (PSIZE, vertex colour, fog, depth) silently
     # became 0. Say so instead.
     modelled = _modelled_usages()
-    return sorted({
-        d.usage for d in chunk.declarators
-        if not d.is_terminator and d.usage not in modelled
-    })
+    return sorted(
+        {d.usage for d in chunk.declarators if not d.is_terminator and d.usage not in modelled}
+    )
 
 
 def _rebuild_chunk(chunk, obj, bstate):

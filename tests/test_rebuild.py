@@ -365,19 +365,27 @@ def _two_chunk_sample(tmp_path):
     # decodable without either being truncated out from under a real index.
     mesh = load(_SAMPLE)
     mesh.chunks[0].cells[8002] = 6
-    twin = Chunk({
-        2: "Twin",
-        **{k: v for k, v in mesh.chunks[0].cells.items() if k != 8009},
-        8002: 6,
-        8006: 0,
-        8009: 6,
-        8020: mesh.chunks[0].bounds,
-        8025: [
-            {8026: d.stream, 8027: d.offset, 8028: d.dtype, 8029: d.usage,
-             8030: d.usage_index, 8031: d.method}
-            for d in mesh.chunks[0].declarators
-        ],
-    })
+    twin = Chunk(
+        {
+            2: "Twin",
+            **{k: v for k, v in mesh.chunks[0].cells.items() if k != 8009},
+            8002: 6,
+            8006: 0,
+            8009: 6,
+            8020: mesh.chunks[0].bounds,
+            8025: [
+                {
+                    8026: d.stream,
+                    8027: d.offset,
+                    8028: d.dtype,
+                    8029: d.usage,
+                    8030: d.usage_index,
+                    8031: d.method,
+                }
+                for d in mesh.chunks[0].declarators
+            ],
+        }
+    )
     mesh.chunks.append(twin)
     path = tmp_path / "two.msh"
     path.write_bytes(MSHWriter(mesh).write())
@@ -453,7 +461,9 @@ def test_export_below_the_ceiling_still_writes_u16():
     mesh = load(_SAMPLE)
     decoded = decode_chunk(mesh, mesh.chunks[0])
     obj = _MeshObj(_subdivided(decoded))
-    out = _msh_bytes({"model": mesh, "raw": _SAMPLE.read_bytes(), "objects": [(obj, mesh.chunks[0])]})
+    out = _msh_bytes(
+        {"model": mesh, "raw": _SAMPLE.read_bytes(), "objects": [(obj, mesh.chunks[0])]}
+    )
     back = MSHReader(out).mesh
 
     assert chunk_index_width(back.chunks[0], back) == 2
@@ -469,9 +479,13 @@ def test_widened_mesh_stays_widened_on_a_second_export():
     ).mesh
     obj2 = _MeshObj(_subdivided(decode_chunk(first, first.chunks[0])))
     second = _msh_bytes(
-        {"model": first, "raw": _msh_bytes(
-            {"model": mesh, "raw": _SAMPLE.read_bytes(), "objects": [(obj, mesh.chunks[0])]}
-        ), "objects": [(obj2, first.chunks[0])]}
+        {
+            "model": first,
+            "raw": _msh_bytes(
+                {"model": mesh, "raw": _SAMPLE.read_bytes(), "objects": [(obj, mesh.chunks[0])]}
+            ),
+            "objects": [(obj2, first.chunks[0])],
+        }
     )
     back = MSHReader(second).mesh
 

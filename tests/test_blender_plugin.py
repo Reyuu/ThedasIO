@@ -350,9 +350,11 @@ def test_browser_refresh_and_draw(tmp_path):
 
     phy_ctx = SimpleNamespace(
         scene=scene,
-        preferences=SimpleNamespace(addons={
-            "thedas_io": SimpleNamespace(preferences=SimpleNamespace(
-                thedas_io_enable_phy=True))}),
+        preferences=SimpleNamespace(
+            addons={
+                "thedas_io": SimpleNamespace(preferences=SimpleNamespace(thedas_io_enable_phy=True))
+            }
+        ),
     )
     panel = cast(Any, ui.THEDAS_IO_PT_import())
     panel.draw(phy_ctx)
@@ -736,10 +738,8 @@ def test_export_list_sync_never_mutates_during_draw():
 def test_extension_combo_items_and_filter(tmp_path):
     import fake_bpy
 
-    assert [item[0] for item in ui._EXT_ITEMS] == ["NONE", "MSH", "MMH",
-                                                   "ANI", "CUB"]
-    assert [item[1] for item in ui._EXT_ITEMS] == ["(None)", "MSH", "MMH",
-                                                   "ANI", "CUB"]
+    assert [item[0] for item in ui._EXT_ITEMS] == ["NONE", "MSH", "MMH", "ANI", "CUB"]
+    assert [item[1] for item in ui._EXT_ITEMS] == ["(None)", "MSH", "MMH", "ANI", "CUB"]
     assert ui._ext_filter("NONE") is None
     assert ui._ext_filter("") is None
     assert ui._ext_filter("MSH") == "MSH"
@@ -1061,9 +1061,7 @@ def test_stock_tint_survives_a_material_round_trip():
 def _node(name, kind, loc, children=()):
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        name=name, kind=kind, values={}, children=list(children), loc=loc
-    )
+    return SimpleNamespace(name=name, kind=kind, values={}, children=list(children), loc=loc)
 
 
 def test_bone_length_is_the_distance_to_the_first_child_bone():
@@ -1073,8 +1071,11 @@ def test_bone_length_is_the_distance_to_the_first_child_bone():
     neck = _node("neck", "node", (0.0, 0.0, 1.40))
     chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
     spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
-    rows = [(spine, None, (0.0, 0.0, 0.0), None), (chest, spine, (0.0, 0.0, 1.2), None),
-            (neck, chest, (0.0, 0.0, 1.4), None)]
+    rows = [
+        (spine, None, (0.0, 0.0, 0.0), None),
+        (chest, spine, (0.0, 0.0, 1.2), None),
+        (neck, chest, (0.0, 0.0, 1.4), None),
+    ]
 
     out = _bone_lengths(rows)
     assert abs(out[id(spine)] - 1.20) < 1e-9
@@ -1116,8 +1117,11 @@ def test_rig_does_not_depend_on_the_mesh_it_is_bound_to():
     neck = _node("neck", "node", (0.0, 0.0, 1.40))
     chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
     spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
-    rows = [(spine, None, (0.0, 0.0, 0.0), None), (chest, spine, (0.0, 0.0, 1.2), None),
-            (neck, chest, (0.0, 0.0, 1.4), None)]
+    rows = [
+        (spine, None, (0.0, 0.0, 0.0), None),
+        (chest, spine, (0.0, 0.0, 1.2), None),
+        (neck, chest, (0.0, 0.0, 1.4), None),
+    ]
 
     import inspect
 

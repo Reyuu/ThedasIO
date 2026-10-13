@@ -68,8 +68,7 @@ def _sample(keys: list, time: float):
                 second = Quaternion((v1[3], v1[0], v1[1], v1[2]))
                 quat = first.slerp(second, max(0.0, min(1.0, fraction)))
                 return (quat.x, quat.y, quat.z, quat.w)
-            return tuple(v0[i] + (v1[i] - v0[i]) * fraction
-                         for i in range(len(v0)))
+            return tuple(v0[i] + (v1[i] - v0[i]) * fraction for i in range(len(v0)))
         previous = current
     return keys[-1][1]
 
@@ -124,9 +123,14 @@ def build_action(anim, arm_obj, fps: float = 30.0) -> bpy.types.Action:
         elif node.target == TRANSLATION:
             pos_channels.setdefault(bone, node)
 
-    times = sorted({time for node in anim.nodes
-                    if node.target in (ROTATION32, ROTATION64, TRANSLATION)
-                    for time, _value in node.keys})
+    times = sorted(
+        {
+            time
+            for node in anim.nodes
+            if node.target in (ROTATION32, ROTATION64, TRANSLATION)
+            for time, _value in node.keys
+        }
+    )
     if not rot_channels and not pos_channels:
         return bpy.data.actions.new(str(anim.name or "animation"))
     if not times:

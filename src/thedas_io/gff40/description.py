@@ -223,8 +223,7 @@ class GFFReader:
             at = self.data_offset + instance_base + f.data_index
             if at + 4 > len(self.data):
                 raise ValueError(
-                    f"field {label_name(f.label_id)} ({f.label_id}) reads past "
-                    f"end of file at {at}"
+                    f"field {label_name(f.label_id)} ({f.label_id}) reads past end of file at {at}"
                 )
             return struct.unpack_from("<I", self.data, at)[0]
 
@@ -311,8 +310,7 @@ class GFFReader:
                     at = self.data_offset + instance_base + f.data_index
                     if at + 8 > len(self.data):
                         raise ValueError(
-                            f"generic field {label_name(f.label_id)} reads past "
-                            f"end of file at {at}"
+                            f"generic field {label_name(f.label_id)} reads past end of file at {at}"
                         )
                     packed, address = struct.unpack_from("<II", self.data, at)
                     s = packed & 0xFFFF

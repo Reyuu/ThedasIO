@@ -28,6 +28,7 @@ USAGE_BINORMAL = 7
 
 INDEX_FORMAT_U32 = 1
 
+
 # The file serializes its own index width: 8032 GFF_MESH_INDEXFORMAT on the mesh
 # (mirrored per chunk by 8004 GFF_MESH_CHUNK_INDEXFORMAT), 0 = u16, 1 = u32.
 # Confirmed against the corpus -- zz_wrf_rc_0.msh / zz_wrf_bc_c_0.msh are the only

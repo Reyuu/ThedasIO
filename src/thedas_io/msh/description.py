@@ -370,8 +370,7 @@ def _field_offsets(struct_def, labels):
 def _chunk_unchanged(a, orig) -> bool:
     if a.additional_streams is not None:
         return False
-    decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
-             for d in a.declarators]
+    decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method) for d in a.declarators]
     name, bounds, cells, decls0 = orig
     if a.name != name or a.bounds != bounds or decls != decls0:
         return False
@@ -425,9 +424,15 @@ class MSHWriter:
                 "vertex": list(src.vertex_data),
                 "index": list(src.index_data),
                 "chunks": [
-                    (c.name, c.bounds, dict(c.cells),
-                     [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
-                      for d in c.declarators])
+                    (
+                        c.name,
+                        c.bounds,
+                        dict(c.cells),
+                        [
+                            (d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
+                            for d in c.declarators
+                        ],
+                    )
                     for c in src.chunks
                 ],
             }
@@ -453,9 +458,10 @@ class MSHWriter:
         w = GFFWriter.from_reader(gff)
         mesh = self.mesh
         orig = self._orig
-        at = _field_offsets(gff.struct_defs[0], (L_NAME, L_CHUNKS, L_VERTEX_DATA,
-                                                L_INDEX_DATA, L_INDEX_FORMAT,
-                                                L_INSTANCED_STREAM))
+        at = _field_offsets(
+            gff.struct_defs[0],
+            (L_NAME, L_CHUNKS, L_VERTEX_DATA, L_INDEX_DATA, L_INDEX_FORMAT, L_INSTANCED_STREAM),
+        )
 
         if L_NAME in at and mesh.name != orig["name"]:
             value = NULL_REF
@@ -475,22 +481,26 @@ class MSHWriter:
 
         chnk_def = None
         if L_CHUNKS in at:
-            type_id = next(f.type_id for f in gff.struct_defs[0].field_instances
-                           if f.label_id == L_CHUNKS)
+            type_id = next(
+                f.type_id for f in gff.struct_defs[0].field_instances if f.label_id == L_CHUNKS
+            )
             chnk_def = gff.struct_defs[type_id]
         offsets = {}
         size = 0
         if chnk_def is not None:
             offsets = _field_offsets(
-                chnk_def, (L_NAME, L_CHUNK_DECLARATORS, L_CHUNK_STREAMS,
-                           8034, *L_CHUNK_CELLS)
+                chnk_def, (L_NAME, L_CHUNK_DECLARATORS, L_CHUNK_STREAMS, 8034, *L_CHUNK_CELLS)
             )
             size = chnk_def.struct_size
 
         bases = _chunk_bases(gff)
         refs = []
         for i, chunk in enumerate(mesh.chunks):
-            if i < len(bases) and i < len(orig["chunks"]) and _chunk_unchanged(chunk, orig["chunks"][i]):
+            if (
+                i < len(bases)
+                and i < len(orig["chunks"])
+                and _chunk_unchanged(chunk, orig["chunks"][i])
+            ):
                 refs.append(bases[i])
                 continue
             if i < len(bases):
@@ -509,9 +519,7 @@ class MSHWriter:
                 # the instances are inline and contiguous, so a different count
                 # cannot be laid out by patching; rebuild instead
                 return self._rebuilt()
-            blob = struct.pack("<I", len(refs)) + b"".join(
-                struct.pack("<I", r) for r in refs
-            )
+            blob = struct.pack("<I", len(refs)) + b"".join(struct.pack("<I", r) for r in refs)
             struct.pack_into("<I", w.data_block, at[L_CHUNKS], w.alloc(blob))
         return w.write()
 
@@ -570,9 +578,11 @@ class MSHWriter:
                 # the terminator is all ones; write it as -1 so it fits the
                 # signed int the schema declares, whatever the source spelled it
                 stream = -1 if d.is_terminator else d.stream
-                rows.append(struct.pack(
-                    "<iiIIII", stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
-                ))
+                rows.append(
+                    struct.pack(
+                        "<iiIIII", stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
+                    )
+                )
             return struct.pack("<I", len(rows)) + b"".join(rows)
         except struct.error as e:
             raise ValueError(f"Chunk {chunk.name!r} has an unencodable declarator: {e}")

@@ -161,8 +161,7 @@ class Animation:
         kinds: dict = {}
         for n in self.nodes:
             kinds[n.kind] = kinds.get(n.kind, 0) + 1
-        return {"name": self.name, "length": self.length,
-                "nodes": len(self.nodes), "kinds": kinds}
+        return {"name": self.name, "length": self.length, "nodes": len(self.nodes), "kinds": kinds}
 
 
 def _decode_node(node: dict, length: float) -> AnimNode | None:
@@ -199,7 +198,8 @@ class ANIReader:
         self.length = float(self.root.get(L_LENGTH) or 0.0)
         self.additive = bool(self.root.get(L_ADDITIVE))
         nodes = [
-            n for node in (self.root.get(L_NODES) or [])
+            n
+            for node in (self.root.get(L_NODES) or [])
             if (n := _decode_node(node, self.length)) is not None
         ]
         self.animation = Animation(self.name, self.length, self.additive, nodes)
@@ -215,9 +215,11 @@ class ANIReader:
 def load(path) -> ANIReader:
     return ANIReader(Path(path).read_bytes())
 
+
 # Keys are written in place: the key count, the key times and every struct stay
 # where they are, so an edited file is the same size and the untouched channels
 # keep their original bytes.
+
 
 # -q is the same rotation, and _rebuild always puts the dropped component
 # back positive, so flip the sign here before it is dropped.
@@ -293,8 +295,7 @@ def _locate_keys(reader: GFFReader) -> list:
 
         key_def = reader.struct_defs[rows_field.type_id]
         time_field = field(key_def, L_KEY_TIME)
-        data_fields = [field(key_def, label)
-                       for label in (L_KEY_DATA0, L_KEY_DATA1, L_KEY_DATA2)]
+        data_fields = [field(key_def, label) for label in (L_KEY_DATA0, L_KEY_DATA1, L_KEY_DATA2)]
         data_fields = [f for f in data_fields if f is not None]
 
         rows_block = u32(address, rows_field.data_index)
@@ -302,13 +303,15 @@ def _locate_keys(reader: GFFReader) -> list:
             out.append(None)
             continue
 
-        out.append(_KeyLayout(
-            reader.data_offset + address + rows_field.data_index,
-            reader.data_offset + rows_block + 4,
-            key_def.struct_size,
-            time_field.data_index,
-            [(f.data_index, f.type_id) for f in data_fields],
-        ))
+        out.append(
+            _KeyLayout(
+                reader.data_offset + address + rows_field.data_index,
+                reader.data_offset + rows_block + 4,
+                key_def.struct_size,
+                time_field.data_index,
+                [(f.data_index, f.type_id) for f in data_fields],
+            )
+        )
     return out
 
 
@@ -378,8 +381,9 @@ def patch_ani(raw: bytes, values, length: float | None = None) -> bytes:
 
     if new_len != old_len:
         # every key's time is a fraction of the length, so all of them are rebuilt
-        length_field = next(f for f in reader.struct_defs[0].field_instances
-                            if f.label_id == L_LENGTH)
+        length_field = next(
+            f for f in reader.struct_defs[0].field_instances if f.label_id == L_LENGTH
+        )
         fmt = _float_fmt(length_field.type_id)
         at = reader.data_offset + length_field.data_index
         _put(buf, at, length_field.type_id, new_len)
@@ -395,14 +399,14 @@ def patch_ani(raw: bytes, values, length: float | None = None) -> bytes:
         plan = values(anim_node)
         if plan is None:
             if new_len != old_len:
-                raise ValueError(f"{anim_node.name}: the clip is longer, so its "
-                                 "keys must be rewritten")
+                raise ValueError(
+                    f"{anim_node.name}: the clip is longer, so its keys must be rewritten"
+                )
             continue
 
         times, new_values = plan
         if len(new_values) != len(times):
-            raise ValueError(f"{anim_node.name}: {len(times)} times but "
-                             f"{len(new_values)} values")
+            raise ValueError(f"{anim_node.name}: {len(times)} times but {len(new_values)} values")
 
         # the key times are unchanged, so only the values that moved are written
         if new_len == old_len and list(times) == [t for t, _ in anim_node.keys]:

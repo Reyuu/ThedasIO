@@ -2536,8 +2536,13 @@ def test_extension_filter_is_a_combo_box():
         """)
     ) == {
         "kind": "ENUM",
-        "items": [["NONE", "(None)"], ["MSH", "MSH"], ["MMH", "MMH"],
-              ["ANI", "ANI"], ["CUB", "CUB"]],
+        "items": [
+            ["NONE", "(None)"],
+            ["MSH", "MSH"],
+            ["MMH", "MMH"],
+            ["ANI", "ANI"],
+            ["CUB", "CUB"],
+        ],
         "default": "NONE",
         "rows": {"NONE": ["a.msh", "b.mmh"], "MSH": ["a.msh"], "MMH": ["b.mmh"]},
     }
@@ -3090,7 +3095,7 @@ def test_browser_refresh_and_import():
 def test_mesh_shape_proxy_is_its_decoded_geometry():
     # a mesh shape's proxy is the NXS geometry itself, not a marker box
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         def main():
             import os
             import sys
@@ -3111,7 +3116,7 @@ def test_mesh_shape_proxy_is_its_decoded_geometry():
                 for o in list(bpy.context.scene.objects):
                     bpy.data.objects.remove(o, do_unlink=True)
                 ext.unregister()
-        ''')
+        """)
     ) == [[28, 52], [16, 28]]
 
 
@@ -3219,7 +3224,6 @@ def test_a_mesh_dropped_in_the_collision_collection_is_adopted():
     }
 
 
-
 def test_phy_is_gated_until_the_experimental_switch_is_turned_on():
     # everything collision related is off until the preference is set: import
     # makes no proxies and export does not write the .phy
@@ -3262,8 +3266,6 @@ def test_phy_is_gated_until_the_experimental_switch_is_turned_on():
         main()
         """)
     ) == {"collision": 0, "phy_additions": False, "phy_written": False}
-
-
 
 
 def test_animation_loads_from_the_asset_list_like_any_other_import():
@@ -3348,7 +3350,7 @@ def test_ani_world_targets_match_the_mmh_node_chain():
     # the MMH local transforms + ANI channel values. This catches axis/frame
     # mistakes that a key-count test cannot see.
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         import math
         import os
         import sys
@@ -3451,14 +3453,15 @@ def test_ani_world_targets_match_the_mmh_node_chain():
                     bpy.data.objects.remove(o, do_unlink=True)
                 ext.unregister()
             return out
-    ''')
+    """)
     ) == {"bones": 3, "max_loc": 0.0, "max_rot": 0.0}
+
 
 def test_edited_pose_exports_back_into_the_ani():
     # unedited export is byte-identical; an edited chest pose changes only the
     # keys that moved, the file keeps its size, and the rest is untouched
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         import os
         import sys
         sys.path.insert(0, "src")
@@ -3506,7 +3509,7 @@ def test_edited_pose_exports_back_into_the_ani():
                 return out
             finally:
                 ext.unregister()
-        '''),
+        """),
     ) == {
         "unedited_identical": True,
         "same_size": True,
@@ -3515,11 +3518,12 @@ def test_edited_pose_exports_back_into_the_ani():
         "other_channels_kept": True,
     }
 
+
 def test_hand_keyframes_at_any_time_become_new_keys():
     # a keyframe between the file's own key times (3.5 s, 4.75 s) is exported
     # as a new key; the other channels are unchanged
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         import os
         import sys
         sys.path.insert(0, "src")
@@ -3583,7 +3587,7 @@ def test_hand_keyframes_at_any_time_become_new_keys():
                 return out
             finally:
                 ext.unregister()
-        '''),
+        """),
     ) == {
         "key_at_3_5": True,
         "key_at_4_75": True,
@@ -3593,9 +3597,10 @@ def test_hand_keyframes_at_any_time_become_new_keys():
         "others_kept": True,
     }
 
+
 def test_import_buttons_play_an_ani_on_the_armature():
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         import os
         import sys
         sys.path.insert(0, "src")
@@ -3635,7 +3640,7 @@ def test_import_buttons_play_an_ani_on_the_armature():
                 return out
             finally:
                 ext.unregister()
-        '''),
+        """),
     ) == {
         "selected": ["FINISHED"],
         "selected_curves": 567,
@@ -3644,11 +3649,12 @@ def test_import_buttons_play_an_ani_on_the_armature():
         "same": True,
     }
 
+
 def test_export_leaves_the_current_frame_alone():
     # export samples the pose across the clip, but must put the scene back
     # exactly where it was, subframe included
     assert run(
-        textwrap.dedent('''\
+        textwrap.dedent("""\
         import os
         import sys
         sys.path.insert(0, "src")
@@ -3679,7 +3685,7 @@ def test_export_leaves_the_current_frame_alone():
                 return out
             finally:
                 ext.unregister()
-        '''),
+        """),
     ) == {"frame": 12, "subframe": 0.4}
 
 
@@ -3725,6 +3731,7 @@ def test_export_refreshes_tangents_with_weld_off():
             }
         """),
     ) == {"mapped": 0, "before": 5448, "after": 5448, "changed": 3}
+
 
 def test_tint_export_covers_every_tinted_material():
     # The DAO Tint group is shared by every material now. It used to be built

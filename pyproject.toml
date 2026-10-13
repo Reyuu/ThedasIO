@@ -42,7 +42,7 @@ src = ["src", "tests"]
 
 [tool.mypy]
 explicit_package_bases = true
-mypy_path = "src"
+mypy_path = ["src", "tests", "tools"]
 python_version = "3.13"
 # nvtt ships no py.typed; typed deps (numpy, Pillow) still checked normally
 disable_error_code = ["import-untyped"]

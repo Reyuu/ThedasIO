@@ -90,8 +90,9 @@ def _splice_unknown_def(raw: bytes, fourcc: bytes) -> bytes:
     r = GFFReader(raw)
     # 16 bytes of defs are inserted before the field block, so every absolute
     # offset into the file from there on shifts up by 16
-    header = raw[:8] + _struct.pack("<4s4s4sII", r.platform, r.file_type, r.version,
-                                  r.nstruct + 1, r.data_offset + 16)
+    header = raw[:8] + _struct.pack(
+        "<4s4s4sII", r.platform, r.file_type, r.version, r.nstruct + 1, r.data_offset + 16
+    )
     defs = bytearray(raw[28 : 28 + r.nstruct * 16])
     # every field_offset shifts by the 16 bytes just inserted
     for i in range(r.nstruct):
@@ -100,7 +101,7 @@ def _splice_unknown_def(raw: bytes, fourcc: bytes) -> bytes:
         _struct.pack_into("<I", defs, at, fo + 16)
     fields = raw[28 + r.nstruct * 16 : r.data_offset]
     extra = _struct.pack("<IIII", int.from_bytes(fourcc, "little"), 0, 0, 4)
-    return header + bytes(defs) + extra + fields + raw[r.data_offset:]
+    return header + bytes(defs) + extra + fields + raw[r.data_offset :]
 
 
 def test_an_unknown_struct_kind_loads_and_survives_export():
@@ -114,8 +115,10 @@ def test_an_unknown_struct_kind_loads_and_survives_export():
     assert reader.mesh.chunks  # the file still reads as a mesh
 
     out = MSHWriter.from_reader(reader).write()
-    assert "zzzz" in {sd.type_fourcc.to_bytes(4, "little").decode("ascii", "replace")
-                      for sd in GFFReader(out).struct_defs}
+    assert "zzzz" in {
+        sd.type_fourcc.to_bytes(4, "little").decode("ascii", "replace")
+        for sd in GFFReader(out).struct_defs
+    }
 
 
 def test_an_untouched_mesh_keeps_its_size_and_def_table():
@@ -124,8 +127,9 @@ def test_an_untouched_mesh_keeps_its_size_and_def_table():
     reader = MSHReader(raw)
     out = MSHWriter.from_reader(reader).write()
     assert len(out) == len(raw)
-    assert [sd.type_fourcc for sd in GFFReader(out).struct_defs] == \
-        [sd.type_fourcc for sd in reader.gff.struct_defs]
+    assert [sd.type_fourcc for sd in GFFReader(out).struct_defs] == [
+        sd.type_fourcc for sd in reader.gff.struct_defs
+    ]
 
 
 def test_an_edited_mesh_still_roundtrips_through_the_patch_path():
@@ -183,14 +187,14 @@ def test_a_chunk_cell_outside_the_schema_survives_export():
     struct.pack_into("<I", raw, at, 0xABCDEF01)
 
     reader = MSHReader(bytes(raw))
-    chnk = next(sd for sd in reader.gff.struct_defs
-                if sd.type_fourcc == int.from_bytes(b"chnk", "little"))
+    chnk = next(
+        sd for sd in reader.gff.struct_defs if sd.type_fourcc == int.from_bytes(b"chnk", "little")
+    )
     chnk.field_instances.append(GFFField(6999, 4, 0, 104))
 
     out = MSHReader(MSHWriter.from_reader(reader).write())
     back_base = _chunk_bases(out.gff)[0]
-    got = struct.unpack_from("<I", out.gff.data,
-                             out.gff.data_offset + back_base + 104)[0]
+    got = struct.unpack_from("<I", out.gff.data, out.gff.data_offset + back_base + 104)[0]
     assert got == 0xABCDEF01
     # known as bytes in the file, but the Chunk model does not surface it
     assert 6999 not in out.mesh.chunks[0].cells

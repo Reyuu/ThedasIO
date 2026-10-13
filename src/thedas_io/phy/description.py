@@ -1,7 +1,7 @@
 # A PHY is a GFF whose root names the model hierarchy it belongs to, then repeats
 # the MMH's node tree with a ``cobj`` (collision object) hung off the nodes that
 # carry collision::
-# 
+#
 #     mdlh   GFF_MMH_NAME = 'qm_uhm_basb_0.mmh'
 #       node GOB > GOD > Root > ... > Neck1
 #         cobj    density, obj type, collision group
@@ -43,8 +43,9 @@ MASK_LABELS = (
     "GFF_MMH_SHAPE_COLLISION_MASK_STATIC_GEOMETRY",
     "GFF_MMH_SHAPE_COLLISION_MASK_NONWALKABLE",
 )
-MASKS = tuple((_ID[n], n.removeprefix("GFF_MMH_SHAPE_COLLISION_MASK_").lower())
-              for n in MASK_LABELS)
+MASKS = tuple(
+    (_ID[n], n.removeprefix("GFF_MMH_SHAPE_COLLISION_MASK_").lower()) for n in MASK_LABELS
+)
 
 # SHAPE_TYPE is an index into the per-type struct the TYPE_STRUCT generic points
 # at; the fourcc is the authority, but the id is what the file stores
@@ -76,7 +77,6 @@ def _mesh(value) -> object:
 
 
 class Shape:
-
     __slots__ = (
         "bone",
         "box_dim",
@@ -113,8 +113,7 @@ class Shape:
         self.masks = self.masks or {}
 
     def __repr__(self):
-        return (f"<Shape {self.kind} {self.name!r} on {self.bone!r} "
-                f"r={self.radius} h={self.height}>")
+        return f"<Shape {self.kind} {self.name!r} on {self.bone!r} r={self.radius} h={self.height}>"
 
     @property
     def editable(self) -> dict:
@@ -134,7 +133,6 @@ class Shape:
 
 
 class CollisionObject:
-
     __slots__ = ("bone", "density", "group", "obj_type", "path", "shapes")
 
     bone: str | None
@@ -177,9 +175,11 @@ class PhyReader:
             if not isinstance(child, dict) or child.get("value") is None:
                 continue
             index = child.get("struct_index")
-            kind = (_fourcc(self.gff.struct_defs[index].type_fourcc)
-                    if isinstance(index, int) and 0 <= index < self.gff.nstruct
-                    else "?")
+            kind = (
+                _fourcc(self.gff.struct_defs[index].type_fourcc)
+                if isinstance(index, int) and 0 <= index < self.gff.nstruct
+                else "?"
+            )
             values = child.get("value") or {}
             here = path + (i,)
             i += 1

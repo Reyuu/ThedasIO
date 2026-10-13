@@ -79,9 +79,10 @@ the last struct's field block:
 
 ```python
 import struct
+
 last = g.struct_defs[-1]
 fields_end = last.field_offset + last.field_count * 12
-gap = raw[fields_end:g.data_offset]
+gap = raw[fields_end : g.data_offset]
 assert fields_end <= g.data_offset and set(gap) <= {0xFF}
 ```
 

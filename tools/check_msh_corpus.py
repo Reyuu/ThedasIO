@@ -66,7 +66,9 @@ def main(argv=None):
     if disagree:
         print(f"declared format disagrees with the vertex count on {len(disagree)} chunks:")
         for name, chunk, verts, declared, implied in disagree[:20]:
-            print(f"  {name} / {chunk}: {verts} verts, declared u{declared * 8}, implied u{implied * 8}")
+            print(
+                f"  {name} / {chunk}: {verts} verts, declared u{declared * 8}, implied u{implied * 8}"
+            )
     for name, chunk, why in failures[:40]:
         print(f"  {name} / {chunk}: {why}")
     return 1 if failures or disagree else 0

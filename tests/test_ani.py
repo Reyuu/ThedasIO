@@ -76,8 +76,11 @@ def test_first_keys_match_the_mmh_rest_pose():
     from thedas_io.geometry import node_local
     from thedas_io.mmh.description import load
 
-    rest = {n.name.lower(): node_local(n.values)[1]
-            for n in load(DATA_DIR / "c_doga_0.mmh").walk() if n.name}
+    rest = {
+        n.name.lower(): node_local(n.values)[1]
+        for n in load(DATA_DIR / "c_doga_0.mmh").walk()
+        if n.name
+    }
     close = 0
     for node in ANIReader(DOG.read_bytes()).nodes:
         if node.target != ROTATION64:
@@ -105,6 +108,8 @@ def test_position_keys_are_three_floats():
     pos = next(n for n in reader.nodes if n.target == TRANSLATION)
     for _t, v in pos.keys:
         assert len(v) == 3 and all(isinstance(c, float) for c in v)
+
+
 def _random_unit(rng):
     v = [rng.gauss(0, 1) for _ in range(4)]
     n = math.sqrt(sum(c * c for c in v))
@@ -121,8 +126,9 @@ def test_encode_quat64_inverts_decode():
     from thedas_io.ani.description import decode_quat64, encode_quat64
 
     rng = random.Random(1)
-    worst = max(_angle(q, decode_quat64(encode_quat64(q)))
-                for q in (_random_unit(rng) for _ in range(2000)))
+    worst = max(
+        _angle(q, decode_quat64(encode_quat64(q))) for q in (_random_unit(rng) for _ in range(2000))
+    )
     assert worst < 1e-5
 
 
@@ -132,8 +138,9 @@ def test_encode_quat32_inverts_decode():
     from thedas_io.ani.description import decode_quat32, encode_quat32
 
     rng = random.Random(2)
-    worst = max(_angle(q, decode_quat32(encode_quat32(q)))
-                for q in (_random_unit(rng) for _ in range(2000)))
+    worst = max(
+        _angle(q, decode_quat32(encode_quat32(q))) for q in (_random_unit(rng) for _ in range(2000))
+    )
     assert worst < 5e-3  # 10-bit fields: ~0.0014 step per component
 
 
@@ -171,6 +178,7 @@ def test_patch_rewrites_only_the_given_key():
             continue
         assert before_anim.by_name(node.name).keys == node.keys
 
+
 def test_patch_adds_a_key_between_the_originals_and_extends_the_clip():
     from thedas_io.ani.description import patch_ani
 
@@ -207,7 +215,7 @@ def _vfx_clip() -> bytes:
     reader = GFFReader(DOOR.read_bytes())
     writer = GFFWriter.from_reader(reader)
 
-# same shape as the packed-quat key def, except KeyData0 is an f32
+    # same shape as the packed-quat key def, except KeyData0 is an f32
     key_def = GFFStructDef(fourcc("vfxk"), 2, 0, 6)
     key_def.field_instances.append(GFFField(4035, 2, 0, 0))  # KeyTime u16
     key_def.field_instances.append(GFFField(4036, 8, 0, 2))  # KeyData0 f32

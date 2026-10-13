@@ -19,7 +19,7 @@ class _Pixels:
     def __init__(self, rgba: np.ndarray, size):
         self._flat = rgba.astype(np.float32).reshape(-1) / 255.0
         self._size = tuple(size)
-        self.set_calls = []
+        self.set_calls: list[tuple] = []
 
     def foreach_get(self, buf):
         expect = self._size[0] * self._size[1] * 4
@@ -39,7 +39,7 @@ class _LiveImage:
         self.size = [w, h]
         self.pixels = _Pixels(rgba, (w, h))
         self.packed = 0
-        self.scaled = []
+        self.scaled: list[tuple] = []
 
     def scale(self, w, h):
         self.scaled.append((w, h))

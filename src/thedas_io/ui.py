@@ -241,12 +241,12 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
             if phy_enabled(context):
                 arm = getattr(context, "active_object", None)
                 if arm is None or arm.type != "ARMATURE":
-                    arms = [o for o in getattr(scene, "objects", [])
-                            if o.type == "ARMATURE"]
+                    arms = [o for o in getattr(scene, "objects", []) if o.type == "ARMATURE"]
                     arm = arms[-1] if arms else None
                 if arm is not None and hasattr(arm, "data"):
                     self.layout.prop_search(
-                        scene, "thedas_io_collision_bone", arm.data, "bones", text="Bone")
+                        scene, "thedas_io_collision_bone", arm.data, "bones", text="Bone"
+                    )
                 row2 = self.layout.row(align=True)
                 row2.operator("thedas_io.add_collision", text="Add Collision")
             if scene.thedas_io_scan_active:
@@ -523,9 +523,7 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
             return {"CANCELLED"}
 
         dest.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(
-            dest / "model.obj", obj_text([(n, m, d) for n, d, m in chunks])
-        )
+        write_text_atomic(dest / "model.obj", obj_text([(n, m, d) for n, d, m in chunks]))
         written, errors = ["model.obj"], []
         tex_dir = dest / "textures"
         mtl_maps: dict = {}
@@ -583,9 +581,7 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
                 save_image_atomic(maps[MAP_NORMAL], meshmap, "PNG")
                 written.append(str(meshmap.relative_to(dest)))
 
-        write_text_atomic(
-            dest / "model.mtl", mtl_text([(m, mtl_maps.get(m, ())) for m in maos])
-        )
+        write_text_atomic(dest / "model.mtl", mtl_text([(m, mtl_maps.get(m, ())) for m in maos]))
         written.append("model.mtl")
 
         for error in errors:
@@ -1178,8 +1174,12 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
     )
     kind: bpy.props.EnumProperty(  # type: ignore
         name="Kind",
-        items=(("CAPSULE", "Capsule", ""), ("SPHERE", "Sphere", ""),
-               ("BOX", "Box", ""), ("MESH", "Mesh", "Box-shaped mesh collision")),
+        items=(
+            ("CAPSULE", "Capsule", ""),
+            ("SPHERE", "Sphere", ""),
+            ("BOX", "Box", ""),
+            ("MESH", "Mesh", "Box-shaped mesh collision"),
+        ),
         default="CAPSULE",
     )
     radius: bpy.props.FloatProperty(name="Radius", default=0.1, min=0.0001)  # type: ignore
@@ -1221,9 +1221,10 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
         from .export import phy_enabled
 
         if not phy_enabled(context):
-            self.report({"INFO"},
-                        "Enable 'experimental PHY support' in addon settings "
-                        "before adding collision")
+            self.report(
+                {"INFO"},
+                "Enable 'experimental PHY support' in addon settings before adding collision",
+            )
             return {"CANCELLED"}
         arm, bone = self._target(context)
         if arm is None:
@@ -1239,10 +1240,12 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
         if self.kind == "MESH":
             # the NXS tail (adjacency + OPC/HBM acceleration sections) is not
             # decoded, so a new mesh cannot be written without guessing it
-            self.report({"WARNING"},
-                        "Mesh collision can be edited, not created yet: its "
-                        "acceleration sections are not decoded. Pick Capsule, "
-                        "Sphere or Box")
+            self.report(
+                {"WARNING"},
+                "Mesh collision can be edited, not created yet: its "
+                "acceleration sections are not decoded. Pick Capsule, "
+                "Sphere or Box",
+            )
             return {"CANCELLED"}
 
         spec = {
@@ -1257,8 +1260,9 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
         }
         item.setdefault("phy_additions", []).append(spec)
         added = _spawn_added_proxy(context, item, spec)
-        self.report({"INFO"}, f"Added {spec['kind']} to {bone.name}"
-                              + (f" ({added})" if added else ""))
+        self.report(
+            {"INFO"}, f"Added {spec['kind']} to {bone.name}" + (f" ({added})" if added else "")
+        )
         return {"FINISHED"}
 
     def execute(self, context) -> set:
@@ -1313,8 +1317,7 @@ def _play_animation(context, raw: bytes, name: str, fps: float, emit) -> set:
 
     curves = _fcurves(action)
     if not curves:
-        emit({"WARNING"},
-             f"No bone in {arm.name} matched {anim.name}'s channels")
+        emit({"WARNING"}, f"No bone in {arm.name} matched {anim.name}'s channels")
         return {"CANCELLED"}
 
     # the source travels with the action, so Export Animation can rewrite
@@ -1343,14 +1346,16 @@ class THEDAS_IO_OT_load_animation(bpy.types.Operator):
         "way every asset is imported - a raw disk path is only used when given"
     )
     filepath: bpy.props.StringProperty(default="", subtype="FILE_PATH")  # type: ignore
-    fps: bpy.props.FloatProperty(default=30.0, min=1.0,  # type: ignore
-                                 name="Frames per second")
+    fps: bpy.props.FloatProperty(  # type: ignore
+        default=30.0,
+        min=1.0,
+        name="Frames per second",
+    )
 
     def execute(self, context) -> set:
         arm = context.active_object
         if arm is None or arm.type != "ARMATURE":
-            self.report({"WARNING"},
-                        "Select the armature that should play the animation")
+            self.report({"WARNING"}, "Select the armature that should play the animation")
             return {"CANCELLED"}
         path = bpy.path.abspath(self.filepath or "")
         name = ""
@@ -1368,21 +1373,24 @@ class THEDAS_IO_OT_load_animation(bpy.types.Operator):
             except IndexError:
                 item = None
             if item is None:
-                self.report({"WARNING"},
-                            "Pick an animation in the asset list first, or "
-                            "give a raw .ani path")
+                self.report(
+                    {"WARNING"},
+                    "Pick an animation in the asset list first, or give a raw .ani path",
+                )
                 return {"CANCELLED"}
             if str(item.ext).lower().lstrip(".") != "ani":
-                self.report({"WARNING"},
-                            f"{item.filename} is not an .ani animation")
+                self.report({"WARNING"}, f"{item.filename} is not an .ani animation")
                 return {"CANCELLED"}
-            row = {"package": item.package or None, "filename": item.filename,
-                   "ext": item.ext, "path": item.path}
+            row = {
+                "package": item.package or None,
+                "filename": item.filename,
+                "ext": item.ext,
+                "path": item.path,
+            }
             try:
                 path = str(extract(row))
             except Exception as exc:  # noqa: BLE001
-                self.report({"ERROR"},
-                            f"Could not extract {item.filename}: {exc}")
+                self.report({"ERROR"}, f"Could not extract {item.filename}: {exc}")
                 return {"CANCELLED"}
             name = item.filename
         try:
@@ -1417,8 +1425,9 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
             return None
         action = arm.animation_data.action
         if action is None or "thedas_io_ani_base64" not in action:
-            self.report({"WARNING"},
-                        "Its action was not imported from a .ani, so there is no source")
+            self.report(
+                {"WARNING"}, "Its action was not imported from a .ani, so there is no source"
+            )
             return None
         return action
 
@@ -1433,8 +1442,9 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
             return {"CANCELLED"}
         raw = base64.b64decode(action["thedas_io_ani_base64"])
         try:
-            data = export_action(context, context.active_object, raw,
-                                 float(action["thedas_io_ani_fps"]))
+            data = export_action(
+                context, context.active_object, raw, float(action["thedas_io_ani_fps"])
+            )
         except Exception as exc:  # noqa: BLE001 - report, do not crash Blender
             self.report({"ERROR"}, f"Could not export {action.name}: {exc}")
             return {"CANCELLED"}
@@ -1491,11 +1501,9 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
             try:
                 raw = Path(str(extract(row))).read_bytes()
             except Exception as exc:  # noqa: BLE001
-                self.report({"ERROR"},
-                            f"Could not extract {item.filename}: {exc}")
+                self.report({"ERROR"}, f"Could not extract {item.filename}: {exc}")
                 return {"CANCELLED"}
-            return _play_animation(context, raw, item.filename, 30.0,
-                                   self.report)
+            return _play_animation(context, raw, item.filename, 30.0, self.report)
         result = _import_row(
             context, row, scene.thedas_io_db_path or None, False, self.report, scene.thedas_io_weld
         )
@@ -1612,7 +1620,9 @@ def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = Tru
                         local_only=local_only,
                     )
         note = f", missing chunks: {stats['missing']}" if stats["missing"] else ""
-        collisions = _load_collision(context, row, stem, reg, stats["armature"], db, local_only, emit)
+        collisions = _load_collision(
+            context, row, stem, reg, stats["armature"], db, local_only, emit
+        )
         for warning in dict.fromkeys(notes):
             emit({"WARNING"}, warning)
         col = f", {len(collisions)} collision" if collisions else ""
@@ -2494,8 +2504,11 @@ def build_hierarchy(context, tree, chunks):
         bone = arm_obj.data.bones.get(node.name)
         if bone is None:
             continue
-        exports = [str(c.values.get(6052)) for c in node.children
-                   if c.kind == "xprt" and c.values.get(6052)]
+        exports = [
+            str(c.values.get(6052))
+            for c in node.children
+            if c.kind == "xprt" and c.values.get(6052)
+        ]
         if exports:
             bone["thedas_io_xprt"] = ",".join(exports)
         # the node's own parent-relative transform: the animation value at rest,
@@ -2660,9 +2673,7 @@ def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
         layer = data.uv_layers.new(name="UVMap" if i == 0 else f"UVMap.{i:03d}")
         if layer is None:
             continue
-        layer.data.foreach_set(
-            "uv", [c for tri in corners for v in tri for c in coords[v]]
-        )
+        layer.data.foreach_set("uv", [c for tri in corners for v in tri for c in coords[v]])
     data.update()
     obj = bpy.data.objects.new(data.name, data)
     context.collection.objects.link(obj)

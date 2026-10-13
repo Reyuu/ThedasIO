@@ -126,8 +126,9 @@ def phy_bytes(raw: bytes, edits: dict | None = None) -> bytes | None:
             elif key in DIM_LABELS:
                 if key == "box_dim":
                     current = shape.box_dim
-                    if current is None or tuple(float(v) for v in current) == \
-                            tuple(float(v) for v in value):
+                    if current is None or tuple(float(v) for v in current) == tuple(
+                        float(v) for v in value
+                    ):
                         continue
                 else:
                     current = shape.radius if key == "radius" else shape.height
@@ -136,8 +137,7 @@ def phy_bytes(raw: bytes, edits: dict | None = None) -> bytes | None:
                 inner = _type_struct(gff, struct_index, base)
                 if inner is None:
                     continue
-                changed |= _pack_inline(writer, gff, inner[0], inner[1],
-                                        DIM_LABELS[key], value)
+                changed |= _pack_inline(writer, gff, inner[0], inner[1], DIM_LABELS[key], value)
             elif key == "name":
                 if shape.name == value:
                     continue
@@ -177,6 +177,8 @@ PRIMITIVES = {
 
 def _add_label(kind):
     return {"capsule": "Capsule", "sphere": "Sphere", "box": "Box"}.get(kind, "Shape")
+
+
 TEMPLATE_FOURCC = b"shap"
 COBJECT_FOURCC = b"cobj"
 NULL_REF = 0xFFFFFFFF
@@ -282,9 +284,9 @@ def _existing_names(gff) -> set:
 
 
 def add_shapes(raw: bytes, additions) -> bytes | None:
-    #Append new collision primitives. Returns None when nothing was added.
+    # Append new collision primitives. Returns None when nothing was added.
     #
-    #``additions`` is a list of dicts::
+    # ``additions`` is a list of dicts::
     #
     #    {"bone": "LeftElbow", "kind": "capsule", "radius": 0.08,
     #     "height": 0.2, "position": (0, 0, 0), "rotation": (0, 0, 0, 1),
@@ -326,8 +328,7 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
         type_si = _struct_of(gff, want_fourcc)
         if type_si is None:
             raise ValueError(
-                f"this file has no {want_fourcc.decode()} struct, so a "
-                f"{kind} cannot be added here"
+                f"this file has no {want_fourcc.decode()} struct, so a {kind} cannot be added here"
             )
 
         bone = str(spec.get("bone") or "")
@@ -353,27 +354,39 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
         else:
             type_base = _clone(writer, gff, type_si, source)
         if kind == "capsule":
-            _set_inline(writer, gff, type_si, type_base, L_RADIUS, "<f",
-                        float(spec.get("radius") or 0.05))
-            _set_inline(writer, gff, type_si, type_base, L_HEIGHT, "<f",
-                        float(spec.get("height") or 0.0))
+            _set_inline(
+                writer, gff, type_si, type_base, L_RADIUS, "<f", float(spec.get("radius") or 0.05)
+            )
+            _set_inline(
+                writer, gff, type_si, type_base, L_HEIGHT, "<f", float(spec.get("height") or 0.0)
+            )
         elif kind == "sphere":
-            _set_inline(writer, gff, type_si, type_base, L_RADIUS, "<f",
-                        float(spec.get("radius") or 0.05))
+            _set_inline(
+                writer, gff, type_si, type_base, L_RADIUS, "<f", float(spec.get("radius") or 0.05)
+            )
         else:
             dims = spec.get("box_dim") or spec.get("dims") or (0.2, 0.2, 0.2)
-            _set_inline(writer, gff, type_si, type_base, L_BOX_DIM, "<3f",
-                        [float(v) for v in dims][:3])
+            _set_inline(
+                writer, gff, type_si, type_base, L_BOX_DIM, "<3f", [float(v) for v in dims][:3]
+            )
 
         # the shape itself
         shape_base = _clone(writer, gff, shap_si, template)
         _set_inline(writer, gff, shap_si, shape_base, L_SHAPE_TYPE, "<I", type_id)
         pos = spec.get("position") or (0.0, 0.0, 0.0)
         rot = spec.get("rotation") or (0.0, 0.0, 0.0, 1.0)
-        _set_inline(writer, gff, shap_si, shape_base, L_SHAPE_POS, "<4f",
-                    [float(v) for v in tuple(pos)[:3]] + [1.0])
-        _set_inline(writer, gff, shap_si, shape_base, L_SHAPE_ROT, "<4f",
-                    [float(v) for v in tuple(rot)[:4]])
+        _set_inline(
+            writer,
+            gff,
+            shap_si,
+            shape_base,
+            L_SHAPE_POS,
+            "<4f",
+            [float(v) for v in tuple(pos)[:3]] + [1.0],
+        )
+        _set_inline(
+            writer, gff, shap_si, shape_base, L_SHAPE_ROT, "<4f", [float(v) for v in tuple(rot)[:4]]
+        )
         base_name = _add_label(kind)
         if bone:
             base_name = f"{_add_label(kind)}_{bone}"
@@ -391,16 +404,18 @@ def add_shapes(raw: bytes, additions) -> bytes | None:
         for short, value in masks.items():
             for label, candidate in MASKS:
                 if candidate == short:
-                    _set_inline(writer, gff, shap_si, shape_base, label, "<B",
-                                int(value))
+                    _set_inline(writer, gff, shap_si, shape_base, label, "<B", int(value))
 
         # point the shape at its primitive
         field = _field(gff, shap_si, L_SHAPE_TYPESTRUCT)
         if field is None:
             raise ValueError("this file's shap has no TYPE_STRUCT field")
         struct.pack_into(
-            "<II", writer.data_block, shape_base + field.data_index,
-            (GENERIC_STRUCT << 16) | type_si, type_base,
+            "<II",
+            writer.data_block,
+            shape_base + field.data_index,
+            (GENERIC_STRUCT << 16) | type_si,
+            type_base,
         )
 
         # append the new shape to the parent's list, matching its entry width

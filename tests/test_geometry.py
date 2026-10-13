@@ -54,7 +54,13 @@ def test_rejects_non_trilist():
 
 
 def _one_chunk(
-    verts, index_bytes, index_count, stride=12, decl_type=2, decl_usage=0, chunk_format=None,
+    verts,
+    index_bytes,
+    index_count,
+    stride=12,
+    decl_type=2,
+    decl_usage=0,
+    chunk_format=None,
     mesh_format=None,
 ):
     # a chunk with one FLOAT3 declarator and one hand-fed index blob. index_count
@@ -113,7 +119,9 @@ def test_declared_format_beats_the_vertex_count():
     # the file serializes its own width; the vertex count is only a fallback.
     # u32 declared over 4 verts: the blob is genuinely 4 bytes per index and a
     # vertex-count rule would read it as u16 and produce nonsense triangles.
-    mesh = _one_chunk(verts=4, index_bytes=struct.pack("<3I", 0, 2, 3), index_count=3, mesh_format=1)
+    mesh = _one_chunk(
+        verts=4, index_bytes=struct.pack("<3I", 0, 2, 3), index_count=3, mesh_format=1
+    )
 
     assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 2, 3)]
 
@@ -135,7 +143,11 @@ def test_declared_format_beats_the_vertex_count_the_other_way():
 def test_chunk_format_wins_over_mesh_format():
     # 8004 is per chunk and mirrors 8032; prefer the nearer declaration
     mesh = _one_chunk(
-        verts=4, index_bytes=struct.pack("<3I", 0, 1, 2), index_count=3, chunk_format=1, mesh_format=0
+        verts=4,
+        index_bytes=struct.pack("<3I", 0, 1, 2),
+        index_count=3,
+        chunk_format=1,
+        mesh_format=0,
     )
 
     assert decode_chunk(mesh, mesh.chunks[0])["triangles"] == [(0, 1, 2)]

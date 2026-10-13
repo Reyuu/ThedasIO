@@ -121,8 +121,7 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
         rest_pos, rest_rot = rest_local(arm, bone)
         local = locals_for(time)[bone]
         if node.target == TRANSLATION:
-            offset = _quat(rest_rot).inverted() @ (
-                local.to_translation() - Vector(rest_pos))
+            offset = _quat(rest_rot).inverted() @ (local.to_translation() - Vector(rest_pos))
             return tuple(offset)
         quat = local.to_quaternion()
         return (quat.x, quat.y, quat.z, quat.w)
@@ -146,8 +145,11 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
                 return own_times, [v for _, v in node.keys]
             return None
 
-        added = [time for time in hand_keys.get(bone, [])
-                 if all(abs(time - own) > TIME_TOL / fps for own in own_times)]
+        added = [
+            time
+            for time in hand_keys.get(bone, [])
+            if all(abs(time - own) > TIME_TOL / fps for own in own_times)
+        ]
         times = sorted(set(own_times) | set(added))
         old_at = dict(node.keys)
 

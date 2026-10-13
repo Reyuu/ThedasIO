@@ -1,17 +1,17 @@
 # A ``mshs`` collision shape stores its geometry as an ``NXS`` blob: the literal
 # ``b"NXS"``, a version byte, the ``b"MESH"`` section tag, a fixed 28-byte header,
 # then the arrays::
-# 
+#
 #     36                     A * 3  float32   vertex positions
 #     36 + 12 * A            B * 3  indices   triangles, 1 byte if A <= 256
 #     ...                    B * 3  indices                      else 2
 #     end of indices         opaque tail       normals, sub-meshes
-# 
+#
 # ``A`` is the vertex count and ``B`` the triangle count; closed meshes hit
 # ``B == 2A - 4`` exactly. Positions are the only array this module interprets.
 # Everything after the indices is carried through byte for byte, so a mesh can be
 # rescaled or moved without the collision structure that follows it shifting.
-# 
+#
 # Verified across all 624 mesh shapes in the DAO install: every stream parses,
 # and under the index-width rule above no triangle references a vertex that does
 # not exist.
@@ -84,8 +84,8 @@ def _write(vertices, tris, template: bytes) -> bytes:
     head = bytearray(template[:HEADER_SIZE])
     struct.pack_into("<II", head, OFF_VERTS, verts, tris)
     positions = struct.pack(f"<{verts * 3}f", *[c for v in vertices for c in v])
-    indices = template[start:start + idx_bytes]
-    return bytes(head) + positions + indices + template[start + idx_bytes:]
+    indices = template[start : start + idx_bytes]
+    return bytes(head) + positions + indices + template[start + idx_bytes :]
 
 
 def is_nxs(raw: bytes) -> bool:
@@ -118,9 +118,7 @@ def parse(raw: bytes) -> NxsMesh:
     limit = verts
     for v in idx:
         if v >= limit:
-            raise ValueError(
-                f"NXS triangle references vertex {v} of {verts}"
-            )
+            raise ValueError(f"NXS triangle references vertex {v} of {verts}")
     tri_list = [(idx[i], idx[i + 1], idx[i + 2]) for i in range(0, len(idx), 3)]
     return NxsMesh(raw, vertices, tri_list)
 
