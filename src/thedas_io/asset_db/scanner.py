@@ -3,7 +3,7 @@ import sqlite3
 import struct
 from pathlib import Path
 
-from ..erf.description import ERFReader
+from ..erf.description import ERFReader, geometry
 
 SCAN_EXTS = {".rim", ".erf"}
 LOOSE_EXTS = {".msh", ".mmh", ".mao", ".dds", ".tga"}
@@ -40,21 +40,22 @@ def _entry_table(path):
 _ENTRY_TABLES: dict[tuple[str, int, int], bytes] = {}
 
 
-def _table(head, size, read_more):
-    # 32B header + entry_count * 72B rows, all of which have to fit in the file.
-    # the bound comes from the file rather than a guess: a truncated or foreign
-    # archive reports a garbage count, and read(count * 72) would then try to
-    # allocate up to 309GB and raise MemoryError mid-scan.
-    count = struct.unpack("<I", head[16:20])[0]
-    if 32 + count * 72 > size:
-        raise ValueError(f"entry count {count} does not fit in {size} bytes")
-    return head + read_more(count * 72)
-
-
 def _read_entry_table(path):
+    # header + entry_count rows, all of which have to fit in the file. the
+    # bound comes from the file rather than a guess: a truncated or foreign
+    # archive reports a garbage count, and reading count * row bytes would then
+    # try to allocate up to 309GB and raise MemoryError mid-scan.
     size = os.path.getsize(path)
     with open(path, "rb") as f:
-        return _table(f.read(32), size, f.read)
+        # 56B covers the longest header (V2.2); the magic says how much of it
+        # is really header.
+        head = f.read(56)
+        header, row = geometry(head[:16])
+        count = struct.unpack("<I", head[16:20])[0]
+        if len(head) < header or header + count * row > size:
+            raise ValueError(f"entry count {count} does not fit in {size} bytes")
+        f.seek(0)
+        return f.read(header + count * row)
 
 
 def _norm_ext(ext):
@@ -146,12 +147,14 @@ def scan(root, db_path=None, progress=None):
 
 def payload(archive, name):
     archive = Path(archive)
-    for e in ERFReader(_entry_table(archive)).entries:
-        if e.name == name:
-            with open(archive, "rb") as f:
-                f.seek(e.offset)
-                return f.read(e.size)
-    raise KeyError(f"entry '{name}' not found in '{archive.name}'")
+    reader = ERFReader(_entry_table(archive))
+    entry = next((e for e in reader.entries if e.name == name), None)
+    if entry is None:
+        raise KeyError(f"entry '{name}' not found in '{archive.name}'")
+    # the reader works on the bytes we hand it, so the seek stays here
+    with open(archive, "rb") as f:
+        f.seek(entry.offset)
+        return reader.decode_payload(f.read(entry.packed_size), entry)
 
 
 def find(ext=None, name=None, package=None, db_path=None):

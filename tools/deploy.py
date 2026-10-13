@@ -21,7 +21,13 @@ TARGET = os.path.join(EXTENSIONS_DIR, "user_default", EXTENSION_ID)
 # trips its policy check ("Policy violation with top level module"), which is
 # why libs/ used to live there and no longer does.
 SITE_PACKAGES = os.path.join(EXTENSIONS_DIR, ".local", "lib", "python3.13", "site-packages")
-WHEELS = (("pillow", "12.3.0", "cp313-cp313-win_amd64"), ("pynvtt", "0.0.2", "py3-none-any"))
+# abi3 wheel, so one file serves every CPython 3.7+ Blender. the cp313 build is
+# the free-threaded one and must not be picked up here.
+WHEELS = (
+    ("pillow", "12.3.0", "cp313-cp313-win_amd64"),
+    ("pynvtt", "0.0.2", "py3-none-any"),
+    ("pycryptodome", "3.24.1", "cp37-abi3-win_amd64"),
+)
 
 
 def fetch_wheels(dest):

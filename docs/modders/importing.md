@@ -3,7 +3,7 @@
 ## From the game database
 
 1. Open the ThedasIO tab, Import panel.
-2. Press Scan. It indexes every `.rim`/`.erf` archive plus loose models and textures under the folder into the asset database. The database file defaults to a location under the application data folder.
+2. Press Scan. It indexes every `.rim`/`.erf` archive plus loose models and textures under the folder into the asset database. The database file defaults to a location under the application data folder. Encrypted DLC archives (ERF V2.2) are indexed and decrypted with the stock DAO module passwords.
 3. Tick **Include AddIns** to scan the AddIns folder as well, so DLC and mods resolve too. It defaults to `Documents\BioWare\Dragon Age\AddIns`; a path field appears while the box is ticked if you keep your mods elsewhere. The game folder and AddIns are scanned in one pass, so you only ever need one database.
 4. Filter by Extension, File name, Package. Press Search.
 5. Select a row. Press Import Selected.

@@ -13,6 +13,8 @@ dependencies = [
     "pillow",
     "pynvtt>=0.0.2",
     "numpy>=2.4.6",
+    # Blowfish, for the encrypted .erf/.rim archives the DLC modules ship in
+    "pycryptodome>=3.23",
 ]
 
 [build-system]

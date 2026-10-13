@@ -52,6 +52,72 @@ def archive(path, items) -> Path:
     return path
 
 
+def encrypted_archive(path, items, password: str, module_id: int = 0) -> Path:
+    # Write an ERF V2.2 holding `items`, Blowfish-encrypted the way a DAO DLC
+    # module does. `password` must be a stock module password so that the
+    # reader can resolve it from the header digest.
+    import hashlib
+
+    from Crypto.Cipher import Blowfish
+
+    from thedas_io.erf.description import MAGIC_22
+
+    cipher = Blowfish.new(struct.pack("<Q", int(password)), Blowfish.MODE_ECB)
+    rows = []
+    payload_data = b""
+    offset = 56 + len(items) * 76
+    for name, data in items.items():
+        # pad up to the block with the pad count, as the engine does, so
+        # packed_size exceeds size by 1..7 bytes
+        pad = -len(data) % 8
+        packed_size = len(data) + pad
+        rows.append((name, offset, packed_size, len(data)))
+        payload_data += cipher.encrypt(data + bytes([pad]) * pad) if pad else cipher.encrypt(data)
+        offset += packed_size
+
+    header = MAGIC_22 + struct.pack(
+        "<6I16s",
+        len(items),
+        0,
+        0,
+        0xFFFFFFFF,
+        2 << 4,  # encryption id 2, bits 4..7 of the flags word
+        module_id,
+        hashlib.md5(password.encode("ascii")).digest(),
+    )
+    toc = b"".join(
+        name.encode("utf-16le").ljust(64, b"\x00") + struct.pack("<III", off, plen, size)
+        for name, off, plen, size in rows
+    )
+    path.write_bytes(header + toc + payload_data)
+    return path
+
+
+def zlib_archive(path, items) -> Path:
+    # Write an ERF V2.1 holding `items`: ascii names, zlib payloads, and the
+    # 44-byte rows dao_prc_gib's env areas use.
+    import zlib
+
+    from thedas_io.erf.description import MAGIC_21
+
+    rows = []
+    payload_data = b""
+    offset = 32 + len(items) * 44
+    for name, data in items.items():
+        blob = zlib.compress(data)
+        rows.append((name, offset, len(blob), len(data)))
+        payload_data += blob
+        offset += len(blob)
+
+    header = MAGIC_21 + struct.pack("<4I", len(items), 0, 0x004F006E, 0x0000FFFF)
+    toc = b"".join(
+        name.encode("ascii").ljust(32, b"\x00") + struct.pack("<3I", off, plen, size)
+        for name, off, plen, size in rows
+    )
+    path.write_bytes(header + toc + payload_data)
+    return path
+
+
 def struct_defs_blob(reader) -> tuple[bytes, bytes]:
     # (struct-defs, fields) of a parsed GFF, for asserting on a re-encode.
     defs = b"".join(

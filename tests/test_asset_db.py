@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 import struct
 
-from conftest import archive
-from thedas_io.asset_db.scanner import find, find_exact, load, scan
+import pytest
+
+from conftest import archive, encrypted_archive, zlib_archive
+from thedas_io.asset_db.scanner import find, find_exact, load, payload, scan
 from thedas_io.erf.description import MAGIC, ERFReader, ERFWriter
 
 
@@ -160,3 +162,35 @@ def test_scan_migrates_a_database_without_priority(tmp_path):
 
     scan(tmp_path, db)
     assert find_exact("a.msh", db)["package"] == "p.erf"
+
+
+def test_scan_indexes_encrypted_dlc_archives(tmp_path):
+    # a DLC module is ERF V2.2: the scan has to index it, not skip it, and the
+    # payload has to come back decrypted and without block padding
+    encrypted_archive(
+        tmp_path / "dlc.rim", {"a.mmh": b"GFF V4.0 mesh", "b.msh": b"xyz"}, "13422531"
+    )
+    db = tmp_path / "t.sqlite"
+    assert scan(tmp_path, db)["skipped"] == []
+    assert {(r["package"], r["filename"]) for r in load(db)} == {
+        ("dlc.rim", "a.mmh"),
+        ("dlc.rim", "b.msh"),
+    }
+    assert payload(tmp_path / "dlc.rim", "a.mmh") == b"GFF V4.0 mesh"
+    assert payload(tmp_path / "dlc.rim", "b.msh") == b"xyz"
+
+
+def test_scan_indexes_zlib_v21_archives(tmp_path):
+    zlib_archive(tmp_path / "env.rim", {"plt_a.plo": b"GFF V4.0PLTS" * 20})
+    db = tmp_path / "t.sqlite"
+    assert scan(tmp_path, db)["skipped"] == []
+    assert payload(tmp_path / "env.rim", "plt_a.plo") == b"GFF V4.0PLTS" * 20
+
+
+def test_unknown_module_is_indexed_but_its_payload_fails(tmp_path):
+    encrypted_archive(tmp_path / "mod.rim", {"a.msh": b"x"}, "99999999", module_id=7)
+    db = tmp_path / "t.sqlite"
+    assert scan(tmp_path, db)["skipped"] == []
+    assert [r["filename"] for r in load(db)] == ["a.msh"]
+    with pytest.raises(ValueError, match="no known password"):
+        payload(tmp_path / "mod.rim", "a.msh")
