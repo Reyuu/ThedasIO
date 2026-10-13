@@ -994,7 +994,10 @@ def _scan_async(root, db_path) -> dict:
                 state["total"] = total
 
             state["stats"] = scan(root, db_path, progress=progress)
-        except (OSError, ValueError, struct.error, sqlite3.Error) as exc:
+        except Exception as exc:  # noqa: BLE001
+            # a whitelist here let anything else (MemoryError, RecursionError)
+            # kill the thread silently, and the operator then read the missing
+            # stats as a successful scan of an empty folder
             state["error"] = exc
         finally:
             state["done"] = True
@@ -1117,6 +1120,13 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         state = self._state or {}
         if state.get("error") is not None:
             self.report({"WARNING"}, f"Scan failed: {state['error']}")
+            return {"CANCELLED"}
+
+        # the worker catches everything now, so no stats at all means it died
+        # before returning. that is a failed scan, not a folder holding nothing,
+        # and reporting it as success cleared the asset list for nothing
+        if state.get("stats") is None:
+            self.report({"WARNING"}, "Scan failed: the worker stopped early")
             return {"CANCELLED"}
 
         rows = _fill_assets(

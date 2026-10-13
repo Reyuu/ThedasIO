@@ -1108,3 +1108,33 @@ def test_scan_report_names_unreadable_archives(tmp_path):
 
     assert len(op.reports) == 1
     assert "1 unreadable archive(s)" in op.reports[0][1]
+
+
+def test_a_scan_worker_that_dies_is_not_reported_as_an_empty_folder(monkeypatch, tmp_path):
+    # the worker whitelisted four exception types, so anything else killed the
+    # thread silently and the summary claimed a successful scan of nothing
+    from thedas_io import ui as ui_module
+
+    def explode(*args, **kwargs):
+        raise MemoryError("out of memory")
+
+    monkeypatch.setattr(ui_module, "scan", explode)
+    state = ui_module._scan_async(tmp_path, tmp_path / "t.sqlite")
+    state["thread"].join(timeout=10)
+
+    assert state["done"] is True
+    assert isinstance(state["error"], MemoryError)
+
+
+def test_finish_treats_missing_stats_as_a_failed_scan(tmp_path):
+    from types import SimpleNamespace
+
+    scene = _scene(db=str(tmp_path / "t.sqlite"))
+    op = cast(Any, ui.THEDAS_IO_OT_scan_assets())
+    op._scene = scene
+    op._db_path = str(tmp_path / "t.sqlite")
+    op._state = {"stats": None, "error": None}
+
+    assert op._finish(SimpleNamespace(scene=scene)) == {"CANCELLED"}
+    assert op.reports[0][0] == {"WARNING"}
+    assert "failed" in op.reports[0][1].lower()
