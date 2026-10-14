@@ -45,7 +45,9 @@ jobs:
           $versions = @()
           git tag --list | ForEach-Object {
             $t = $_
-            if ($t -match '^(\d+)\.(\d+)beta$') {
+            if ($t -match '^(\d+)\.(\d+)\.(\d+)beta$') {
+              $versions += [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+            } elseif ($t -match '^(\d+)\.(\d+)beta$') {
               $versions += [version]::new([int]$Matches[1], [int]$Matches[2], 0)
             } elseif ($t -match '^(\d+)\.(\d+)(?:\.(\d+))?$') {
               $patch = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
@@ -57,7 +59,12 @@ jobs:
           if (-not $latest) { $latest = [version]::new(0, 0, 0) }
 
           if ($hotfix) {
-            $tag = "$([version]::new($latest.Major, $latest.Minor, ($latest.Build + 1)).ToString())beta"
+            $v = [version]::new($latest.Major, $latest.Minor, ($latest.Build + 1))
+            $tag = "$($v.ToString())beta"
+            while (git tag --list $tag) {
+              $v = [version]::new($v.Major, $v.Minor, ($v.Build + 1))
+              $tag = "$($v.ToString())beta"
+            }
           } else {
             $maxBeta = 0
             git tag --list '0.*beta' | ForEach-Object {
@@ -65,7 +72,12 @@ jobs:
                 $maxBeta = [Math]::Max($maxBeta, [int]$Matches[1])
               }
             }
-            $tag = "0.$($maxBeta + 1)beta"
+            $n = $maxBeta + 1
+            $tag = "0.${n}beta"
+            while (git tag --list $tag) {
+              $n++
+              $tag = "0.${n}beta"
+            }
           }
 
           $numeric = $tag -replace 'beta$', ''
@@ -123,11 +135,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Create release tag
         shell: pwsh
         run: |
           $tag = "${{ needs.build.outputs.tag }}"
+          if (git ls-remote --tags origin "refs/tags/$tag" | Select-Object -First 1) {
+            Write-Error "Tag $tag already exists on origin (concurrent release?). Re-run the workflow to pick the next version."
+            exit 1
+          }
           git tag $tag
           git push origin $tag
 
