@@ -18,7 +18,9 @@ from mathutils import Matrix, Quaternion
 from PIL import Image as PilImage
 
 from . import geometry
-from .asset_db.scanner import find, scan
+from .asset_db.scanner import count, find, scan
+
+ASSET_LIMIT = 1000
 from .assets import extract, importer_for, resolve
 from .export import (
     _LOADED_ITEMS,
@@ -262,6 +264,23 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
                 "thedas_io_index",
                 rows=8,
             )
+
+            limit = _asset_limit(context)
+            total = getattr(scene, "thedas_io_assets_total", len(scene.thedas_io_assets))
+            try:
+                total = int(total)
+            except (TypeError, ValueError):
+                total = len(scene.thedas_io_assets)
+            if limit is not None and total > limit:
+                pages = _page_count(total, limit)
+                page = getattr(scene, "thedas_io_page", 0) or 0
+                page = max(0, min(int(page), pages - 1))
+                row = self.layout.row(align=True)
+                prev = row.operator("thedas_io.assets_page", text="Prev")
+                prev.step = -1
+                row.label(text=f"Page {page + 1}/{pages} ({total})")
+                nxt = row.operator("thedas_io.assets_page", text="Next")
+                nxt.step = 1
 
             self.layout.operator("thedas_io.import_asset", text="Import Selected")
         else:
@@ -920,12 +939,20 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         "collision proxies, the Add Collision operator and collision export. "
         "Off keeps PHY parsing read-only in the background.",
     )
+    thedas_io_unlimited_assets: bpy.props.BoolProperty(  # type: ignore
+        name="Show all assets (no limit)",
+        default=False,
+        description="Load every database row into the asset list, as before. "
+        "Needs lots of memory with a full game install (10k-100k rows); "
+        "leave off and use search instead",
+    )
 
     def draw(self, context):
         if self.layout is None:
             return
         self.layout.prop(self, "thedas_io_game_dir")
         self.layout.prop(self, "thedas_io_enable_phy")
+        self.layout.prop(self, "thedas_io_unlimited_assets")
 
 
 def default_addins_dir() -> str:
@@ -956,11 +983,77 @@ def _prefs_game_dir(context) -> str:
     return ""
 
 
-def _fill_assets(scene, db_path=None, ext=None, name=None, package=None) -> list:
+def _prefs_unlimited(context=None) -> bool:
+    # old uncapped list, opt-in via preferences; default capped
+    ctx = context
+    if ctx is None:
+        try:
+            ctx = bpy.context
+        except Exception:  # noqa: BLE001 - fake bpy / headless
+            return False
+    try:
+        addons = ctx.preferences.addons
+    except Exception:  # noqa: BLE001
+        return False
+    for key in (__package__ or "", "thedas_io"):
+        if not key:
+            continue
+        try:
+            prefs = addons[key].preferences
+        except Exception:  # noqa: BLE001, S112 - missing addon / fake mapping
+            continue
+        try:
+            if bool(getattr(prefs, "thedas_io_unlimited_assets", False)):
+                return True
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return False
+
+
+def _asset_limit(context=None):
+    return None if _prefs_unlimited(context) else ASSET_LIMIT
+
+
+def _page_count(total: int, limit) -> int:
+    if limit is None or total <= 0:
+        return 1
+    return (total + limit - 1) // limit
+
+
+def _asset_message(shown: int, total: int, page: int = 0, limit=None) -> str:
+    if limit is None or total <= limit:
+        return f"{total} assets"
+    pages = _page_count(total, limit)
+    page = max(0, min(page, pages - 1))
+    start = page * limit + 1
+    return f"{start}-{start + shown - 1}/{total} assets (page {page + 1}/{pages})"
+
+
+def _fill_assets(
+    scene,
+    db_path=None,
+    ext=None,
+    name=None,
+    package=None,
+    limit="default",
+    offset=0,
+    context=None,
+) -> tuple:
     if isinstance(ext, str):
         ext = ext.strip() or None
-
-    rows = find(ext, name, package, db_path)
+    if limit == "default":
+        limit = _asset_limit(context)
+    if limit is None:
+        offset = 0
+    else:
+        offset = max(0, int(offset))
+    try:
+        total = count(ext, name, package, db_path)
+    except sqlite3.Error:
+        total = None
+    rows = find(ext, name, package, db_path, limit=limit, offset=offset)
+    if total is None:
+        total = len(rows)
     scene.thedas_io_assets.clear()
 
     for r in rows:
@@ -969,7 +1062,42 @@ def _fill_assets(scene, db_path=None, ext=None, name=None, package=None) -> list
         item.filename = r["filename"]
         item.ext = r["ext"]
         item.path = r["path"]
-    return rows
+    try:
+        scene.thedas_io_assets_total = int(total)
+        scene.thedas_io_page = offset // limit if limit else 0
+        scene.thedas_io_index = 0
+    except (AttributeError, ReferenceError, TypeError, ValueError):
+        pass
+    return rows, total
+
+
+def _refresh_assets_page(context, scene=None, page=0) -> tuple:
+    # one place that maps filters + page to a LIMIT/OFFSET slice
+    scene = scene if scene is not None else context.scene
+    limit = _asset_limit(context)
+    ext = _ext_filter(getattr(scene, "thedas_io_filter_ext", "NONE"))
+    name = getattr(scene, "thedas_io_filter_name", "") or None
+    package = getattr(scene, "thedas_io_filter_package", "") or None
+    if limit is None:
+        page = 0
+    else:
+        try:
+            total_hint = count(ext, name, package, getattr(scene, "thedas_io_db_path", "") or None)
+        except sqlite3.Error:
+            total_hint = 0
+        pages = _page_count(total_hint, limit)
+        page = max(0, min(int(page), pages - 1))
+    rows, total = _fill_assets(
+        scene,
+        getattr(scene, "thedas_io_db_path", "") or None,
+        ext,
+        name,
+        package,
+        limit=limit,
+        offset=page * limit if limit else 0,
+        context=context,
+    )
+    return rows, total, page
 
 
 def _scan_async(root, db_path) -> dict:
@@ -1127,13 +1255,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             self.report({"WARNING"}, "Scan failed: the worker stopped early")
             return {"CANCELLED"}
 
-        rows = _fill_assets(
-            scene,
-            self._db_path or None,
-            _ext_filter(scene.thedas_io_filter_ext),
-            scene.thedas_io_filter_name or None,
-            scene.thedas_io_filter_package or None,
-        )
+        rows, total, page = _refresh_assets_page(context, scene, page=0)
         stats = state.get("stats") or {}
         notes = []
         if stats.get("missing"):
@@ -1146,7 +1268,8 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         self.report(
             {"INFO"},
             f"Scanned {stats.get('files', 0)} archive files, "
-            f"{stats.get('entries', 0)} entries, {len(rows)} assets. {note}".strip(),
+            f"{stats.get('entries', 0)} entries, "
+            f"{_asset_message(len(rows), total, page, _asset_limit(context))}. {note}".strip(),
         )
         return {"FINISHED"}
 
@@ -1462,16 +1585,31 @@ class THEDAS_IO_OT_refresh_assets(bpy.types.Operator):
     )
 
     def execute(self, context) -> set:
-        scene = context.scene
-        rows = _fill_assets(
-            scene,
-            scene.thedas_io_db_path or None,
-            _ext_filter(scene.thedas_io_filter_ext),
-            scene.thedas_io_filter_name or None,
-            scene.thedas_io_filter_package or None,
-        )
+        rows, total, page = _refresh_assets_page(context, page=0)
 
-        self.report({"INFO"}, f"{len(rows)} assets")
+        self.report({"INFO"}, _asset_message(len(rows), total, page, _asset_limit(context)))
+        return {"FINISHED"}
+
+
+class THEDAS_IO_OT_assets_page(bpy.types.Operator):
+    bl_idname = "thedas_io.assets_page"
+    bl_label = "Asset page"
+    bl_description = "Show the previous or next page of the asset list"
+    step: bpy.props.IntProperty(default=1)  # type: ignore
+
+    def execute(self, context) -> set:
+        scene = context.scene
+        if _asset_limit(context) is None:
+            self.report({"INFO"}, "All assets already shown")
+            return {"FINISHED"}
+        current = getattr(scene, "thedas_io_page", 0) or 0
+        try:
+            want = int(current) + int(getattr(self, "step", 1) or 0)
+        except (TypeError, ValueError):
+            return {"CANCELLED"}
+        rows, total, page = _refresh_assets_page(context, scene, page=want)
+        limit = _asset_limit(context)
+        self.report({"INFO"}, _asset_message(len(rows), total, page, limit))
         return {"FINISHED"}
 
 
@@ -2706,6 +2844,7 @@ _CLASSES: tuple = (
     THEDAS_IO_OT_load_animation,
     THEDAS_IO_OT_export_animation,
     THEDAS_IO_OT_refresh_assets,
+    THEDAS_IO_OT_assets_page,
     THEDAS_IO_OT_import_asset,
     THEDAS_IO_OT_import_file,
     THEDAS_IO_OT_export_assets,
@@ -2773,6 +2912,8 @@ _EXT_ITEMS = (
 _SCENE_PROPS = (
     "thedas_io_assets",
     "thedas_io_index",
+    "thedas_io_page",
+    "thedas_io_assets_total",
     "thedas_io_export_items",
     "thedas_io_export_index",
     "thedas_io_rename_items",
@@ -2803,6 +2944,12 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.thedas_io_assets = bpy.props.CollectionProperty(type=THEDAS_IO_AssetItem)  # type: ignore
     bpy.types.Scene.thedas_io_index = bpy.props.IntProperty()  # type: ignore
+    bpy.types.Scene.thedas_io_page = bpy.props.IntProperty(  # type: ignore
+        default=0, min=0, description="Current page of the asset list"
+    )
+    bpy.types.Scene.thedas_io_assets_total = bpy.props.IntProperty(  # type: ignore
+        default=0, min=0, description="Total assets matching the current filters"
+    )
     bpy.types.Scene.thedas_io_export_items = bpy.props.CollectionProperty(type=THEDAS_IO_ExportItem)  # type: ignore
     bpy.types.Scene.thedas_io_export_index = bpy.props.IntProperty()  # type: ignore
     bpy.types.Scene.thedas_io_rename_items = bpy.props.CollectionProperty(type=THEDAS_IO_RenameItem)  # type: ignore

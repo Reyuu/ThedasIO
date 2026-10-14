@@ -10,9 +10,11 @@
 
 ## What it does
 
-- **Import** from the game's asset database (scans `.rim`/`.erf` packages) or from a file on disk. Pulls in the sibling `.msh`, `.mao` and textures automatically (this functionality works only for `.mmh` files).
+- **Import** from the game's asset database (scans `.rim`/`.erf` packages, including encrypted DLC archives and the AddIns folder for DLC/mods) or from a file on disk. Pulls in the sibling `.msh`, `.mao` and textures automatically (this functionality works only for `.mmh` files). Large result lists are paged (1000 per page).
 - **Materials** are rebuilt from the MAO's channel packing into a Specular BSDF, with a "DAO Tint" node
   group per side driven by `.tnt` values.
+- **Collision** (`.phy`, experimental, opt-in): proxy shapes on their bones for moving/resizing, plus adding capsules.
+- **Animation** (`.ani`): play a clip on the imported armature, edit keys, export back; untouched channels stay byte-identical.
 - **Editing** works normally in the viewport: pose bones, vertex weights, UVs, textures. Textures are unpacked to a `thedas_io_textures/` folder beside the `.blend`, so they can be edited in an external program and reloaded.
 - **Export** writes each loaded resource to a folder you pick. Untouched files come out byte-identical to the source; edited ones are re-encoded.
 
@@ -25,9 +27,6 @@ Documentation about the usage from the modder's perspective is available in [doc
 Drag and drop generated package from the [Releases](https://github.com/Reyuu/ThedasIO/releases) page onto your Blender.
 
 If you encounter problems with installation, be sure to check [Blender's documentation](https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html) about extensions first before creating an issue.
-
-## TODO
-- loading DLC `.rim` and `.erf` files from `.dazip`
 
 ## Contributing
 

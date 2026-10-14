@@ -157,13 +157,9 @@ def payload(archive, name):
         return reader.decode_payload(f.read(entry.packed_size), entry)
 
 
-def find(ext=None, name=None, package=None, db_path=None):
-    db = _db_path(db_path)
-    if not db.exists():
-        return []
-    ext = _norm_ext(ext)
+def _where(ext=None, name=None, package=None):
     clauses = []
-    params = []
+    params: list = []
     if ext is not None:
         clauses.append("ext = ?")
         params.append(ext.lower())
@@ -173,17 +169,46 @@ def find(ext=None, name=None, package=None, db_path=None):
     if package is not None:
         clauses.append("package = ?")
         params.append(package)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, params
 
-    where = ""
-    if clauses:
-        where = f" WHERE {' AND '.join(clauses)}"
+
+def count(ext=None, name=None, package=None, db_path=None) -> int:
+    db = _db_path(db_path)
+    if not db.exists():
+        return 0
+    where, params = _where(_norm_ext(ext), name, package)
+    con = sqlite3.connect(db)
+    try:
+        row = con.execute(f"SELECT COUNT(*) FROM assets{where}", params).fetchone()
+    finally:
+        con.close()
+    return int(row[0]) if row else 0
+
+
+def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0):
+    db = _db_path(db_path)
+    if not db.exists():
+        return []
+    if limit is not None:
+        limit = int(limit)
+        offset = int(offset)
+        if limit < 0 or offset < 0:
+            raise ValueError("limit/offset must be >= 0")
+    where, params = _where(_norm_ext(ext), name, package)
+
+    # rowid order = scan insertion order, so pages are stable
+    sql = f"SELECT package, filename, ext, path FROM assets{where} ORDER BY rowid"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, limit, offset]
 
     con = sqlite3.connect(db)
     con.row_factory = sqlite3.Row
-    out = []
-    for r in con.execute(f"SELECT package, filename, ext, path FROM assets{where}", params):
-        out.append(dict(r))
-    con.close()
+    try:
+        out = [dict(r) for r in con.execute(sql, params)]
+    finally:
+        con.close()
     return out
 
 

@@ -91,6 +91,7 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_load_animation,
             ui.THEDAS_IO_OT_export_animation,
             ui.THEDAS_IO_OT_refresh_assets,
+            ui.THEDAS_IO_OT_assets_page,
             ui.THEDAS_IO_OT_import_asset,
             ui.THEDAS_IO_OT_import_file,
             ui.THEDAS_IO_OT_export_assets,
@@ -99,7 +100,7 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_import_substance,
             ui.THEDAS_IO_OT_reload_textures,
         ]
-        assert len(operators) == 12
+        assert len(operators) == 13
         for cls in operators:
             assert cls.bl_label, cls.bl_idname
             assert cls.bl_description, cls.bl_idname
@@ -131,6 +132,7 @@ def test_register_unregister():
         ui.THEDAS_IO_OT_load_animation,
         ui.THEDAS_IO_OT_export_animation,
         ui.THEDAS_IO_OT_refresh_assets,
+        ui.THEDAS_IO_OT_assets_page,
         ui.THEDAS_IO_OT_import_asset,
         ui.THEDAS_IO_OT_import_file,
         ui.THEDAS_IO_OT_export_assets,
@@ -142,6 +144,8 @@ def test_register_unregister():
     for prop in (
         "thedas_io_assets",
         "thedas_io_index",
+        "thedas_io_page",
+        "thedas_io_assets_total",
         "thedas_io_export_items",
         "thedas_io_export_index",
         "thedas_io_rename_items",
@@ -168,6 +172,8 @@ def test_register_unregister():
     for prop in (
         "thedas_io_assets",
         "thedas_io_index",
+        "thedas_io_page",
+        "thedas_io_assets_total",
         "thedas_io_export_items",
         "thedas_io_export_index",
         "thedas_io_rename_items",
@@ -200,11 +206,14 @@ def test_addon_preferences():
     assert prefs.layout.props == [
         (prefs, "thedas_io_game_dir", ""),
         (prefs, "thedas_io_enable_phy", ""),
+        (prefs, "thedas_io_unlimited_assets", ""),
     ]
     # experimental collider work stays off until the user turns it on
     ann = cast(Any, ui.THEDAS_IO_AddonPreferences).__annotations__
     phy_prop = ann.get("thedas_io_enable_phy")
     assert phy_prop is not None and phy_prop.kwargs.get("default") is False
+    uncapped = ann.get("thedas_io_unlimited_assets")
+    assert uncapped is not None and uncapped.kwargs.get("default") is False
 
 
 def test_substance_subpanel():
@@ -286,6 +295,8 @@ def _scene(db="", index=0):
     return SimpleNamespace(
         thedas_io_assets=FakeCollection(),
         thedas_io_index=index,
+        thedas_io_page=0,
+        thedas_io_assets_total=0,
         thedas_io_filter_ext="NONE",
         thedas_io_filter_name="",
         thedas_io_filter_package="",
