@@ -195,3 +195,21 @@ def test_panel_pagination_row_only_when_needed(tmp_path):
     big = draw_with(2501, 1000, page=1)
     assert big.operators.count("thedas_io.assets_page") == 2
     assert any("Page 2/3" in label for label in big.labels)
+
+
+def test_fill_assets_survives_a_locked_database(tmp_path, monkeypatch):
+    # pressing Search while the scan thread writes must show an empty page, not
+    # raise out of the operator
+    import sqlite3
+
+    db = _make_db(tmp_path, 10)
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    scene = SimpleNamespace(thedas_io_assets=FakeCollection())
+    monkeypatch.setattr(ui, "find", locked)
+    rows, total = ui._fill_assets(scene, str(db))
+    assert rows == []
+    assert total == 11
+    assert list(scene.thedas_io_assets) == []

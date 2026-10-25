@@ -347,3 +347,34 @@ def test_failed_scan_closes_the_connection_and_keeps_the_old_index(tmp_path, mon
     tracked = state["con"]
     assert tracked.closed is True
     assert [r["filename"] for r in load(db)] == ["a.txt"]
+
+
+def test_scan_uses_wal_and_a_busy_timeout(tmp_path):
+    from thedas_io.asset_db import scanner
+
+    archive(tmp_path / "a.erf", {"a.txt": b"x"})
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db)
+    con = scanner._connect(db)
+    try:
+        assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert con.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        con.close()
+
+
+def test_find_reads_while_a_write_holds_the_database(tmp_path):
+    # WAL: an EXCLUSIVE writer blocks other writers but never a reader. With
+    # the default journal this query would wait out the timeout and then raise
+    # "database is locked", which is what a search during a scan used to show.
+    archive(tmp_path / "a.erf", {"a.txt": b"x"})
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db)
+    writer = sqlite3.connect(db)
+    writer.execute("BEGIN EXCLUSIVE")
+    writer.execute("INSERT INTO assets VALUES (NULL, 'late.txt', '.txt', 'x', 0, 0)")
+    try:
+        assert [r["filename"] for r in find(db_path=db)] == ["a.txt"]
+    finally:
+        writer.rollback()
+        writer.close()

@@ -1153,7 +1153,20 @@ def _fill_assets(
         total = count(ext, name, package, db_path, game=getattr(scene, "thedas_io_game", "DAO"))
     except sqlite3.Error:
         total = None
-    rows = find(ext, name, package, db_path, limit=limit, offset=offset, game=getattr(scene, "thedas_io_game", "DAO"))
+    try:
+        rows = find(
+            ext,
+            name,
+            package,
+            db_path,
+            limit=limit,
+            offset=offset,
+            game=getattr(scene, "thedas_io_game", "DAO"),
+        )
+    except sqlite3.Error:
+        # a search pressed while the scan thread is writing must show an empty
+        # page, not an operator traceback; the next refresh retries
+        rows = []
     if total is None:
         total = len(rows)
     scene.thedas_io_assets.clear()

@@ -54,6 +54,15 @@ def _db_path(path=None, game=None):
     return Path(base) / "BlenderDAOTools" / f"asset_db_{game.lower()}.sqlite"
 
 
+def _connect(db):
+    # the scan runs on a worker thread, so a reader must not fail with
+    # "database is locked": WAL (set at scan time) lets it use its snapshot
+    # while a write is in flight, and the timeout covers a checkpoint
+    con = sqlite3.connect(db, timeout=5.0)
+    con.execute("PRAGMA busy_timeout=5000")
+    return con
+
+
 def _entry_table(path):
     path = Path(path)
     try:
@@ -215,8 +224,13 @@ def scan(root, db_path=None, progress=None, game=None):
     roots = [Path(root)] if isinstance(root, (str, Path)) else [Path(r) for r in root]
     db = _db_path(db_path, game)
     db.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(db)
+    con = _connect(db)
     try:
+        try:
+            # a plain delete journal makes a reader wait for the whole scan
+            con.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            pass 
         con.executescript(SCHEMA)
         cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
         if "prio" not in cols:  # a database written before the column existed
@@ -432,7 +446,7 @@ def count(ext=None, name=None, package=None, db_path=None, game=None) -> int:
     if not db.exists():
         return 0
     where, params = _where(_norm_ext(ext), name, package)
-    con = sqlite3.connect(db)
+    con = _connect(db)
     try:
         row = con.execute(f"SELECT COUNT(*) FROM assets{where}", params).fetchone()
     finally:
@@ -457,7 +471,7 @@ def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0, 
         sql += " LIMIT ? OFFSET ?"
         params = [*params, limit, offset]
 
-    con = sqlite3.connect(db)
+    con = _connect(db)
     con.row_factory = sqlite3.Row
     try:
         out = [dict(r) for r in con.execute(sql, params)]
@@ -475,7 +489,7 @@ def find_exact(name, db_path=None, game=None):
     if not db.exists():
         return None
 
-    con = sqlite3.connect(db)
+    con = _connect(db)
     con.row_factory = sqlite3.Row
     try:
         row = con.execute(
