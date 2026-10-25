@@ -1284,6 +1284,7 @@ def test_finish_treats_missing_stats_as_a_failed_scan(tmp_path):
     assert op.reports[0][0] == {"WARNING"}
     assert "failed" in op.reports[0][1].lower()
 
+
 def test_scene_db_follows_the_selected_game_when_the_override_is_blank():
     from types import SimpleNamespace
 
@@ -1305,7 +1306,6 @@ def test_import_row_resolves_a_blank_db_path_to_the_scene_game(monkeypatch):
     def fake_find(name, db_path=None, game=None):
         seen["name"] = name
         seen["db"] = db_path
-
 
     def stop(row):
         raise RuntimeError("stop after the lookup")

@@ -24,4 +24,4 @@ jobs:
         run: uv run ruff format --check src tests tools
 
       - name: Mypy
-        run: uv run --no-project --python 3.13 --with mypy --with pillow --with "numpy>=2.4.6" --with "pynvtt>=0.0.2" mypy src
+        run: uv run --no-project --python 3.13 --with mypy --with pillow --with "numpy>=2.4.6" --with "pynvtt>=0.0.2" --with "pycryptodome>=3.23" mypy src

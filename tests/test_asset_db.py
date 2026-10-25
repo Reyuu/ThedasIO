@@ -255,7 +255,7 @@ def test_da2_recovers_hash_only_names(tmp_path, monkeypatch):
     assert (tmp_path / "out" / "thing.mmh").read_bytes() == gff_mmh
     # the UI can only keep the 64-bit hash as hex text, not in a bpy int
     assert (
-        payload(row["path"], row["filename"], f'{row["name_hash"] & 0xFFFFFFFFFFFFFFFF:016x}')
+        payload(row["path"], row["filename"], f"{row['name_hash'] & 0xFFFFFFFFFFFFFFFF:016x}")
         == gff_mmh
     )
 

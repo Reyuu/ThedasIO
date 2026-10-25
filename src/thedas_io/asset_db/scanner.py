@@ -33,7 +33,7 @@ def _mapped(path):
 
 def fnv1(text: str) -> int:
     # FNV-1 64-bit: multiply, then xor. ERF V3 (DA2) hashes names this way.
-    h = 0xCBF29CE484222325 # prime start
+    h = 0xCBF29CE484222325  # prime start
     for b in text.encode():
         h = (h * 0x100000001B3 ^ b) & 0xFFFFFFFFFFFFFFFF
     return h
@@ -228,7 +228,7 @@ def scan(root, db_path=None, progress=None, game=None):
             # a plain delete journal makes a reader wait for the whole scan
             con.execute("PRAGMA journal_mode=WAL")
         except sqlite3.Error:
-            pass 
+            pass
         con.executescript(SCHEMA)
         cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
         if "prio" not in cols:  # a database written before the column existed
@@ -351,9 +351,7 @@ def _recover_names(con, game=None):
                     # its stem, so hash each candidate too: the exact hash
                     # decides, and the ext check below keeps a guess from naming
                     # the wrong kind of row.
-                    stem = (
-                        v[:-4] if v.lower().endswith(".msh") else v.rsplit(".", 1)[0]
-                    )
+                    stem = v[:-4] if v.lower().endswith(".msh") else v.rsplit(".", 1)[0]
                     for cand in (v, stem + ".mmh", stem + ".phy", stem + ".mao"):
                         name_map.setdefault(
                             _s64(fnv1(cand)), cand.replace("\\", "/").rsplit("/", 1)[-1]
@@ -378,8 +376,7 @@ def _recover_names(con, game=None):
         if leaf is not None:
             hits.append((h, leaf, Path(leaf).suffix.lower()))
     con.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _recovered"
-        "(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT)"
+        "CREATE TEMP TABLE IF NOT EXISTS _recovered(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT)"
     )
     con.execute("DELETE FROM _recovered")
     con.executemany("INSERT OR REPLACE INTO _recovered VALUES (?,?,?)", hits)
@@ -418,9 +415,7 @@ def payload(archive, name, name_hash=None):
             )
         if entry is None:
             raise KeyError(f"entry '{name}' not found in '{archive.name}'")
-        return reader.decode_payload(
-            data[entry.offset : entry.offset + entry.packed_size], entry
-        )
+        return reader.decode_payload(data[entry.offset : entry.offset + entry.packed_size], entry)
 
 
 def _where(ext=None, name=None, package=None):

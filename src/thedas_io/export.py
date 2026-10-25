@@ -372,12 +372,8 @@ def _check_msh_item(item: dict, mao_by_material: dict) -> list:
         label = f"{name}/{chunk.name or ci}"
         skinned = any(not d.is_terminator and d.usage == _USAGE_WEIGHT for d in chunk.declarators)
         if skinned:
-            weighted = {
-                vertex for members in decoded["groups"].values() for vertex, _ in members
-            }
-            bare = [
-                str(v) for v in range(decoded["vert_count"]) if v not in weighted
-            ]
+            weighted = {vertex for members in decoded["groups"].values() for vertex, _ in members}
+            bare = [str(v) for v in range(decoded["vert_count"]) if v not in weighted]
             if bare:
                 notes.append(
                     f"{label}: {len(bare)} verts have no weights "
@@ -868,7 +864,7 @@ def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
     # re-encode when Blender geometry diverges from the decoded source
     mesh = item["model"]
     live_objects = []
-    for entry in (item.get("objects") or []):
+    for entry in item.get("objects") or []:
         obj = entry[0] if isinstance(entry, (tuple, list)) else entry
         chunk = entry[1] if isinstance(entry, (tuple, list)) and len(entry) > 1 else None
         # a stored Object pointer can die after sculpt/undo/remesh; re-resolve

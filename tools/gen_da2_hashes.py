@@ -584,11 +584,7 @@ def write_filelist(found, path, extras=()):
     names = {n.lower() for n in found.values()}
     for extra in extras:
         with open(extra, encoding="utf-8", errors="replace") as handle:
-            names.update(
-                line.strip().lower()
-                for line in handle
-                if "." in line and line.strip()
-            )
+            names.update(line.strip().lower() for line in handle if "." in line and line.strip())
     by_ext = collections.defaultdict(set)
     for name in names:
         by_ext[name.rsplit(".", 1)[-1].lower()].add(name)
@@ -597,8 +593,10 @@ def write_filelist(found, path, extras=()):
         lines.append(ext.upper())
         lines.extend(sorted(by_ext[ext]))
     Path(path).write_bytes("\r\n".join(lines).encode("utf-8"))
-    log(f"wrote filelist {sum(len(v) for v in by_ext.values())} names in "
-        f"{len(by_ext)} extensions to {path}")
+    log(
+        f"wrote filelist {sum(len(v) for v in by_ext.values())} names in "
+        f"{len(by_ext)} extensions to {path}"
+    )
 
 
 def main(argv=None):

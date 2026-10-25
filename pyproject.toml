@@ -25,6 +25,7 @@ build-backend = "uv_build"
 dev = [
     "mypy",
     "pytest",
+    "pytest-cov",
     "ruff>=0.16.9",
     "fake-bpy-module>=20260925",
 ]
@@ -34,6 +35,21 @@ testpaths = ["tests"]
 markers = [
     "blender: spawns a real `blender --background`; deselect with -m 'not blender'",
     "corpus: walks a real game install; set THEDAS_MSH_CORPUS to enable",
+]
+
+[tool.coverage.run]
+# the tests live in tests/, the add-on in src/; blender-backed cases are opt-in
+source = ["src"]
+omit = ["src/thedas_io/asset_db/data/*"]
+
+[tool.coverage.report]
+skip_covered = true
+# baseline measured with `uv run pytest -m "not blender" --cov=src`; ratchet up
+# as the Blender-only paths gain unit coverage
+fail_under = 65
+exclude_lines = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.ruff]

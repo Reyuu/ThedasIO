@@ -1355,7 +1355,8 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         scene = context.scene
         if getattr(scene, "thedas_io_scan_addins", False):
             addins = bpy.path.abspath(
-                scene.thedas_io_addins_dir or default_addins_dir(
+                scene.thedas_io_addins_dir
+                or default_addins_dir(
                     game=getattr(scene, "thedas_io_game", "DAO"), game_dir=_prefs_game_dir(context)
                 )
             )
@@ -1379,9 +1380,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         scene = context.scene
         self._db_path = str(scene.thedas_io_db_path or "")
         if not self._db_path:
-            self._db_path = str(
-                _db_path(None, getattr(scene, "thedas_io_game", "DAO"))
-            )
+            self._db_path = str(_db_path(None, getattr(scene, "thedas_io_game", "DAO")))
         self._scene = scene
         self._state = _scan_async(
             roots, self._db_path or None, getattr(scene, "thedas_io_game", "DAO")
@@ -1411,9 +1410,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
 
         self._db_path = str(context.scene.thedas_io_db_path or "")
         if not self._db_path:
-            self._db_path = str(
-                _db_path(None, getattr(context.scene, "thedas_io_game", "DAO"))
-            )
+            self._db_path = str(_db_path(None, getattr(context.scene, "thedas_io_game", "DAO")))
         self._scene = context.scene
         self._state = _scan_async(
             roots, self._db_path or None, getattr(context.scene, "thedas_io_game", "DAO")
