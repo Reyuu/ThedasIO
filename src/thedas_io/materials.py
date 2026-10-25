@@ -1,6 +1,7 @@
 # mao parse/write, texture roles, dao normal stuff
 
 import re
+import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -130,18 +131,30 @@ def parse_mao(text):
 
 
 # da2 ships maos as gff v4 rather than the dao xml dialect; same fields, so
-# both parse into the dict build_material and write_mao already understand
+# both parse into the dict build_material and write_mao already understand.
+# root "mao " is 12 bytes: 33012 material, 33013 semantic, then one struct
+# array per optional list, in label order. element rows are "int ", "flot",
+# "flt4" (32 bytes; the value sits at 0 and the name at 16) and "tex ".
 _MAO_GFF_LABELS = {
     "name": 33012,
     "semantic": 33013,
+    "ints": 33015,
     "floats": 33016,
     "vectors": 33017,
     "textures": 33020,
 }
 _MAO_ITEM_LABELS = {
-    "texture": (33010, 33011),
+    "int": (33000, 33001),
     "float": (33002, 33003),
     "vector": (33004, 33005),
+    "texture": (33010, 33011),
+}
+# label -> (element fourcc, name label, value label, scalar fmt)
+_MAO_BINARY_ARRAYS = {
+    33015: (b"int ", 33000, 33001, "<i"),
+    33016: (b"flot", 33002, 33003, "<f"),
+    33017: (b"flt4", 33004, 33005, "<4f"),
+    33020: (b"tex ", 33010, 33011, None),
 }
 
 
@@ -149,14 +162,15 @@ def parse_mao_binary(raw):
     from .gff40.description import GFFReader
 
     root = GFFReader(raw).get_from_data_block(0)
-    tex_name, tex_res = _MAO_ITEM_LABELS["texture"]
+    int_name, int_value = _MAO_ITEM_LABELS["int"]
     flt_name, flt_value = _MAO_ITEM_LABELS["float"]
     vec_name, vec_value = _MAO_ITEM_LABELS["vector"]
+    tex_name, tex_res = _MAO_ITEM_LABELS["texture"]
 
-    textures = {}
-    for item in root.get(_MAO_GFF_LABELS["textures"]) or []:
-        if item.get(tex_name):
-            textures[item[tex_name]] = item.get(tex_res)
+    ints = {}
+    for item in root.get(_MAO_GFF_LABELS["ints"]) or []:
+        if item.get(int_name):
+            ints[item[int_name]] = int(item.get(int_value) or 0)
     floats = {}
     for item in root.get(_MAO_GFF_LABELS["floats"]) or []:
         if item.get(flt_name):
@@ -165,6 +179,10 @@ def parse_mao_binary(raw):
     for item in root.get(_MAO_GFF_LABELS["vectors"]) or []:
         if item.get(vec_name):
             vectors[item[vec_name]] = list(item.get(vec_value) or ())
+    textures = {}
+    for item in root.get(_MAO_GFF_LABELS["textures"]) or []:
+        if item.get(tex_name):
+            textures[item[tex_name]] = item.get(tex_res)
 
     name = root.get(_MAO_GFF_LABELS["name"])
     return {
@@ -174,6 +192,7 @@ def parse_mao_binary(raw):
         "textures": textures,
         "vectors": vectors,
         "floats": floats,
+        "ints": ints,
         "extra": [],
         "header": "",
         "binary": True,
@@ -184,6 +203,124 @@ def parse_mao_bytes(raw: bytes):
     if raw[:8] == b"GFF V4.0":
         return parse_mao_binary(raw)
     return parse_mao(raw.decode("utf-8"))
+
+
+def _mao_field(struct_def, label):
+    for field in struct_def.field_instances:
+        if field.label_id == label:
+            return field
+    return None
+
+
+def _patch_root_string(writer, reader, field, value) -> bool:
+    # 33012/33013 are ecstring refs in the root instance
+    current = reader.get_from_data_block(0, label_id=field.label_id)
+    if value is None or value == current:
+        return False
+    struct.pack_into("<I", writer.data_block, field.data_index, writer.alloc_ecstring(value))
+    return True
+
+
+def _patch_array(writer, reader, root, field, label, desired) -> bool:
+    fourcc, name_label, value_label, scalar = _MAO_BINARY_ARRAYS[label]
+    if field.type_id < 0 or field.type_id >= len(reader.struct_defs):
+        raise ValueError(f"binary MAO: label {label} points at no struct")
+    element = reader.struct_defs[field.type_id]
+    if element.type_fourcc.to_bytes(4, "little") != fourcc:
+        raise ValueError(f"binary MAO: label {label} is not a {fourcc!r} array")
+    name_field = _mao_field(element, name_label)
+    value_field = _mao_field(element, value_label)
+    if name_field is None or value_field is None:
+        raise ValueError(f"binary MAO: {fourcc!r} rows are missing their name/value cells")
+
+    rows = root.get(label) or []
+    ref = struct.unpack_from("<I", writer.data_block, field.data_index)[0]
+    if ref == 0xFFFFFFFF:
+        raise ValueError(f"binary MAO: label {label} names no rows")
+    base = ref + 4
+    # the shipped files pad some rows ("flt4" is 32 bytes for a 20-byte payload),
+    # so row size always comes from the file, never from the label
+    size = element.struct_size
+    if base + len(rows) * size > len(writer.data_block):
+        raise ValueError(f"binary MAO: label {label} rows run past the data block")
+    # copy each row whole, so cells this writer does not model survive
+    raw_rows = [
+        bytearray(writer.data_block[base + i * size : base + (i + 1) * size])
+        for i in range(len(rows))
+    ]
+    names = [row.get(name_label) for row in rows]
+    missing = next((name for name in desired if name not in names), None)
+    if missing is not None:
+        # a new row would need values for the cells we do not model; refuse
+        # rather than write zeros over them
+        raise ValueError(f"binary MAO: no row named {missing!r} in label {label}")
+
+    changed = False
+    for i, row in enumerate(rows):
+        value = desired.get(names[i])
+        if value is None:
+            continue
+        if scalar is None:
+            if str(value) == str(row.get(value_label)):
+                continue
+            packed: bytes = struct.pack("<I", writer.alloc_ecstring(str(value)))
+        elif label == 33017:
+            if len(value) != 4:
+                raise ValueError(f"binary MAO: {names[i]!r} is not a Vector4f")
+            current = row.get(value_label) or ()
+            if len(current) == 4 and all(float(a) == float(b) for a, b in zip(value, current)):
+                continue
+            packed = struct.pack("<4f", *(float(v) for v in value))
+        else:
+            if float(value) == float(row.get(value_label) or 0):
+                continue
+            packed = struct.pack(scalar, value)
+        raw_rows[i][value_field.data_index : value_field.data_index + len(packed)] = packed
+        changed = True
+
+    if not changed:
+        return False
+    block = struct.pack("<I", len(raw_rows)) + b"".join(bytes(row) for row in raw_rows)
+    struct.pack_into("<I", writer.data_block, field.data_index, writer.alloc(block))
+    return True
+
+
+def write_mao_binary(parsed: dict, raw: bytes) -> bytes:
+    # patch a da2 GFF MAO in place; an untouched file comes back byte-identical
+    from .gff40.description import FLAGS, GFFReader, GFFWriter
+
+    reader = GFFReader(raw)
+    if reader.file_type != b"MAO " or not reader.struct_defs:
+        raise ValueError("not a DA2 MAO file")
+    root_def = reader.struct_defs[0]
+    writer = GFFWriter.from_reader(reader)
+    root = reader.get_from_data_block(0)
+    changed = False
+
+    for key in ("material", "semantic"):
+        label = _MAO_GFF_LABELS["name" if key == "material" else "semantic"]
+        field = _mao_field(root_def, label)
+        if field is not None:
+            changed |= _patch_root_string(writer, reader, field, parsed.get(key))
+
+    for label, key in (
+        (33015, "ints"),
+        (33016, "floats"),
+        (33017, "vectors"),
+        (33020, "textures"),
+    ):
+        field = _mao_field(root_def, label)
+        desired = parsed.get(key) or {}
+        if field is None:
+            if desired:
+                raise ValueError(f"binary MAO: this file has no {key} list")
+            continue
+        if field.flags != FLAGS["STRUCT_ARRAY"]:
+            raise ValueError(f"binary MAO: label {label} is not a struct array")
+        if desired:
+            changed |= _patch_array(writer, reader, root, field, label, desired)
+
+    return writer.write() if changed else bytes(raw)
 
 
 def write_mao(parsed):

@@ -65,6 +65,7 @@ from .materials import (
     swizzle_for_encode,
     thedas_io_normals_to_rgba,
     write_mao,
+    write_mao_binary,
 )
 from .msh.description import MSHReader, MSHWriter
 from .tnt import NAMES, SIDES, alpha_input, group_name
@@ -618,9 +619,18 @@ def _mao_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
     parsed = item.get("model")
     if not isinstance(parsed, dict):
         return None
+    binary = bool(parsed.get("binary"))
+    if binary and tint:
+        # da2 keeps tint colours in a .tnt (tints.rim), not in the MAO; writing
+        # the dao Vector4fArray into a binary MAO would invent a field the game
+        # never stores, so refuse loudly instead of shipping an untinted file
+        raise ValueError(
+            f"{item.get('file') or 'mao'}: binary MAO tint export is not supported; "
+            "DA2 tint colours live in tints.rim, not the MAO"
+        )
     vectors = parsed.get("vectors") or {}
     textures = parsed.get("textures") or {}
-    extra = _tint_extra(parsed, tint)
+    extra = None if binary else _tint_extra(parsed, tint)
     roles = slot_roles(textures)
 
     for mat in item.get("objects") or []:
@@ -644,6 +654,8 @@ def _mao_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
         live_parsed["textures"] = {**textures, **swaps}
         if extra is not None:
             live_parsed["extra"] = extra
+        if binary:
+            return write_mao_binary(live_parsed, item.get("raw") or b"")
         return write_mao(live_parsed).encode("utf-8")
 
     if extra is not None:

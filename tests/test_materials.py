@@ -277,23 +277,84 @@ def test_mao_bytes_vector_drift_keeps_floats_and_extras():
     assert out["extra"] == parse_mao(PARAMS)["extra"]
 
 
-def _mao_gff4(textures):
-    # minimal da2 mao: root "MAO " with one "tet " struct array for textures
+def _mao_gff4(
+    textures=None,
+    *,
+    ints=None,
+    floats=None,
+    vectors=None,
+    material="Character.mat",
+    semantic="Default",
+    extra_tex=None,
+):
+    # minimal da2 mao: root "mao " plus whichever of its four arrays is given.
+    # extra_tex plants a cell the writer does not model, e.g. (33019, 7).
     from thedas_io.gff40.description import FLAGS, GFFStructDef, GFFWriter
 
+    def fourcc(text):
+        return int.from_bytes(text.encode("ascii"), "little")
+
+    arrays = [
+        (33015, b"int ", 33000, 33001, ints or {}, None),
+        (33016, b"flot", 33002, 33003, floats or {}, None),
+        (33017, b"flt4", 33004, 33005, vectors or {}, None),
+        (33020, b"tex ", 33010, 33011, textures or {}, extra_tex),
+    ]
+    present = [a for a in arrays if a[4]]
+    root_size = 4 * (2 + len(present))
+
     writer = GFFWriter(b"PC  ", b"MAO ", b"V4.0")
-    root = writer.alloc(struct.pack("<I", 0))  # root instance must sit at block 0
-    writer.struct_defs.append(GFFStructDef(int.from_bytes(b"MAO ", "little"), 0, 0, 4))
-    writer.struct_defs.append(GFFStructDef(int.from_bytes(b"tet ", "little"), 0, 0, 8))
-    cells = []
-    for semantic, res in textures.items():
-        cells.append((writer.alloc_ecstring(semantic), writer.alloc_ecstring(res)))
-    rows = b"".join(struct.pack("<II", *cell) for cell in cells)
-    array = writer.alloc(struct.pack("<I", len(cells)) + rows)
-    writer.data_block[root : root + 4] = struct.pack("<I", array)
-    writer.add_field(0, 33020, 1, FLAGS["STRUCT_ARRAY"], 0)
-    writer.add_field(1, 33010, 14, FLAGS["NONE"], 0)
-    writer.add_field(1, 33011, 14, FLAGS["NONE"], 4)
+    root = writer.alloc(b"\x00" * root_size)  # root instance must sit at block 0
+    writer.struct_defs.append(GFFStructDef(fourcc("mao "), 0, 0, root_size))
+    for _, name, _, _, _, extra in present:
+        size = 32 if name == b"flt4" else (12 if extra else 8)
+        writer.struct_defs.append(GFFStructDef(fourcc(name.decode()), 0, 0, size))
+
+    struct.pack_into("<I", writer.data_block, root, writer.alloc_ecstring(material))
+    struct.pack_into("<I", writer.data_block, root + 4, writer.alloc_ecstring(semantic))
+    writer.add_field(0, 33012, 14, FLAGS["NONE"], 0)
+    writer.add_field(0, 33013, 14, FLAGS["NONE"], 4)
+
+    for index, (label, name, name_label, value_label, values, extra) in enumerate(present, start=1):
+        size = writer.struct_defs[index].struct_size
+        rows = []
+        for key, value in values.items():
+            raw = bytearray(size)
+            name_ref = writer.alloc_ecstring(str(key))
+            if name == b"flt4":
+                # value at 0, name at 16, tail padded like the shipped files
+                raw[0:16] = struct.pack("<4f", *(float(v) for v in value))
+                struct.pack_into("<I", raw, 16, name_ref)
+            else:
+                struct.pack_into("<I", raw, 0, name_ref)
+                if name == b"tex ":
+                    struct.pack_into("<I", raw, 4, writer.alloc_ecstring(str(value)))
+                    if extra:
+                        struct.pack_into("<i", raw, 8, extra[1])
+                elif name == b"int ":
+                    struct.pack_into("<i", raw, 4, value)
+                else:
+                    struct.pack_into("<f", raw, 4, value)
+            rows.append(bytes(raw))
+        block = struct.pack("<I", len(rows)) + b"".join(rows)
+        cell = 4 * (2 + index - 1)
+        struct.pack_into("<I", writer.data_block, root + cell, writer.alloc(block))
+        writer.add_field(0, label, index, FLAGS["STRUCT_ARRAY"], cell)
+
+        if extra:
+            writer.add_field(index, extra[0], 5, FLAGS["NONE"], 8)
+        if name == b"flt4":
+            writer.add_field(index, value_label, 12, FLAGS["NONE"], 0)
+            writer.add_field(index, name_label, 14, FLAGS["NONE"], 16)
+        elif name == b"tex ":
+            writer.add_field(index, name_label, 14, FLAGS["NONE"], 0)
+            writer.add_field(index, value_label, 14, FLAGS["NONE"], 4)
+        elif name == b"int ":
+            writer.add_field(index, name_label, 14, FLAGS["NONE"], 0)
+            writer.add_field(index, value_label, 5, FLAGS["NONE"], 4)
+        else:
+            writer.add_field(index, name_label, 14, FLAGS["NONE"], 0)
+            writer.add_field(index, value_label, 8, FLAGS["NONE"], 4)
     return writer.write()
 
 
@@ -310,3 +371,110 @@ def test_parse_mao_bytes_reads_da2_gff4_textures():
         "mml_tNormalMap": "normal",
     }
 
+
+def test_parse_mao_bytes_reads_da2_ints_floats_vectors():
+    raw = _mao_gff4(
+        ints={"mml_iSoundMaterialType": 2},
+        floats={"mml_fSpecularReflectionMult": 0.5},
+        vectors={"mml_vUVScrollSpeed": [1.0, 2.0, 0.0, 0.0]},
+    )
+    parsed = parse_mao_bytes(raw)
+    assert parsed["ints"] == {"mml_iSoundMaterialType": 2}
+    assert parsed["floats"] == {"mml_fSpecularReflectionMult": 0.5}
+    assert parsed["vectors"] == {"mml_vUVScrollSpeed": [1.0, 2.0, 0.0, 0.0]}
+    assert parsed["material"] == "Character.mat"
+    assert parsed["semantic"] == "Default"
+
+
+def test_write_mao_binary_untouched_returns_raw():
+    from thedas_io.materials import write_mao_binary
+
+    raw = _mao_gff4(
+        {"mml_tDiffuse": "a_0d.dds"},
+        vectors={"mml_vUVScrollSpeed": [1.0, 0.0, 0.0, 0.0]},
+    )
+    assert write_mao_binary(parse_mao_bytes(raw), raw) == raw
+
+
+def test_write_mao_binary_patches_ints_and_floats():
+    from thedas_io.materials import write_mao_binary
+
+    raw = _mao_gff4(
+        ints={"mml_iSoundMaterialType": 0},
+        floats={"mml_fSpecularReflectionMult": 1.0},
+    )
+    parsed = parse_mao_bytes(raw)
+    parsed["ints"]["mml_iSoundMaterialType"] = 2
+    parsed["floats"]["mml_fSpecularReflectionMult"] = 0.5
+
+    again = parse_mao_bytes(write_mao_binary(parsed, raw))
+    assert again["ints"] == {"mml_iSoundMaterialType": 2}
+    assert again["floats"] == {"mml_fSpecularReflectionMult": 0.5}
+
+
+def test_mao_bytes_binary_texture_swap_preserves_unmodelled_cells():
+    from thedas_io.export import _mao_bytes
+    from thedas_io.gff40.description import GFFReader
+
+    raw = _mao_gff4(
+        {"mml_tDiffuse": "a_0d.dds", "mml_tNormalMap": "a_0n.dds"},
+        extra_tex=(33019, 7),
+    )
+    item = {
+        "file": "x.mao",
+        "kind": "mao",
+        "model": parse_mao_bytes(raw),
+        "raw": raw,
+        "objects": [_fake_mat({}, ["b_0d.dds", "a_0n.dds"])],
+    }
+    out = _mao_bytes(item)
+    assert out is not None and out != raw
+
+    again = parse_mao_bytes(out)
+    assert again["textures"] == {
+        "mml_tDiffuse": "b_0d.dds",
+        "mml_tNormalMap": "a_0n.dds",
+    }
+    # the cell the writer does not model came through untouched
+    assert GFFReader(out).get_from_data_block(0)[33020][0][33019] == 7
+
+
+def test_mao_bytes_binary_vector_edit_reencodes():
+    from thedas_io.export import _mao_bytes
+
+    raw = _mao_gff4(vectors={"mml_vUVScrollSpeed": [1.0, 0.0, 0.0, 0.0]})
+    item = {
+        "file": "x.mao",
+        "kind": "mao",
+        "model": parse_mao_bytes(raw),
+        "raw": raw,
+        "objects": [_fake_mat({"mml_vUVScrollSpeed": [0.0, 2.0, 0.0, 0.0]})],
+    }
+    out = _mao_bytes(item)
+    assert out is not None
+    assert parse_mao_bytes(out)["vectors"] == {"mml_vUVScrollSpeed": [0.0, 2.0, 0.0, 0.0]}
+
+
+def test_mao_bytes_binary_tint_is_refused():
+    from thedas_io.export import _mao_bytes
+
+    raw = _mao_gff4({"mml_tTintMask": "a_0t.dds"})
+    item = {
+        "file": "x.mao",
+        "kind": "mao",
+        "model": parse_mao_bytes(raw),
+        "raw": raw,
+        "objects": [_fake_mat({}, ["a_0t.dds"])],
+    }
+    with pytest.raises(ValueError, match="tints.rim"):
+        _mao_bytes(item, {"Diffuse R": (1.0, 0.0, 0.0, 1.0)})
+
+
+def test_write_mao_binary_refuses_a_row_it_cannot_model():
+    from thedas_io.materials import write_mao_binary
+
+    raw = _mao_gff4({"mml_tDiffuse": "a_0d.dds"})
+    parsed = parse_mao_bytes(raw)
+    parsed["textures"]["mml_tNew"] = "b_0d.dds"
+    with pytest.raises(ValueError, match="no row named"):
+        write_mao_binary(parsed, raw)
