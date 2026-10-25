@@ -21,7 +21,7 @@ from . import geometry
 from .asset_db.scanner import _db_path, count, find, find_exact, scan
 
 ASSET_LIMIT = 1000
-from .assets import extract, importer_for, resolve
+from .assets import cleanup_session, extract, importer_for, resolve
 from .export import (
     _LOADED_ITEMS,
     ITEMS,
@@ -3394,6 +3394,7 @@ def unregister():
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     reset()  # source bytes and blender members of old session go now
+    cleanup_session()  # extracted temporary sources go with them
 
     try:
         bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph_update)

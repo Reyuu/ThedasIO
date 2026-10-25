@@ -96,3 +96,62 @@ def test_extract_missing_entry(tmp_path):
             },
             tmp_path,
         )
+
+
+def test_extract_strips_archive_paths(tmp_path):
+    # an entry name is archive-controlled: `..\..\evil.msh` must not escape
+    name = "..\\..\\evil.msh"
+    archive(tmp_path / "p.erf", {name: b"payload"})
+    row = {
+        "package": "p.erf",
+        "filename": name,
+        "ext": ".msh",
+        "path": str(tmp_path / "p.erf"),
+    }
+    out = extract(row, tmp_path / "out")
+    assert out == tmp_path / "out" / "evil.msh"
+    assert out.read_bytes() == b"payload"
+    assert not (tmp_path / "evil.msh").exists()
+
+
+def test_extract_sanitises_the_package_dir(tmp_path):
+    from thedas_io import assets
+
+    archive(tmp_path / "p.erf", {"a.msh": b"payload"})
+    row = {
+        "package": "..\\escape.erf",
+        "filename": "a.msh",
+        "ext": ".msh",
+        "path": str(tmp_path / "p.erf"),
+    }
+    try:
+        out = extract(row)
+        assert assets._extract_dir() in out.parents
+        assert out.name == "a.msh" and out.parent.name == "escape.erf"
+        assert out.read_bytes() == b"payload"
+    finally:
+        assets.cleanup_session()
+
+
+@pytest.mark.parametrize("name", ["..", ".", "", "C:"])
+def test_extract_rejects_unusable_entry_names(tmp_path, name):
+    with pytest.raises(ValueError, match="no safe file name"):
+        extract(
+            {
+                "package": "p.erf",
+                "filename": name,
+                "ext": ".msh",
+                "path": str(tmp_path / "p.erf"),
+            },
+            tmp_path / "out",
+        )
+
+
+def test_cleanup_session_removes_the_scratch_dir():
+    from thedas_io import assets
+
+    directory = assets._extract_dir()
+    assert directory.is_dir()
+    assets.cleanup_session()
+    assert not directory.exists()
+    assert assets._SESSION_DIR is None
