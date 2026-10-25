@@ -216,55 +216,61 @@ def scan(root, db_path=None, progress=None, game=None):
     db = _db_path(db_path, game)
     db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db)
-    con.executescript(SCHEMA)
-    cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
-    if "prio" not in cols:  # a database written before the column existed
-        con.execute("ALTER TABLE assets ADD COLUMN prio INTEGER")
-    if "name_hash" not in cols:  # a database written before DA2 hash indexing
-        con.execute("ALTER TABLE assets ADD COLUMN name_hash INTEGER")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_assets_namehash ON assets(name_hash)")
-    con.execute("DELETE FROM assets")
+    try:
+        con.executescript(SCHEMA)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
+        if "prio" not in cols:  # a database written before the column existed
+            con.execute("ALTER TABLE assets ADD COLUMN prio INTEGER")
+        if "name_hash" not in cols:  # a database written before DA2 hash indexing
+            con.execute("ALTER TABLE assets ADD COLUMN name_hash INTEGER")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_assets_namehash ON assets(name_hash)")
+        con.execute("DELETE FROM assets")
 
-    files = 0
-    entries = 0
-    skipped = []
-    missing = []
-    targets = []
-    for i, r in enumerate(roots):
-        if not r.is_dir():
-            missing.append(str(r))
-            continue
-        for p in sorted(r.rglob("*")):
-            if p.is_file() and p.suffix.lower() in SCAN_EXTS | LOOSE_EXTS:
-                targets.append((p, r, i))
+        files = 0
+        entries = 0
+        skipped = []
+        missing = []
+        targets = []
+        for i, r in enumerate(roots):
+            if not r.is_dir():
+                missing.append(str(r))
+                continue
+            for p in sorted(r.rglob("*")):
+                if p.is_file() and p.suffix.lower() in SCAN_EXTS | LOOSE_EXTS:
+                    targets.append((p, r, i))
 
-    total = len(targets)
-    for i, (path, root_i, index) in enumerate(targets):
-        suffix = path.suffix.lower()
-        prio = _priority(path, root_i, index)
-        if suffix not in SCAN_EXTS:
-            con.execute(
-                "INSERT INTO assets VALUES (?,?,?,?,?,?)",
-                (None, path.name, suffix, str(path), prio, 0),
-            )
-        else:
-            files += 1
-            try:
-                rows = _archive_rows(path, prio)
-            except (OSError, ValueError, struct.error):
-                skipped.append(str(path))
-                rows = []
-            entries += len(rows)
-            con.executemany("INSERT INTO assets VALUES (?,?,?,?,?,?)", rows)
-        if progress is not None:
-            progress(i + 1, total)
-    # DA2 archives store FNV-1 path hashes, not filenames. Name
-    # recovery: walk every MMH entry, read its label 6005 (a real path such as
-    # 'art\\vfx\\models\\vfx_shield_uhm.msh'), map FNV-1(path) -> basename, and
-    # rename the matching mesh (etc.) entries so the asset list shows real names.
-    _recover_names(con, game)
-    con.commit()
-    con.close()
+        total = len(targets)
+        for i, (path, root_i, index) in enumerate(targets):
+            suffix = path.suffix.lower()
+            prio = _priority(path, root_i, index)
+            if suffix not in SCAN_EXTS:
+                con.execute(
+                    "INSERT INTO assets VALUES (?,?,?,?,?,?)",
+                    (None, path.name, suffix, str(path), prio, 0),
+                )
+            else:
+                files += 1
+                try:
+                    rows = _archive_rows(path, prio)
+                except (OSError, ValueError, struct.error, IndexError, KeyError):
+                    # one unreadable archive is reported, never fatal
+                    skipped.append(str(path))
+                    rows = []
+                entries += len(rows)
+                con.executemany("INSERT INTO assets VALUES (?,?,?,?,?,?)", rows)
+            if progress is not None:
+                progress(i + 1, total)
+        # DA2 archives store FNV-1 path hashes, not filenames. Name
+        # recovery: walk every MMH entry, read its label 6005 (a real path such
+        # as 'art\\vfx\\models\\vfx_shield_uhm.msh'), map FNV-1(path) -> basename,
+        # and rename the matching mesh (etc.) entries so the asset list shows
+        # real names.
+        _recover_names(con, game)
+        con.commit()
+    finally:
+        # an error mid-scan must not leave the connection (and its DELETE)
+        # hanging: closing rolls the transaction back, so the old index survives
+        con.close()
     return {
         "files": files,
         "entries": entries,
@@ -324,7 +330,7 @@ def _recover_names(con, game=None):
                         name_map.setdefault(
                             _s64(fnv1(cand)), cand.replace("\\", "/").rsplit("/", 1)[-1]
                         )
-        except (OSError, ValueError, struct.error):
+        except (OSError, ValueError, struct.error, IndexError, KeyError):
             continue
 
     # bundled DA2 DLC filename wordlist (magpiedragon) — FNV-1

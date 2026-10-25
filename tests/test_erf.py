@@ -193,3 +193,20 @@ def test_name_with_a_broken_utf16_tail_still_lists_the_archive():
     reader = ERFReader(raw)
     assert [e.name for e in reader.entries] == ["n" * 31]
     assert reader.get_payload("n" * 31) == b"data"
+
+
+def test_truncated_table_of_contents_is_rejected():
+    # the header claims two rows but the file stops inside them; the reader
+    # must say so instead of walking past the buffer
+    raw = create_sample_erf()
+    with pytest.raises(ValueError, match="table of contents"):
+        ERFReader(raw[:40])
+
+
+def test_entry_running_past_the_end_is_rejected():
+    # V2.0 row: 64-byte name field, then offset and size. Point the first entry
+    # beyond the file so the scan reports the archive instead of indexing it.
+    raw = bytearray(create_sample_erf())
+    struct.pack_into("<I", raw, 32 + 64, len(raw) + 8)
+    with pytest.raises(ValueError, match="runs past end of file"):
+        ERFReader(bytes(raw))

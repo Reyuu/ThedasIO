@@ -91,6 +91,10 @@ class ERFReader:
 
         header, row, name_size, encoding, self.codec = _layout(prefix)
         entry_count = struct.unpack("<I", self.data[16:20])[0]
+        # the rows have to fit in the file; a truncated or foreign archive
+        # reports a count that would otherwise walk past the buffer
+        if header + entry_count * row > len(self.data):
+            raise ValueError("Invalid ERF table of contents")
         if self.codec == "blowfish":
             self._parse_v22_header()
         # V2.0 is the only layout with a sentinel; V2.1 puts version constants
@@ -107,10 +111,14 @@ class ERFReader:
             # archive from the scan.
             name = entry_data[:name_size].decode(encoding, "ignore").split("\x00", 1)[0]
             numbers = struct.unpack(f"<{(row - name_size) // 4}I", entry_data[name_size:])
+            if len(numbers) < 2:
+                raise ValueError(f"Invalid ERF entry row {i}")
             offset = numbers[0]
             # V2.0 records a single length; 2.1 and 2.2 record the packed and
             # the plaintext length separately.
             packed_size, size = (numbers[1], numbers[1]) if len(numbers) == 2 else numbers[1:3]
+            if offset + packed_size > len(self.data):
+                raise ValueError(f"entry {name or i} runs past end of file")
             self.entries.append(ERFEntry(name, offset, packed_size, size))
 
         if self.codec == "zlib":
@@ -147,6 +155,8 @@ class ERFReader:
                 if end < 0:
                     end = len(self.string_table)
                 name = self.string_table[name_offset:end].decode("ascii", "replace")
+            if offset + packed_size > len(self.data):
+                raise ValueError(f"entry {name or i} runs past end of file")
             self.entries.append(
                 ERFEntry(name, offset, packed_size, size, name_hash=name_hash, type_hash=type_hash)
             )

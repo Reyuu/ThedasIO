@@ -296,3 +296,54 @@ def test_da2_bundled_hash_names_rename_and_fix_the_extension(tmp_path, monkeypat
     scan(tmp_path, db, game="DA2")
     rows = [(r["filename"], r["ext"]) for r in load(db)]
     assert rows == [("recovered.mor", ".mor")]
+
+
+def test_failed_scan_closes_the_connection_and_keeps_the_old_index(tmp_path, monkeypatch):
+    # A scan clears the table first, so a failure part way through must roll
+    # that DELETE back and release the connection; otherwise the user is left
+    # with an empty list and a locked database.
+    from thedas_io.asset_db import scanner
+
+    archive(tmp_path / "ok.erf", {"a.txt": b"abc"})
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db)
+    assert [r["filename"] for r in load(db)] == ["a.txt"]
+
+    state = {}
+
+    class Tracked:
+        def __init__(self, con):
+            self.con = con
+            self.closed = False
+
+        def __getattr__(self, name):
+            return getattr(self.con, name)
+
+        def __setattr__(self, name, value):
+            if name in ("con", "closed"):
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self.con, name, value)
+
+        def close(self):
+            self.closed = True
+            self.con.close()
+
+    real_connect = scanner.sqlite3.connect
+
+    def connect(*args, **kwargs):
+        state["con"] = Tracked(real_connect(*args, **kwargs))
+        return state["con"]
+
+    def boom(path, prio):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scanner.sqlite3, "connect", connect)
+    monkeypatch.setattr(scanner, "_archive_rows", boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        scanner.scan(tmp_path, db)
+
+    tracked = state["con"]
+    assert tracked.closed is True
+    assert [r["filename"] for r in load(db)] == ["a.txt"]
