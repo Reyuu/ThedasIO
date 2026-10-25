@@ -35,9 +35,11 @@ def test_blender_suite_only_calls_operators_this_extension_registers():
     list misses would pass unchecked. It only guards addon drift, so that is an
     acceptable trade for a test that never spawns Blender."""
     manifest = tomllib.loads((EXT_DIR / "blender_manifest.toml").read_bytes().decode())
-    registered = set(
-        re.findall(r'bl_idname\s*=\s*"([\w.]+)"', (EXT_DIR / "ui.py").read_text(encoding="utf-8"))
-    )
+    registered = set()
+    for source in EXT_DIR.rglob("*.py"):
+        registered |= set(
+            re.findall(r'bl_idname\s*=\s*"([\w.]+)"', source.read_text(encoding="utf-8"))
+        )
 
     suite = (Path(__file__).resolve().parent / "test_blender_real.py").read_text(encoding="utf-8")
     called = set(re.findall(r"bpy\.ops\.(\w+)\.(\w+)", suite))
@@ -897,10 +899,12 @@ def test_extension_combo_items_and_filter(tmp_path):
 
     assert [item[0] for item in ui._EXT_ITEMS] == ["NONE", "MSH", "MMH", "ANI", "CUB"]
     assert [item[1] for item in ui._EXT_ITEMS] == ["(None)", "MSH", "MMH", "ANI", "CUB"]
-    assert ui._ext_filter("NONE") is None
-    assert ui._ext_filter("") is None
-    assert ui._ext_filter("MSH") == "MSH"
-    assert ui._ext_filter("MMH") == "MMH"
+    from thedas_io import asset_browser
+
+    assert asset_browser._ext_filter("NONE") is None
+    assert asset_browser._ext_filter("") is None
+    assert asset_browser._ext_filter("MSH") == "MSH"
+    assert asset_browser._ext_filter("MMH") == "MMH"
     # a .blend saved with the old free-text field must not break opening
     scene = _scene(str(_seed_db(tmp_path)))
     scene.thedas_io_filter_ext = ".msh"
@@ -1032,7 +1036,7 @@ def test_scan_thread_progress_and_tick(tmp_path):
     import time
     from types import SimpleNamespace
 
-    from thedas_io.ui import _scan_async
+    from thedas_io.asset_browser import _scan_async
 
     db = _seed_db(tmp_path)
     scene = _scene(str(db))
@@ -1316,13 +1320,13 @@ def test_scan_report_names_unreadable_archives(tmp_path):
 def test_a_scan_worker_that_dies_is_not_reported_as_an_empty_folder(monkeypatch, tmp_path):
     # the worker whitelisted four exception types, so anything else killed the
     # thread silently and the summary claimed a successful scan of nothing
-    from thedas_io import ui as ui_module
+    from thedas_io import asset_browser
 
     def explode(*args, **kwargs):
         raise MemoryError("out of memory")
 
-    monkeypatch.setattr(ui_module, "scan", explode)
-    state = ui_module._scan_async(tmp_path, tmp_path / "t.sqlite")
+    monkeypatch.setattr(asset_browser, "scan", explode)
+    state = asset_browser._scan_async(tmp_path, tmp_path / "t.sqlite")
     state["thread"].join(timeout=10)
 
     assert state["done"] is True

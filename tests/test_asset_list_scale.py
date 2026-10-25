@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import fake_bpy
 from conftest import archive
 from fake_bpy import FakeCollection
-from thedas_io import ui
+from thedas_io import asset_browser, ui
 
 
 def _make_db(tmp_path, n=2500):
@@ -40,8 +40,8 @@ def test_fill_assets_caps_by_default(tmp_path):
     finally:
         fake_bpy.bpy.data.scenes.remove(scene)
     assert total == 2501
-    assert len(rows) == ui.ASSET_LIMIT
-    assert len(list(scene.thedas_io_assets)) == ui.ASSET_LIMIT
+    assert len(rows) == asset_browser.ASSET_LIMIT
+    assert len(list(scene.thedas_io_assets)) == asset_browser.ASSET_LIMIT
 
 
 def test_fill_assets_unlimited_explicit(tmp_path):
@@ -69,13 +69,13 @@ def test_prefs_unlimited_is_cached_until_the_checkbox_changes():
         preferences=SimpleNamespace(addons={"thedas_io": SimpleNamespace(preferences=prefs)})
     )
     try:
-        assert ui._prefs_unlimited(ctx) is False
-        assert ui._prefs_unlimited(ctx) is False
+        assert asset_browser._prefs_unlimited(ctx) is False
+        assert asset_browser._prefs_unlimited(ctx) is False
         assert prefs.reads == 1
 
         prefs.value = True
         ui._invalidate_asset_limit()  # what the property's update callback does
-        assert ui._prefs_unlimited(ctx) is True
+        assert asset_browser._prefs_unlimited(ctx) is True
         assert prefs.reads == 2
     finally:
         ui._invalidate_asset_limit()
@@ -102,10 +102,10 @@ def test_prefs_unlimited_toggles_limit(tmp_path):
             }
         )
     )
-    assert ui._prefs_unlimited(prefs_on) is True
-    assert ui._prefs_unlimited(prefs_off) is False
+    assert asset_browser._prefs_unlimited(prefs_on) is True
+    assert asset_browser._prefs_unlimited(prefs_off) is False
     assert ui._asset_limit(prefs_on) is None
-    assert ui._asset_limit(prefs_off) == ui.ASSET_LIMIT
+    assert ui._asset_limit(prefs_off) == asset_browser.ASSET_LIMIT
     rows, total = ui._fill_assets(scene, str(db), context=prefs_on)
     assert len(rows) == total == 101
 
@@ -237,7 +237,7 @@ def test_fill_assets_survives_a_locked_database(tmp_path, monkeypatch):
         raise sqlite3.OperationalError("database is locked")
 
     scene = SimpleNamespace(thedas_io_assets=FakeCollection())
-    monkeypatch.setattr(ui, "find", locked)
+    monkeypatch.setattr(asset_browser, "find", locked)
     rows, total = ui._fill_assets(scene, str(db))
     assert rows == []
     assert total == 11
