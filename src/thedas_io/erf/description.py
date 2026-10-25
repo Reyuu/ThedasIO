@@ -19,6 +19,8 @@ _PAYLOAD_MAGICS = (
     b"GDA ",
 )
 
+_DA2_KEYS: dict[bytes, bytes | None] = {}
+
 # Three container layouts ship in the wild, told apart by the first 16 bytes:
 #
 #   magic                header  row   name field         payload
@@ -81,6 +83,8 @@ class ERFReader:
         self.codec = None
         self.string_table = b""
         self._key = None
+        self._key_error = None
+        self._password = None
         self._parse()
 
     def _parse(self):
@@ -175,8 +179,18 @@ class ERFReader:
         # Resolved on first use, not at parse time: entry names are not
         # encrypted, so a scan still indexes an archive whose module we hold
         # no password for, and only the extraction is reported as failing.
-        if self._key is None:
+        # The failure is cached as well: a hash-only archive asks for the key
+        # once per unnamed entry, and re-probing the whole candidate list each
+        # time makes a scan of an unopenable module crawl.
+        if self._key is not None:
+            return self._key
+        if self._key_error is not None:
+            raise self._key_error
+        try:
             self._key = self._find_key()
+        except ValueError as exc:
+            self._key_error = exc
+            raise
         return self._key
 
     def _first_packed(self) -> bytes | None:
@@ -188,6 +202,14 @@ class ERFReader:
         return None
 
     def _da2_key(self) -> bytes | None:
+        # one probe per distinct module digest, shared by every archive of it
+        if self.pw_hash in _DA2_KEYS:
+            return _DA2_KEYS[self.pw_hash]
+        key = self._probe_da2_key()
+        _DA2_KEYS[self.pw_hash] = key
+        return key
+
+    def _probe_da2_key(self) -> bytes | None:
         # DA2 keys UUID passwords with the raw UUID bytes as the Blowfish key
         # Encryption-3 headers store md5(Blowfish(key).encrypt(bytes(range(256))));
         # check that first so compressed or headerless entries still resolve,
@@ -202,7 +224,10 @@ class ERFReader:
             except ValueError:
                 continue
             keys.append(key)
-            if hashlib.md5(Blowfish.new(key, Blowfish.MODE_ECB).encrypt(probe)).digest() == self.pw_hash:
+            if (
+                hashlib.md5(Blowfish.new(key, Blowfish.MODE_ECB).encrypt(probe)).digest()
+                == self.pw_hash
+            ):
                 return key
 
         packed = self._first_packed()
@@ -221,9 +246,9 @@ class ERFReader:
         # Blowfish keyed on the little-endian u64 of the module's numeric
         # password; the header only stores md5 of the decimal digits, so match
         # candidates against that rather than mapping module ids to passwords.
-        for password in DAO_PASSWORDS:
-            if hashlib.md5(password.encode("ascii")).digest() == self.pw_hash:
-                return struct.pack("<Q", int(password))
+        password = self._matched_password()
+        if password:
+            return struct.pack("<Q", int(password))
         # DA2 DLC modules: raw UUID bytes are the key
         key = self._da2_key()
         if key is not None:
@@ -265,23 +290,23 @@ class ERFReader:
 
     def _xor_key(self):
         # 9-byte key derived from the module password
-        password = ""
-        try:
-            # reuse the blowfish password match by digest
-            password = self._matched_password()
-        except Exception:  # noqa: BLE001
-            password = ""
+        password = self._matched_password()
         value = int(password) if password.isdigit() else 0
-        key = value.to_bytes(9, "little")
-        return key
+        return value.to_bytes(9, "little")
 
-    def _matched_password(self):
-        for password in DAO_PASSWORDS:
-            import hashlib
-
-            if hashlib.md5(password.encode("ascii")).digest() == self.pw_hash:
-                return password
-        return ""
+    def _matched_password(self) -> str:
+        # the digest is in the header, so one pass over the candidates is enough
+        # for the reader's lifetime; _find_key and the xor path share it
+        if self._password is None:
+            self._password = next(
+                (
+                    password
+                    for password in DAO_PASSWORDS
+                    if hashlib.md5(password.encode("ascii")).digest() == self.pw_hash
+                ),
+                "",
+            )
+        return self._password
 
     def entry(self, entry_name):
         for entry in self.entries:

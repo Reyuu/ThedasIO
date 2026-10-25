@@ -202,7 +202,12 @@ def parse_mao_binary(raw):
 def parse_mao_bytes(raw: bytes):
     if raw[:8] == b"GFF V4.0":
         return parse_mao_binary(raw)
-    return parse_mao(raw.decode("utf-8"))
+    try:
+        return parse_mao(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise ValueError("MAO is not UTF-8 text") from None
+    except ET.ParseError as exc:
+        raise ValueError(f"MAO is not valid XML: {exc}") from None
 
 
 def _mao_field(struct_def, label):

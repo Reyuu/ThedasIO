@@ -358,6 +358,15 @@ def _mao_gff4(
     return writer.write()
 
 
+def test_parse_mao_bytes_rejects_non_utf8_and_broken_xml():
+    # a corrupt MAO must surface as a per-file ValueError, not a
+    # UnicodeDecodeError or ElementTree.ParseError escaping the importer
+    with pytest.raises(ValueError, match="not UTF-8"):
+        parse_mao_bytes(b"\xff\xfe\x00junk")
+    with pytest.raises(ValueError, match="not valid XML"):
+        parse_mao_bytes(b"<MaterialObject")
+
+
 def test_parse_mao_bytes_reads_da2_gff4_textures():
     textures = {
         "mml_tDiffuse": "art\\characters\\playercharacter\\humanmale\\textures\\hm_arm_flta_0d.dds",

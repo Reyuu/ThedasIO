@@ -210,3 +210,59 @@ def test_entry_running_past_the_end_is_rejected():
     struct.pack_into("<I", raw, 32 + 64, len(raw) + 8)
     with pytest.raises(ValueError, match="runs past end of file"):
         ERFReader(bytes(raw))
+
+
+def test_a_missing_key_is_only_probed_once(tmp_path):
+    # every unnamed entry asks for the key; without caching the failure, a
+    # hash-only archive of a module we cannot open re-probes the whole
+    # candidate list per entry
+    p = encrypted_archive(tmp_path / "p.erf", {"a.mmh": b"data"}, "99999999", module_id=999)
+    reader = ERFReader(p.read_bytes())
+
+    calls = []
+    probe = reader._find_key
+
+    def counted():
+        calls.append(1)
+        return probe()
+
+    reader._find_key = counted
+    for _ in range(3):
+        with pytest.raises(ValueError, match="no known password for ERF module 999"):
+            reader.get_payload("a.mmh")
+    assert len(calls) == 1
+
+
+def test_the_matched_password_is_cached(tmp_path):
+    p = encrypted_archive(tmp_path / "p.erf", {"a.mmh": b"data"}, PASSWORD, module_id=145)
+    reader = ERFReader(p.read_bytes())
+    assert reader.key == struct.pack("<Q", int(PASSWORD))
+    assert reader._password == PASSWORD
+
+    from thedas_io.erf import description
+
+    original = description.DAO_PASSWORDS
+    description.DAO_PASSWORDS = ()
+    try:
+        assert reader._matched_password() == PASSWORD
+    finally:
+        description.DAO_PASSWORDS = original
+
+
+def test_da2_key_probes_are_cached_per_module(monkeypatch):
+    from thedas_io.erf import description
+
+    reader = ERFReader(create_sample_erf())
+    reader.pw_hash = b"unit-test-module"
+    calls = []
+    monkeypatch.setattr(reader, "_probe_da2_key", lambda: calls.append(1) or b"\x01" * 16)
+    assert reader._da2_key() == b"\x01" * 16
+    assert reader._da2_key() == b"\x01" * 16
+    assert len(calls) == 1
+
+    # a different module digest probes again
+    reader.pw_hash = b"unit-test-other"
+    assert reader._da2_key() == b"\x01" * 16
+    assert len(calls) == 2
+    for digest in (b"unit-test-module", b"unit-test-other"):
+        description._DA2_KEYS.pop(digest, None)
