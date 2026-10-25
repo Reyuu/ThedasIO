@@ -1047,6 +1047,15 @@ def _on_depsgraph_update(scene, depsgraph=None) -> None:
         _prune_later()
 
 
+_UNLIMITED_CACHE: tuple | None = None
+
+
+def _invalidate_asset_limit(_self=None, _context=None) -> None:
+    # the preference checkbox changed; the next draw recomputes it
+    global _UNLIMITED_CACHE
+    _UNLIMITED_CACHE = None
+
+
 class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
     # must be runtime module name, plain package in tests but blender
     bl_idname = __package__ or "thedas_io"
@@ -1073,6 +1082,7 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
     thedas_io_unlimited_assets: bpy.props.BoolProperty(  # type: ignore
         name="Show all assets (no limit)",
         default=False,
+        update=_invalidate_asset_limit,
         description="Load every database row into the asset list, as before. "
         "Needs lots of memory with a full game install (10k-100k rows); "
         "leave off and use search instead",
@@ -1130,7 +1140,9 @@ def _prefs_game_dir(context) -> str:
 
 
 def _prefs_unlimited(context=None) -> bool:
-    # old uncapped list, opt-in via preferences; default capped
+    # old uncapped list, opt-in via preferences; default capped. Cached by the
+    # preferences object: this runs from every panel draw, and walking the
+    # add-on map each redraw was pure overhead
     ctx = context
     if ctx is None:
         try:
@@ -1141,6 +1153,7 @@ def _prefs_unlimited(context=None) -> bool:
         addons = ctx.preferences.addons
     except Exception:  # noqa: BLE001
         return False
+    global _UNLIMITED_CACHE
     for key in (__package__ or "", "thedas_io"):
         if not key:
             continue
@@ -1148,11 +1161,14 @@ def _prefs_unlimited(context=None) -> bool:
             prefs = addons[key].preferences
         except Exception:  # noqa: BLE001, S112 - missing addon / fake mapping
             continue
+        if _UNLIMITED_CACHE is not None and _UNLIMITED_CACHE[0] is prefs:
+            return _UNLIMITED_CACHE[1]
         try:
-            if bool(getattr(prefs, "thedas_io_unlimited_assets", False)):
-                return True
+            value = bool(getattr(prefs, "thedas_io_unlimited_assets", False))
         except Exception:  # noqa: BLE001, S112
             continue
+        _UNLIMITED_CACHE = (prefs, value)
+        return value
     return False
 
 

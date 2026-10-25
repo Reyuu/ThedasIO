@@ -52,6 +52,35 @@ def test_fill_assets_unlimited_explicit(tmp_path):
     assert len(rows) == 501
 
 
+def test_prefs_unlimited_is_cached_until_the_checkbox_changes():
+    class Prefs:
+        def __init__(self, value):
+            self.value = value
+            self.reads = 0
+
+        def __getattr__(self, name):
+            if name == "thedas_io_unlimited_assets":
+                self.reads += 1
+                return self.value
+            raise AttributeError(name)
+
+    prefs = Prefs(False)
+    ctx = SimpleNamespace(
+        preferences=SimpleNamespace(addons={"thedas_io": SimpleNamespace(preferences=prefs)})
+    )
+    try:
+        assert ui._prefs_unlimited(ctx) is False
+        assert ui._prefs_unlimited(ctx) is False
+        assert prefs.reads == 1
+
+        prefs.value = True
+        ui._invalidate_asset_limit()  # what the property's update callback does
+        assert ui._prefs_unlimited(ctx) is True
+        assert prefs.reads == 2
+    finally:
+        ui._invalidate_asset_limit()
+
+
 def test_prefs_unlimited_toggles_limit(tmp_path):
     db = _make_db(tmp_path, 100)
     scene = SimpleNamespace(thedas_io_assets=FakeCollection())
