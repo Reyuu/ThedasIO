@@ -78,3 +78,10 @@ module = [
     "thedas_io.textures",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.geometry",
+    "thedas_io.materials",
+]
+disallow_untyped_defs = true

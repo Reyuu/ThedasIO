@@ -4,6 +4,7 @@ import re
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image as PilImage
@@ -32,13 +33,13 @@ ROLE_BY_SEMANTIC = {
 }
 
 
-def semantic_role(semantic):
+def semantic_role(semantic: str | None) -> str | None:
     if not semantic:
         return None
     return ROLE_BY_SEMANTIC.get(semantic.strip())
 
 
-def slot_roles(textures):
+def slot_roles(textures: dict | None) -> dict:
     # filename first, semantic as fallback so mml_tTintMask
     # doesn't steal tint from mml_tTintNoise
     if not textures:
@@ -65,7 +66,7 @@ def slot_roles(textures):
     return out
 
 
-def role_of(filename):
+def role_of(filename: str) -> str | None:
     stem = Path(filename).stem.lower()
     stem = re.sub(r"l[23]$", "", stem)
     stem = re.sub(r"_(\d+)([a-z])$", r"_\2", stem)
@@ -79,7 +80,7 @@ _MAO_KNOWN = {"Material", "DefaultSemantic", "Texture", "Vector4f", "Float"}
 _MAO_ROOT = "<MaterialObject"
 
 
-def parse_mao(text):
+def parse_mao(text: str) -> dict:
     # extra/header kept verbatim so re-encode drops nothing
     root = ET.fromstring(text)
     material = root.find("Material")
@@ -158,7 +159,7 @@ _MAO_BINARY_ARRAYS = {
 }
 
 
-def parse_mao_binary(raw):
+def parse_mao_binary(raw: bytes) -> dict:
     from .gff40.description import GFFReader
 
     root = GFFReader(raw).get_from_data_block(0)
@@ -199,7 +200,7 @@ def parse_mao_binary(raw):
     }
 
 
-def parse_mao_bytes(raw: bytes):
+def parse_mao_bytes(raw: bytes) -> dict:
     if raw[:8] == b"GFF V4.0":
         return parse_mao_binary(raw)
     try:
@@ -210,14 +211,14 @@ def parse_mao_bytes(raw: bytes):
         raise ValueError(f"MAO is not valid XML: {exc}") from None
 
 
-def _mao_field(struct_def, label):
+def _mao_field(struct_def: Any, label: int) -> Any:
     for field in struct_def.field_instances:
         if field.label_id == label:
             return field
     return None
 
 
-def _patch_root_string(writer, reader, field, value) -> bool:
+def _patch_root_string(writer: Any, reader: Any, field: Any, value: str | None) -> bool:
     # 33012/33013 are ecstring refs in the root instance
     current = reader.get_from_data_block(0, label_id=field.label_id)
     if value is None or value == current:
@@ -226,7 +227,9 @@ def _patch_root_string(writer, reader, field, value) -> bool:
     return True
 
 
-def _patch_array(writer, reader, root, field, label, desired) -> bool:
+def _patch_array(
+    writer: Any, reader: Any, root: dict, field: Any, label: int, desired: dict
+) -> bool:
     fourcc, name_label, value_label, scalar = _MAO_BINARY_ARRAYS[label]
     if field.type_id < 0 or field.type_id >= len(reader.struct_defs):
         raise ValueError(f"binary MAO: label {label} points at no struct")
@@ -328,7 +331,7 @@ def write_mao_binary(parsed: dict, raw: bytes) -> bytes:
     return writer.write() if changed else bytes(raw)
 
 
-def write_mao(parsed):
+def write_mao(parsed: dict) -> str:
     root = ET.Element("MaterialObject", {"Name": parsed.get("name") or ""})
     ET.SubElement(root, "Material", {"Name": parsed.get("material") or ""})
     ET.SubElement(root, "DefaultSemantic", {"Name": parsed.get("semantic") or ""})
@@ -355,7 +358,7 @@ def write_mao(parsed):
     return f"{parsed.get('header') or ''}{ET.tostring(root, encoding='unicode')}"
 
 
-def swizzle_for_encode(image, role):
+def swizzle_for_encode(image: PilImage.Image, role: str | None) -> PilImage.Image:
     # standard RGBA -> dao layout, non-normals pass through
     if role != "normal":
         return image
@@ -366,7 +369,7 @@ def swizzle_for_encode(image, role):
     return PilImage.fromarray((dao * 255.0 + 0.5).astype(np.uint8))
 
 
-def thedas_io_normals_to_rgba(image):
+def thedas_io_normals_to_rgba(image: PilImage.Image) -> PilImage.Image:
     # dao swizzle -> standard tangent space, green is source of truth
     a = np.asarray(image.convert("RGBA")).astype(np.float32)
     x = a[..., 3] / 255.0 * 2.0 - 1.0
@@ -378,7 +381,7 @@ def thedas_io_normals_to_rgba(image):
     return PilImage.fromarray((rgba * 255.0 + 0.5).astype(np.uint8))
 
 
-def pil_to_blender(pil) -> np.ndarray:
+def pil_to_blender(pil: PilImage.Image) -> np.ndarray:
     """PIL image as the flat float32 array `image.pixels` expects.
 
     `image.pixels` is row-major from the *bottom*; PIL is row-major from the
@@ -389,16 +392,16 @@ def pil_to_blender(pil) -> np.ndarray:
     return np.ascontiguousarray(array[::-1]).astype(np.float32).reshape(-1) / 255.0
 
 
-def blender_to_pil(flat, size) -> PilImage.Image:
+def blender_to_pil(flat: np.ndarray, size: tuple[int, int]) -> PilImage.Image:
     """Inverse of `pil_to_blender`: a Blender pixel buffer back to a PIL image."""
     width, height = size
     array = np.asarray(flat, dtype=np.float32).reshape(height, width, 4)[::-1]
     return PilImage.fromarray((array * 255.0 + 0.5).astype(np.uint8))
 
 
-def resize_rgba(image, size):
+def resize_rgba(image: PilImage.Image, size: tuple[int, int]) -> PilImage.Image:
     # resize rgb and alpha separately, pillow kills rgb where alpha is zero
-    size = tuple(size)
+    size = (int(size[0]), int(size[1]))
     if tuple(image.size) == size:
         return image
     a = np.asarray(image.convert("RGBA"))

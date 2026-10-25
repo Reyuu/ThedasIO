@@ -1,6 +1,8 @@
 # msh decode, no bpy, Mesh/Chunk -> plain dicts
 
 import struct
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 
@@ -56,7 +58,7 @@ INDEX_FORMAT_U32 = 1
 # Prefer it: it is what the engine unpacks with. Fall back to the vertex count
 # only where the field is absent or non-binary, so hand-built fixtures and any
 # file whose field we do not understand still decode.
-def index_width(verts: int, index_format=None) -> int:
+def index_width(verts: int, index_format: Any = None) -> int:
     if index_format is not None:
         fmt = index_format[1] if isinstance(index_format, (list, tuple)) else index_format
         if fmt in (0, INDEX_FORMAT_U32):
@@ -64,7 +66,7 @@ def index_width(verts: int, index_format=None) -> int:
     return 4 if verts > 0xFFFF else 2
 
 
-def chunk_index_width(chunk, mesh=None) -> int:
+def chunk_index_width(chunk: Any, mesh: Any = None) -> int:
     # 8004 is per chunk and mirrors 8032; trust whichever is present.
     fmt = chunk.cells.get(8004)
     if fmt is None and mesh is not None:
@@ -72,17 +74,17 @@ def chunk_index_width(chunk, mesh=None) -> int:
     return index_width(chunk.cells.get(8001, 0), fmt)
 
 
-def chunk_index_format(chunk, mesh=None, width=None) -> int:
+def chunk_index_format(chunk: Any, mesh: Any = None, width: int | None = None) -> int:
     # the field to store back, so a widened chunk stops contradicting its blob
     if width is None:
         width = chunk_index_width(chunk, mesh)
     return INDEX_FORMAT_U32 if width == 4 else 0
 
 
-def weld_positions(positions):
+def weld_positions(positions: list) -> tuple[list, list]:
     # exact dupes only, export expands back through the map
-    seen = {}
-    unique = []
+    seen: dict = {}
+    unique: list = []
     row_to_vert = []
 
     for p in positions:
@@ -96,7 +98,7 @@ def weld_positions(positions):
     return unique, row_to_vert
 
 
-def _decode_row(dtype, blob, offset):
+def _decode_row(dtype: int, blob: bytes, offset: int) -> tuple[list, int]:
     fmt = FORMATS.get(dtype)
     if fmt is None:
         raise ValueError(f"no decoder for declarator type {dtype}")
@@ -104,7 +106,7 @@ def _decode_row(dtype, blob, offset):
     return list(struct.unpack_from(fmt, blob, offset)), size
 
 
-def _norm8_rows(rows, start: int = 0) -> list:
+def _norm8_rows(rows: list, start: int = 0) -> list:
     # UBYTE4N (type 8): 0-255 bytes the engine normalises via
     # (value - 128) / 127. DA2 uses it for normals/tangents.
     return [
@@ -117,7 +119,7 @@ def _norm8_rows(rows, start: int = 0) -> list:
     ]
 
 
-def _pad4(rows, verts: int, fill) -> list:
+def _pad4(rows: list | None, verts: int, fill: Any) -> list:
     # the common chunk already has four weight/index components per row; only
     # copy when it has fewer (or an unexpected extra), so 78k rows do not turn
     # into 156k throwaway lists
@@ -134,7 +136,7 @@ def _pad4(rows, verts: int, fill) -> list:
     return out
 
 
-def _groups(weights, bones, verts: int) -> dict:
+def _groups(weights: list, bones: list, verts: int) -> dict:
     groups: dict = {}
     for v in range(verts):
         vals = weights[v]
@@ -149,7 +151,7 @@ def _groups(weights, bones, verts: int) -> dict:
     return groups
 
 
-def _row_format(chunk, stride: int):
+def _row_format(chunk: Any, stride: int) -> tuple[str, list] | None:
     parts: list[str] = []
     slices = []
     cursor_bytes = 0
@@ -174,7 +176,7 @@ def _row_format(chunk, stride: int):
     return "<" + "".join(parts), slices
 
 
-def decode_chunk(mesh, chunk):
+def decode_chunk(mesh: Any, chunk: Any) -> dict:
     if chunk.cells.get(8003, 0) != 0:
         raise ValueError(f"chunk {chunk.name}: only trilist primitive 0 supported")
     stride = chunk.stride
@@ -210,9 +212,9 @@ def decode_chunk(mesh, chunk):
         raise ValueError(f"chunk {chunk.name}: indices not a multiple of 3")
 
     positions = []
-    normals = []
-    uvs = {}
-    tangents = {}
+    normals: list = []
+    uvs: dict = {}
+    tangents: dict = {}
     weights_rows = None
     bones_rows = None
 
@@ -294,7 +296,7 @@ def decode_chunk(mesh, chunk):
     }
 
 
-def quat_mul(a, b):
+def quat_mul(a: tuple, b: tuple) -> tuple:
     ax, ay, az, aw = a
     bx, by, bz, bw = b
     return (
@@ -305,7 +307,7 @@ def quat_mul(a, b):
     )
 
 
-def quat_rotate(q, v):
+def quat_rotate(q: tuple, v: tuple) -> tuple:
     x, y, z, w = q
     vx, vy, vz = v
     tx, ty, tz = 2.0 * (y * vz - z * vy), 2.0 * (z * vx - x * vz), 2.0 * (x * vy - y * vx)
@@ -316,7 +318,7 @@ def quat_rotate(q, v):
     )
 
 
-def triangulate_loops(polys):
+def triangulate_loops(polys: list) -> list:
     # fan triangulate, keep degenerates for the checker to flag
     out = []
     for poly in polys:
@@ -329,7 +331,7 @@ def triangulate_loops(polys):
 IDENTITY_QUAT = (0.0, 0.0, 0.0, 1.0)
 
 
-def triangulate_faces(polys):
+def triangulate_faces(polys: list) -> list:
     # same fan split but for plain index lists
     out = []
     for poly in polys:
@@ -339,13 +341,13 @@ def triangulate_faces(polys):
     return out
 
 
-def node_local(values):
+def node_local(values: dict) -> tuple:
     trsl = values.get(6047) or (0.0, 0.0, 0.0, 1.0)
     rota = values.get(6048) or IDENTITY_QUAT
     return (float(trsl[0]), float(trsl[1]), float(trsl[2])), tuple(float(x) for x in rota)
 
 
-def bone_frame(quat) -> tuple:
+def bone_frame(quat: tuple) -> tuple:
     # MMH runs a bone along its node's local X, and Blender wants that along Y.
     # the remaining two axes have exactly one right-handed assignment:
     # node Z -> bone X, node Y -> bone Z. the other permutation is left-handed
@@ -357,7 +359,7 @@ def bone_frame(quat) -> tuple:
     )
 
 
-def compose(parent, local):
+def compose(parent: tuple, local: tuple) -> tuple:
     # world = parent * local, so the parent applies after the local rotation.
     # the other order looks equivalent on a flat chain but drifts with depth:
     # on qm_uhm_basb_0 it put deep bones a mean 1.38m from the geometry they
@@ -373,10 +375,10 @@ def compose(parent, local):
     )
 
 
-def flatten(tree):
+def flatten(tree: Any) -> list:
     out = []
 
-    def visit(node, parent, transform):
+    def visit(node: Any, parent: Any, transform: tuple) -> None:
         local = node_local(node.values)
         world = compose(transform, local) if parent is not None else local
         out.append((node, parent, world[0], world[1]))
@@ -387,8 +389,8 @@ def flatten(tree):
     return out
 
 
-def node_paths(tree):
-    def walk(node, path):
+def node_paths(tree: Any) -> Iterator[tuple[Any, tuple]]:
+    def walk(node: Any, path: tuple) -> Iterator[tuple[Any, tuple]]:
         yield node, path
         for i, child in enumerate(node.children):
             yield from walk(child, path + (i,))
@@ -396,7 +398,7 @@ def node_paths(tree):
     return walk(tree, ())
 
 
-def bone_names(tree):
+def bone_names(tree: Any) -> dict:
     names = {}
     for node, _, _, _ in flatten(tree):
         index = node.values.get(6254)
