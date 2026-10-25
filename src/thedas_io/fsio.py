@@ -4,37 +4,42 @@ from __future__ import annotations
 
 import io
 import os
+import time
 from pathlib import Path
 
+# Windows ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION. Antivirus and indexers
+# hold a just-written file briefly; anything else is a real permission problem.
+_TRANSIENT_WINERRORS = (32, 33)
 
-def write_bytes_atomic(path, data: bytes) -> Path:
+
+def _sharing_violation(exc: PermissionError) -> bool:
+    return getattr(exc, "winerror", None) in _TRANSIENT_WINERRORS
+
+
+def write_bytes_atomic(path, data: bytes, attempts: int = 3, delay: float = 0.05) -> Path:
     """Write ``data`` to ``path``; the old file survives anything going wrong."""
     path = Path(path)
-    last: Exception | None = None
-    for suffix in ("", ".1", ".2", ".3"):
-        tmp = path.with_name(path.name + ".tmp" + suffix)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        for attempt in range(attempts):
+            try:
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, path)
+                return path
+            except PermissionError as exc:
+                # retrying a plain access-denied just hides it and leaves temp
+                # files behind; only a sharing violation is worth waiting out
+                if not _sharing_violation(exc) or attempt + 1 >= attempts:
+                    raise
+                time.sleep(delay)
+    finally:
         try:
-            with open(tmp, "wb") as fh:
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, path)
-            return path
-        except PermissionError as exc:
-            last = exc
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            continue
-        except BaseException:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            raise
-    if last is not None:
-        raise last
+            tmp.unlink()
+        except OSError:
+            pass
     return path
 
 

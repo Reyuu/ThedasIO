@@ -109,3 +109,58 @@ def test_an_image_lands_intact(tmp_path):
         assert im.size == (4, 4)
         assert im.convert("RGBA").getpixel((0, 0)) == (10, 20, 30, 255)
     assert [p.name for p in tmp_path.iterdir()] == ["map.png"]
+
+
+def test_a_plain_permission_error_is_not_retried(tmp_path, monkeypatch):
+    # a locked/denied destination is not transient for us; retrying it hides the
+    # real error and used to leave .tmp.1/.2/.3 files behind
+    target = tmp_path / "a.msh"
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append(1)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "replace", denied)
+    with pytest.raises(PermissionError):
+        write_bytes_atomic(target, b"x")
+    assert len(calls) == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_windows_sharing_violation_is_retried_then_succeeds(tmp_path, monkeypatch):
+    target = tmp_path / "a.msh"
+    real_replace = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) == 1:
+            exc = PermissionError(13, "in use")
+            exc.winerror = 32  # ERROR_SHARING_VIOLATION
+            raise exc
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    assert write_bytes_atomic(target, b"x") == target
+    assert len(calls) == 2
+    assert target.read_bytes() == b"x"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.msh"]
+
+
+def test_a_sharing_violation_that_never_clears_raises_and_cleans_up(tmp_path, monkeypatch):
+    target = tmp_path / "a.msh"
+    calls = []
+
+    def locked(*args, **kwargs):
+        calls.append(1)
+        exc = PermissionError(13, "in use")
+        exc.winerror = 32
+        raise exc
+
+    monkeypatch.setattr(os, "replace", locked)
+    with pytest.raises(PermissionError) as excinfo:
+        write_bytes_atomic(target, b"x", attempts=3, delay=0)
+    assert len(calls) == 3
+    assert excinfo.value.winerror == 32
+    assert list(tmp_path.iterdir()) == []
