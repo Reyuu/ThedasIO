@@ -282,12 +282,10 @@ def test_da2_extension_comes_from_the_entry_type_hash(tmp_path):
 def test_da2_bundled_hash_names_rename_and_fix_the_extension(tmp_path, monkeypatch):
     # names recovered offline are keyed by the exact FNV-1 hash, so they win
     # over the payload sniff, which mislabels e.g. .mor as plain .gff
-    import thedas_io.asset_db.da2_hashes as hashes
+    from thedas_io.asset_db import da2_data
 
     stem = "art\\models\\recovered"
-    monkeypatch.setattr(
-        hashes, "DA2_HASH_NAMES", {_s64(fnv1(stem + ".mor")): "recovered.mor"}
-    )
+    monkeypatch.setattr(da2_data, "names", lambda: {_s64(fnv1(stem + ".mor")): "recovered.mor"})
     _v3_archive(
         tmp_path / "a.erf",
         [(fnv1(stem + ".mor"), 0x00000000, b"GFF V4.0PC  ZZZZ" + b"\x00" * 8)],
@@ -296,6 +294,21 @@ def test_da2_bundled_hash_names_rename_and_fix_the_extension(tmp_path, monkeypat
     scan(tmp_path, db, game="DA2")
     rows = [(r["filename"], r["ext"]) for r in load(db)]
     assert rows == [("recovered.mor", ".mor")]
+
+
+def test_da2_wordlist_hashes_are_precomputed_and_released(tmp_path):
+    # the bundled wordlist is stored already hashed, so a hash-only entry is
+    # named without the scanner running FNV-1 over 279k paths; the table is
+    # dropped again once the scan finishes
+    from thedas_io.asset_db import da2_data
+
+    name = "art\\vfx\\models\\vfx_shield_uhm.msh"
+    _v3_archive(tmp_path / "a.erf", [(fnv1(name), 0, b"not a payload")])
+    scan(tmp_path, tmp_path / "t.sqlite", game="DA2")
+    assert [(r["filename"], r["ext"]) for r in load(tmp_path / "t.sqlite")] == [
+        ("vfx_shield_uhm.msh", ".msh")
+    ]
+    assert da2_data._CACHE == {}
 
 
 def test_failed_scan_closes_the_connection_and_keeps_the_old_index(tmp_path, monkeypatch):

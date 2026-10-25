@@ -8,7 +8,7 @@ dist/
 wheels/
 dao_textures/
 .venv
-data/
+/data/
 
 # Caches
 .pytest_cache/

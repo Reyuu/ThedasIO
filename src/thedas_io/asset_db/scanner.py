@@ -145,11 +145,9 @@ def _da2_type_ext(entry) -> str:
     # type_hash, so the real extension is known without decompressing it
     global _DA2_TYPE_EXTS
     if _DA2_TYPE_EXTS is None:
-        try:
-            from .da2_hashes import DA2_TYPE_EXTS
-        except ImportError:
-            DA2_TYPE_EXTS = {}
-        _DA2_TYPE_EXTS = DA2_TYPE_EXTS
+        from .da2_data import type_exts
+
+        _DA2_TYPE_EXTS = type_exts()
     return _DA2_TYPE_EXTS.get(getattr(entry, "type_hash", 0), "")
 
 
@@ -284,6 +282,9 @@ def scan(root, db_path=None, progress=None, game=None):
     finally:
         # an error mid-scan must not leave the connection (and its DELETE)
         # hanging: closing rolls the transaction back, so the old index survives
+        from .da2_data import unload
+
+        unload()  # the precomputed name table is only needed while indexing
         con.close()
     return {
         "files": files,
@@ -294,10 +295,23 @@ def scan(root, db_path=None, progress=None, game=None):
 
 
 def _recover_names(con, game=None):
-    # DA2 only, since DAO stores real filenames in its archives
+    # DA2 only, since DAO stores real filenames in its archives. Names come from
+    # three places, in this order: the MMH label 6005 (the real mesh path), the
+    # bundled wordlist, then names recovered offline. The last two are already
+    # hashed by tools/gen_da2_hashes.py, so a scan never runs FNV-1 over the
+    # 279k-path wordlist itself.
     if str(game or "").upper() != "DA2":
         return
+
+    unresolved = con.execute(
+        "SELECT DISTINCT name_hash FROM assets WHERE filename LIKE 'hash_%' "
+        "AND name_hash IS NOT NULL AND name_hash != 0"
+    ).fetchall()
+    if not unresolved:
+        return
+
     from ..mmh.description import MMHReader
+    from .da2_data import names
 
     by_archive = {}
     for rowid, filename, ext, path, package, name_hash in con.execute(
@@ -347,36 +361,20 @@ def _recover_names(con, game=None):
         except (OSError, ValueError, struct.error, IndexError, KeyError):
             continue
 
-    # bundled DA2 DLC filename wordlist (magpiedragon) — FNV-1
-    try:
-        from .da2_filenames import DA2_FILENAMES
-    except ImportError:
-        DA2_FILENAMES = ()
-
-    for fn in DA2_FILENAMES:
-        name_map.setdefault(_s64(fnv1(fn.lower())), os.path.basename(fn))
-
-    # names recovered offline from the archives themselves
-    try:
-        from .da2_hashes import DA2_HASH_NAMES
-    except ImportError:
-        DA2_HASH_NAMES = {}
-
-    for h, leaf in DA2_HASH_NAMES.items():
-        name_map.setdefault(h, leaf)
+    bundled = None  # only decompress the 340k-entry table when a hash needs it
 
     # only rename rows still synthetic, and do it in one statement: one UPDATE
     # per wordlist entry made large DA2 scans crawl
-    unresolved = con.execute(
-        "SELECT DISTINCT name_hash FROM assets WHERE filename LIKE 'hash_%' "
-        "AND name_hash IS NOT NULL AND name_hash != 0"
-    ).fetchall()
     # an exact 64-bit hash match is authoritative: the recovered name also
     # supplies the real extension, which the payload sniff could not always
     # derive (a .mor/.tnt/.cnv payload also parses as plain '.gff').
     hits = []
     for (h,) in unresolved:
         leaf = name_map.get(h)
+        if leaf is None:
+            if bundled is None:
+                bundled = names()
+            leaf = bundled.get(h)
         if leaf is not None:
             hits.append((h, leaf, Path(leaf).suffix.lower()))
     con.execute(

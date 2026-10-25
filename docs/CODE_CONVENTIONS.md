@@ -15,9 +15,11 @@ Filenames for source modules should be unique across `src/` and `tests/` (e.g. `
 | `src/thedas_io/gff40/` | GFF V4.0 reader/writer, label table (`GFFReader`, `GFFStructDef`, `GFFField`). |
 | `src/thedas_io/{msh,mmh,erf}/` | Format readers and writers. |
 | `src/thedas_io/wheels/` | Vendored wheels shipped in the Blender bundle. Tracked. |
+| `src/thedas_io/asset_db/data/` | Precomputed DA2 name/type tables (zlib + marshal `.bin`); regenerate with `tools/gen_da2_hashes.py`. Tracked. |
 | `tests/` | Unit tests (`-m "not blender"`), real-Blender proofs (`-m blender`). |
 | `tools/` | Dev scripts (`deploy.py`, `extract_labels.py`). |
-| `data/` | Local sample files. Untracked, never commit. |
+| `tools/data/` | Generator inputs, e.g. the compressed DA2 filename wordlist. Tracked. |
+| `data/` (repo root) | Local sample files. Untracked, never commit. |
 | `docs/` | Documentation about the project. |
 | `build/` / `.venv/` | Generated. Should NEVER be committed. |
 
