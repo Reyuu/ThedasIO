@@ -671,6 +671,92 @@ def test_deleting_the_hierarchy_drops_its_row():
         ITEMS.update(saved)
 
 
+def _fake_timers(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(
+        fake_bpy.bpy.app,
+        "timers",
+        SimpleNamespace(register=lambda fn, first_interval=0.0: calls.append(fn)),
+        raising=False,
+    )
+    return calls
+
+
+def test_depsgraph_prune_is_deferred_to_a_timer(monkeypatch):
+    # removing rows inside depsgraph_update_post is the crash class this
+    # handler used to hit: spot the stale row here, mutate from the timer
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+    from thedas_io.export import ITEMS
+
+    calls = _fake_timers(monkeypatch)
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    scene = SimpleNamespace(
+        thedas_io_export_items=FakeCollection(),
+        thedas_io_rename_items=FakeCollection(),
+    )
+    try:
+        ITEMS["d.mmh"] = {"file": "d.mmh", "kind": "msh", "objects": []}
+        row = scene.thedas_io_export_items.add()
+        row.filename = "d.mmh"
+        fake_bpy.bpy.data.scenes.append(scene)
+
+        ui._on_depsgraph_update(scene)
+        assert [r.filename for r in scene.thedas_io_export_items] == ["d.mmh"]
+        assert calls == [ui._prune_timer]
+
+        ui._prune_timer()
+        assert list(scene.thedas_io_export_items) == []
+        assert list(scene.thedas_io_rename_items) == []
+        assert not ui._PRUNE_PENDING
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+        if scene in fake_bpy.bpy.data.scenes:
+            fake_bpy.bpy.data.scenes.remove(scene)
+        ui._PRUNE_PENDING = ui._SYNC_PENDING = ui._SWEEPING = False
+
+
+def test_untick_rebuilds_the_rename_table_from_a_timer(monkeypatch):
+    # a property update callback must not rebuild the UIList's collection
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+    from thedas_io.export import ITEMS
+
+    calls = _fake_timers(monkeypatch)
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    scene = SimpleNamespace(
+        thedas_io_export_items=FakeCollection(),
+        thedas_io_rename_items=FakeCollection(),
+    )
+    try:
+        ITEMS["d.mmh"] = {"file": "d.mmh", "kind": "mmh", "meshes": [], "hosts": {}}
+        row = scene.thedas_io_export_items.add()
+        row.filename = "d.mmh"
+        row.use = True
+        fake_bpy.bpy.data.scenes.append(scene)
+
+        ui._on_use_toggled(row, SimpleNamespace(scene=scene))
+        assert calls == [ui._sync_rename_timer]
+        assert list(scene.thedas_io_rename_items) == []
+
+        ui._sync_rename_timer()
+        assert [r.filename for r in scene.thedas_io_rename_items] == ["d.mmh"]
+        assert not ui._SYNC_PENDING
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+        if scene in fake_bpy.bpy.data.scenes:
+            fake_bpy.bpy.data.scenes.remove(scene)
+        ui._PRUNE_PENDING = ui._SYNC_PENDING = ui._SWEEPING = False
+
+
 def test_unticking_hides_the_whole_tree_but_keeps_it():
     # Uncheck hides every object under the root; blend data stays for re-tick.
     from types import SimpleNamespace

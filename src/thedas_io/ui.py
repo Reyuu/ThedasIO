@@ -155,7 +155,7 @@ def _set_tree_visible(root_key: str, show: bool) -> None:
 def _on_use_toggled(self, context) -> None:
     # object list checkbox, hides tree but keeps it in blend
     _set_tree_visible(self.filename, self.use)
-    _sync_rename_items(context.scene)
+    _sync_rename_later()
 
 
 class THEDAS_IO_ExportItem(bpy.types.PropertyGroup):
@@ -875,6 +875,31 @@ def _sync_rename_items(scene) -> None:
         _SYNCING_RENAMES = False
 
 
+_SYNC_PENDING = False
+
+
+def _sync_rename_later() -> None:
+    global _SYNC_PENDING
+    if _SYNC_PENDING:
+        return
+    _SYNC_PENDING = True
+    try:
+        bpy.app.timers.register(_sync_rename_timer, first_interval=0.2)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        _SYNC_PENDING = False
+
+
+def _sync_rename_timer():
+    # falling off the end returns None, which stops the one-shot timer
+    global _SYNC_PENDING
+    _SYNC_PENDING = False
+    try:
+        for one in bpy.data.scenes:
+            _sync_rename_items(one)
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
+
+
 def _fill_rename_items(scene) -> None:
     try:
         rows = scene.thedas_io_export_items
@@ -942,8 +967,46 @@ def _push_renames(scene) -> None:
             mmh["as_tnt"] = new if not new or new.lower().endswith(".tnt") else f"{new}.tnt"
 
 
-_PRUNING = False
+_PRUNE_PENDING = False
 _SWEEPING = False
+
+
+def _stale_export_rows(scene) -> bool:
+    try:
+        rows = scene.thedas_io_export_items
+    except AttributeError:
+        return False
+    for row in rows:
+        item = ITEMS.get(row.filename)
+        if item is None or not _root_alive(item):
+            return True
+    return False
+
+
+def _prune_later() -> None:
+    global _PRUNE_PENDING
+    if _PRUNE_PENDING:
+        return
+    _PRUNE_PENDING = True
+    try:
+        bpy.app.timers.register(_prune_timer, first_interval=0.2)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        _PRUNE_PENDING = False
+
+
+def _prune_timer():
+    # falling off the end returns None, which stops the one-shot timer
+    global _PRUNE_PENDING
+    _PRUNE_PENDING = False
+    pruned = False
+    try:
+        for one in bpy.data.scenes:
+            if _prune_export_items(one):
+                pruned = True
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
+    if pruned:
+        _sweep_later()
 
 
 def _sweep_later() -> None:
@@ -970,28 +1033,18 @@ def _sweep_timer():
 
 
 def _on_depsgraph_update(scene, depsgraph=None) -> None:
-    # keep object list honest on viewport deletes, guard stops retrigger
-    global _PRUNING
-    if _PRUNING:
-        return
-
+    # keep the object list honest on viewport deletes. nothing is removed here:
+    # mutating scene data inside a depsgraph handler is the crash class this
+    # function used to hit, so a stale row only schedules the prune timer
     if not ITEMS:
         return
 
-    _PRUNING = True
-    pruned = False
     try:
-        for one in bpy.data.scenes:
-            if _prune_export_items(one):
-                pruned = True
-                _sync_rename_items(one)
+        stale = any(_stale_export_rows(one) for one in bpy.data.scenes)
     except (AttributeError, ReferenceError, RuntimeError):
-        pass  # mid-teardown scene data; the next update retries
-    finally:
-        _PRUNING = False
-
-    if pruned:
-        _sweep_later()
+        return  # mid-teardown scene data; the next update retries
+    if stale:
+        _prune_later()
 
 
 class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
