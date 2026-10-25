@@ -18,7 +18,7 @@ from mathutils import Matrix, Quaternion
 from PIL import Image as PilImage
 
 from . import geometry
-from .asset_db.scanner import count, find, scan
+from .asset_db.scanner import _db_path, count, find, find_exact, scan
 
 ASSET_LIMIT = 1000
 from .assets import extract, importer_for, resolve
@@ -44,7 +44,7 @@ from .geometry import (
     weld_positions,
 )
 from .materials import (
-    parse_mao,
+    parse_mao_bytes,
     pil_to_blender,
     role_of,
     slot_roles,
@@ -72,6 +72,9 @@ class THEDAS_IO_AssetItem(bpy.types.PropertyGroup):
     filename: bpy.props.StringProperty()  # type: ignore
     ext: bpy.props.StringProperty()  # type: ignore
     path: bpy.props.StringProperty()  # type: ignore
+    # DA2 entries are named by hash only, so extraction needs it back.
+    # 64-bit values do not fit a bpy IntProperty, so keep it as hex text.
+    name_hash: bpy.props.StringProperty()  # type: ignore
 
 
 def _viewport_objects(item: dict) -> list:
@@ -94,6 +97,45 @@ def _viewport_objects(item: dict) -> list:
             objs.append(item["armature"])
         return objs
     return []  # materials and images have no viewport presence
+
+
+def _tag(block, kind: str) -> None:
+    # the sweep below must never free a datablock the user made
+    try:
+        block["thedas_io"] = kind
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+
+def _sweep_orphans() -> int:
+    # deleting an imported object leaves its mesh, material and packed textures
+    # with no users but still resident for the whole session. Importing a few
+    # models then dropping them grows Blender by ~100MB per character until it
+    # swaps and crashes. Free our own zero-user datablocks only: they are tagged
+    # at creation, so nothing the user made is touched.
+    collections: list = [
+        getattr(bpy.data, name, ())
+        for name in ("meshes", "armatures", "materials", "node_groups", "images")
+    ]
+    removed = 0
+    for _ in range(2):
+        pass_removed = 0
+        for blocks in collections:
+            try:
+                listing = list(blocks)
+            except (AttributeError, TypeError):
+                continue
+            for block in listing:
+                try:
+                    if block.users == 0 and block.get("thedas_io"):
+                        blocks.remove(block)
+                        pass_removed += 1
+                except (AttributeError, ReferenceError, TypeError, RuntimeError):
+                    continue
+        removed += pass_removed
+        if not pass_removed:
+            break
+    return removed
 
 
 def _set_tree_visible(root_key: str, show: bool) -> None:
@@ -228,6 +270,7 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
         scene = context.scene
         if self.layout is None:
             return
+        self.layout.prop(scene, "thedas_io_game", text="Game")
         self.layout.prop(scene, "thedas_io_import_source", expand=True)
         self.layout.prop(scene, "thedas_io_weld", text="Weld seams")
         if scene.thedas_io_import_source == "GAME":
@@ -900,6 +943,30 @@ def _push_renames(scene) -> None:
 
 
 _PRUNING = False
+_SWEEPING = False
+
+
+def _sweep_later() -> None:
+    # datablocks must not be removed from inside a depsgraph handler, so defer
+    # to a one-shot timer that runs between evaluations
+    global _SWEEPING
+    if _SWEEPING:
+        return
+    _SWEEPING = True
+    try:
+        bpy.app.timers.register(_sweep_timer, first_interval=0.2)
+    except (AttributeError, RuntimeError, ValueError, TypeError):
+        _SWEEPING = False
+
+
+def _sweep_timer():
+    # falling off the end returns None, which stops the one-shot timer
+    global _SWEEPING
+    _SWEEPING = False
+    try:
+        _sweep_orphans()
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
 
 
 def _on_depsgraph_update(scene, depsgraph=None) -> None:
@@ -912,14 +979,19 @@ def _on_depsgraph_update(scene, depsgraph=None) -> None:
         return
 
     _PRUNING = True
+    pruned = False
     try:
         for one in bpy.data.scenes:
             if _prune_export_items(one):
+                pruned = True
                 _sync_rename_items(one)
     except (AttributeError, ReferenceError, RuntimeError):
         pass  # mid-teardown scene data; the next update retries
     finally:
         _PRUNING = False
+
+    if pruned:
+        _sweep_later()
 
 
 class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
@@ -931,6 +1003,12 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         subtype="DIR_PATH",
         default="",
         description="Dragon Age: Origins install folder; Scan indexes it when no folder is given",
+    )
+    thedas_io_da2_game_dir: bpy.props.StringProperty(  # type: ignore
+        name="Dragon Age II folder",
+        subtype="DIR_PATH",
+        default="",
+        description="Dragon Age II install folder; Scan indexes it when no folder is given",
     )
     thedas_io_enable_phy: bpy.props.BoolProperty(  # type: ignore
         name="Enable PHY collision",
@@ -951,17 +1029,32 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         if self.layout is None:
             return
         self.layout.prop(self, "thedas_io_game_dir")
+        self.layout.prop(self, "thedas_io_da2_game_dir")
         self.layout.prop(self, "thedas_io_enable_phy")
         self.layout.prop(self, "thedas_io_unlimited_assets")
 
 
-def default_addins_dir() -> str:
+def default_addins_dir(game=None, game_dir=None) -> str:
     # where the installer drops DLC and mods, next to the game data
+    game = (game or "DAO").upper()
+    if game == "DA2":
+        if game_dir:
+            return str(Path(game_dir) / "addins")
+        return ""
     home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
     return str(Path(home) / "Documents" / "BioWare" / "Dragon Age" / "AddIns")
 
 
 def _prefs_game_dir(context) -> str:
+    game = "DAO"
+    try:
+        scene = getattr(context, "scene", None)
+        if scene is not None:
+            game = getattr(scene, "thedas_io_game", "DAO") or "DAO"
+    except Exception:  # noqa: BLE001
+        game = "DAO"
+    game = str(game).upper()
+    attr = "thedas_io_da2_game_dir" if game == "DA2" else "thedas_io_game_dir"
     try:
         addons = context.preferences.addons
     except AttributeError:
@@ -977,7 +1070,7 @@ def _prefs_game_dir(context) -> str:
     except TypeError:
         pass
     for addon in candidates:
-        game_dir = getattr(getattr(addon, "preferences", None), "thedas_io_game_dir", "") or ""
+        game_dir = getattr(getattr(addon, "preferences", None), attr, "") or ""
         if game_dir:
             return str(game_dir)
     return ""
@@ -1029,6 +1122,15 @@ def _asset_message(shown: int, total: int, page: int = 0, limit=None) -> str:
     return f"{start}-{start + shown - 1}/{total} assets (page {page + 1}/{pages})"
 
 
+def _scene_db(scene):
+    # blank override means the per-game default; resolving it here keeps every
+    # lookup on the same file as the asset list instead of falling back to DAO
+    return _db_path(
+        getattr(scene, "thedas_io_db_path", "") or None,
+        getattr(scene, "thedas_io_game", "DAO"),
+    )
+
+
 def _fill_assets(
     scene,
     db_path=None,
@@ -1048,10 +1150,10 @@ def _fill_assets(
     else:
         offset = max(0, int(offset))
     try:
-        total = count(ext, name, package, db_path)
+        total = count(ext, name, package, db_path, game=getattr(scene, "thedas_io_game", "DAO"))
     except sqlite3.Error:
         total = None
-    rows = find(ext, name, package, db_path, limit=limit, offset=offset)
+    rows = find(ext, name, package, db_path, limit=limit, offset=offset, game=getattr(scene, "thedas_io_game", "DAO"))
     if total is None:
         total = len(rows)
     scene.thedas_io_assets.clear()
@@ -1062,6 +1164,8 @@ def _fill_assets(
         item.filename = r["filename"]
         item.ext = r["ext"]
         item.path = r["path"]
+        h = int(r.get("name_hash") or 0)
+        item.name_hash = f"{h & 0xFFFFFFFFFFFFFFFF:016x}" if h else ""
     try:
         scene.thedas_io_assets_total = int(total)
         scene.thedas_io_page = offset // limit if limit else 0
@@ -1082,14 +1186,19 @@ def _refresh_assets_page(context, scene=None, page=0) -> tuple:
         page = 0
     else:
         try:
-            total_hint = count(ext, name, package, getattr(scene, "thedas_io_db_path", "") or None)
+            total_hint = count(
+                ext,
+                name,
+                package,
+                _scene_db(scene),
+            )
         except sqlite3.Error:
             total_hint = 0
         pages = _page_count(total_hint, limit)
         page = max(0, min(int(page), pages - 1))
     rows, total = _fill_assets(
         scene,
-        getattr(scene, "thedas_io_db_path", "") or None,
+        _scene_db(scene),
         ext,
         name,
         package,
@@ -1100,7 +1209,7 @@ def _refresh_assets_page(context, scene=None, page=0) -> tuple:
     return rows, total, page
 
 
-def _scan_async(root, db_path) -> dict:
+def _scan_async(root, db_path, game=None) -> dict:
     # scanner scan in worker thread, poll current/total/done
 
     state: dict = {
@@ -1119,7 +1228,7 @@ def _scan_async(root, db_path) -> dict:
                 state["current"] = done
                 state["total"] = total
 
-            state["stats"] = scan(root, db_path, progress=progress)
+            state["stats"] = scan(root, db_path, progress=progress, game=game)
         except Exception as exc:  # noqa: BLE001
             # a whitelist here let anything else (MemoryError, RecursionError)
             # kill the thread silently, and the operator then read the missing
@@ -1163,7 +1272,11 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
 
         scene = context.scene
         if getattr(scene, "thedas_io_scan_addins", False):
-            addins = bpy.path.abspath(scene.thedas_io_addins_dir or default_addins_dir())
+            addins = bpy.path.abspath(
+                scene.thedas_io_addins_dir or default_addins_dir(
+                    game=getattr(scene, "thedas_io_game", "DAO"), game_dir=_prefs_game_dir(context)
+                )
+            )
             if not Path(addins).is_dir():
                 return [], f"AddIns folder not found: {addins}"
             if addins not in roots:
@@ -1183,8 +1296,14 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
 
         scene = context.scene
         self._db_path = str(scene.thedas_io_db_path or "")
+        if not self._db_path:
+            self._db_path = str(
+                _db_path(None, getattr(scene, "thedas_io_game", "DAO"))
+            )
         self._scene = scene
-        self._state = _scan_async(roots, self._db_path or None)
+        self._state = _scan_async(
+            roots, self._db_path or None, getattr(scene, "thedas_io_game", "DAO")
+        )
         scene.thedas_io_scan_active = True
         scene.thedas_io_scan_progress = 0
 
@@ -1209,8 +1328,14 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             return {"CANCELLED"}
 
         self._db_path = str(context.scene.thedas_io_db_path or "")
+        if not self._db_path:
+            self._db_path = str(
+                _db_path(None, getattr(context.scene, "thedas_io_game", "DAO"))
+            )
         self._scene = context.scene
-        self._state = _scan_async(roots, self._db_path or None)
+        self._state = _scan_async(
+            roots, self._db_path or None, getattr(context.scene, "thedas_io_game", "DAO")
+        )
         self._state["thread"].join()
         return self._finish(context)
 
@@ -1509,6 +1634,7 @@ class THEDAS_IO_OT_load_animation(bpy.types.Operator):
                 "filename": item.filename,
                 "ext": item.ext,
                 "path": item.path,
+                "name_hash": item.name_hash or None,
             }
             try:
                 path = str(extract(row))
@@ -1634,6 +1760,7 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
             "filename": item.filename,
             "ext": item.ext,
             "path": item.path,
+            "name_hash": item.name_hash or None,
         }
         if str(item.ext).lower().lstrip(".") == "ani":
             try:
@@ -1643,7 +1770,7 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
                 return {"CANCELLED"}
             return _play_animation(context, raw, item.filename, 30.0, self.report)
         result = _import_row(
-            context, row, scene.thedas_io_db_path or None, False, self.report, scene.thedas_io_weld
+            context, row, _scene_db(scene), False, self.report, scene.thedas_io_weld
         )
 
         if result == {"FINISHED"}:
@@ -1695,6 +1822,14 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
 
 def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = True) -> set:
     # shared msh/mmh import for one row, emit reports to user
+    game = getattr(context.scene, "thedas_io_game", "DAO")
+    # a blank override must still mean this game's default db, not DAO's
+    db = _db_path(db, game)
+
+    if not row.get("name_hash"):
+        hit = find_exact(row["filename"], db_path=db, game=game)
+        if hit is not None and hit["path"] == row["path"]:
+            row = {**row, "name_hash": hit["name_hash"]}
 
     local = extract(row)
     kind = importer_for(row["ext"])
@@ -1707,7 +1842,7 @@ def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = Tru
         ]
         notes: list = []
         stem = Path(row["filename"]).stem
-        mao = resolve(f"{stem}.mao", row, db, local_only)
+        mao = resolve(f"{stem}.mao", row, db, local_only, game=game)
         if mao is None:
             notes.append(
                 f"No MAO found for {stem}.mao (an .msh names no material; "
@@ -1726,7 +1861,7 @@ def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = Tru
 
         chunks = {}
         msh_name = str(tree.values.get(6005) or "")  # type: ignore
-        sibling = resolve(msh_name, row, db, local_only)
+        sibling = resolve(msh_name, row, db, local_only, game=game)
         if sibling is not None and sibling.is_file():
             sraw = sibling.read_bytes()
             smesh = MSHReader(sraw).mesh
@@ -1842,13 +1977,13 @@ def apply_materials(
             if notes is not None:
                 notes.append(f"MAO not found: {mao_path.name} (scan its package first)")
             return None
-        parsed = parse_mao(mao_bytes.decode("utf-8"))
+        parsed = parse_mao_bytes(mao_bytes)
 
         item = remember(mao_path.name, "mao", parsed, mao_bytes)
     else:
-        text = mao_path.read_text(encoding="utf-8")
-        parsed = parse_mao(text)
-        item = remember(mao_path.name, "mao", parsed, text.encode("utf-8"))
+        mao_bytes = mao_path.read_bytes()
+        parsed = parse_mao_bytes(mao_bytes)
+        item = remember(mao_path.name, "mao", parsed, mao_bytes)
 
     images = {}
     for semantic, res in (parsed.get("textures") or {}).items():
@@ -1982,9 +2117,12 @@ def _cache_dir() -> Path:
 
 def _repack_textures(scene=None, depsgraph=None) -> None:
     # keep packed pixels equal to screen before save
+    _sweep_orphans()  # dropped imports must not ride along in the .blend
     for image, _ in _texture_images():
         try:
-            if image.packed_file is not None:
+            # pack() re-encodes every pixel; only a dirty image needs it, so an
+            # untouched scene saves without re-packing every texture on each save
+            if image.packed_file is not None and getattr(image, "is_dirty", True):
                 image.pack()
         except (AttributeError, ReferenceError, RuntimeError):
             continue
@@ -2171,6 +2309,7 @@ def _new_image(name, pil, raw):
 
     role = role_of(name)
     image: Any = bpy.data.images.new(name, pil.width, pil.height, alpha=True)
+    _tag(image, "image")
     image.alpha_mode = "CHANNEL_PACKED"
     colorspace: Any = image.colorspace_settings
     colorspace.name = "sRGB" if role == "diffuse" else "Non-Color"
@@ -2206,6 +2345,7 @@ def _missing_image(res, images):
     w, h = max(sizes, key=lambda s: s[0] * s[1]) if sizes else (64, 64)
     name = Path(res).name
     image: Any = bpy.data.images.new(name, w, h, alpha=True)
+    _tag(image, "image")
     image.alpha_mode = "CHANNEL_PACKED"
     colorspace: Any = image.colorspace_settings
     colorspace.name = "sRGB" if role_of(name) == "diffuse" else "Non-Color"
@@ -2232,6 +2372,7 @@ def _missing_image(res, images):
 def build_material(name, mao, images, color=None, tint=None):
     # specular-bsdf wiring from dao channel packing
     mat: Any = bpy.data.materials.new(name)
+    _tag(mat, "material")
     mat.use_nodes = True
     _wire_material(mat, mao, images, color=color, tint=tint)
 
@@ -2431,6 +2572,7 @@ def _tint_group(side: str):
 
     names = for_side(side)
     tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    _tag(tree, "node_group")
     for name in ("Tint mask (RGB)", side, *names):
         sock = tree.interface.new_socket(name, in_out="INPUT", socket_type="NodeSocketColor")
         sock.default_value = DEFAULTS.get(name, (0.0, 0.0, 0.0, 1.0))
@@ -2566,6 +2708,7 @@ def build_hierarchy(context, tree, chunks):
     # armature from nodes, empties for hooks, skinned chunks on armature
 
     arm_data = bpy.data.armatures.new(tree.name or "skeleton")
+    _tag(arm_data, "armature")
     arm_obj = bpy.data.objects.new(arm_data.name, arm_data)
     context.collection.objects.link(arm_obj)
     arm_obj.select_set(True)
@@ -2798,6 +2941,7 @@ def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
     corners = [rows[i] for i in keep]
 
     data = bpy.data.meshes.new(chunk.name or "chunk")
+    _tag(data, "mesh")
     data.from_pydata(positions, [], tris)
 
     # a zero or non-finite normal in the file crashes Blender's custom-normal
@@ -2935,6 +3079,7 @@ _SCENE_PROPS = (
     "thedas_io_collision_bone",
     "thedas_io_sp_split_packed",
     "thedas_io_sp_keep_resolution",
+    "thedas_io_game",
 )
 
 
@@ -3018,6 +3163,15 @@ def register():
             ("DISK", "Disk", "A .msh/.mmh file from the filesystem"),
         ],
         default="GAME",
+    )
+    bpy.types.Scene.thedas_io_game = bpy.props.EnumProperty(  # type: ignore
+        name="Game",
+        description="Which game's assets this scene targets",
+        items=[
+            ("DAO", "Dragon Age: Origins", "Dragon Age: Origins"),
+            ("DA2", "Dragon Age II", "Dragon Age II"),
+        ],
+        default="DAO",
     )
     bpy.types.Scene.thedas_io_registry = bpy.props.StringProperty(  # type: ignore
         name="Registry",
@@ -3127,7 +3281,7 @@ def rebuild_registry(scene) -> list:
         entries = json.loads(blob)
     except ValueError:
         return []
-    db = getattr(scene, "thedas_io_db_path", "") or None
+    db = _scene_db(scene)
     notes: list = []
 
     def fetch(name):
@@ -3173,7 +3327,7 @@ def rebuild_registry(scene) -> list:
                     pairs.append((obj, chunk))
             item["objects"] = pairs
         elif kind == "mao":
-            item["model"] = parse_mao(raw.decode("utf-8"))
+            item["model"] = parse_mao_bytes(raw)
             item["objects"] = [
                 m for m in (mats_by_name.get(n) for n in entry.get("objs") or []) if m is not None
             ]
@@ -3203,7 +3357,10 @@ def _autoload_db():
 
 def _on_file_load(_dummy):
     _autoload_db()
-    # import registry is python-side and does not survive save
+    # import registry is python-side and does not survive save. reset() first:
+    # without it the previous file's items keep their source bytes (and dead
+    # object refs) alive for the rest of the session, so every open grows memory
+    reset()
 
     for scene in list(getattr(getattr(bpy, "data", None), "scenes", None) or []):
         try:

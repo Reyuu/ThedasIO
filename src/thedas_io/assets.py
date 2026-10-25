@@ -34,11 +34,11 @@ def extract(row, dest_dir=None):
         dest = _extract_dir() / str(row["package"])
     out = dest / row["filename"]
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(payload(src, row["filename"]))
+    out.write_bytes(payload(src, row["filename"], row.get("name_hash")))
     return out
 
 
-def resolve(name, row, db_path=None, local_only=False):
+def resolve(name, row, db_path=None, local_only=False, game=None):
     # same dir first, then db, unless local_only
     if not name:
         return None
@@ -51,7 +51,7 @@ def resolve(name, row, db_path=None, local_only=False):
     elif local_only:
         return None
 
-    hit = find_exact(name, db_path=db_path)
+    hit = find_exact(name, db_path=db_path, game=game)
     if hit is None:
         return None
     return extract(hit) if hit["package"] else Path(hit["path"])

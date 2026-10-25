@@ -2,12 +2,29 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+from typing import ClassVar
 
 import pytest
 
 from conftest import archive, encrypted_archive, zlib_archive
-from thedas_io.asset_db.scanner import find, find_exact, load, payload, scan
-from thedas_io.erf.description import MAGIC, ERFReader, ERFWriter
+from thedas_io.asset_db.scanner import _s64, find, find_exact, fnv1, load, payload, scan
+from thedas_io.assets import extract
+from thedas_io.erf.description import MAGIC, MAGIC_V3, ERFReader, ERFWriter
+
+
+def _v3_archive(path, entries):
+    # DA2 layout: entries carry only a name hash, never a name string.
+    rows = b""
+    blob = b""
+    offset = 48 + 28 * len(entries)
+    for name_hash, type_hash, data in entries:
+        rows += struct.pack(
+            "<iQIIII", -1, name_hash, type_hash, offset + len(blob), len(data), len(data)
+        )
+        blob += data
+    path.write_bytes(
+        MAGIC_V3 + struct.pack("<IIII", 0, len(entries), 0, 0) + b"\x00" * 16 + rows + blob
+    )
 
 
 def test_scan_and_load(tmp_path):
@@ -194,3 +211,88 @@ def test_unknown_module_is_indexed_but_its_payload_fails(tmp_path):
     assert [r["filename"] for r in load(db)] == ["a.msh"]
     with pytest.raises(ValueError, match="no known password"):
         payload(tmp_path / "mod.rim", "a.msh")
+
+
+def test_da2_recovers_hash_only_names(tmp_path, monkeypatch):
+    # DA2 stores no names. MMH label 6005 holds the mesh path, and mmh/phy/mao
+    # siblings share that stem, so the scan has to hash those candidates and
+    # rename the matching rows (and fix a '.bin' ext it could not sniff).
+    stem = "art\\models\\thing"
+    gff_mmh = b"GFF V4.0PC  MMH " + b"\x00" * 8
+
+    class _Tree:
+        values: ClassVar = {6005: stem + ".msh"}
+
+    monkeypatch.setattr(
+        "thedas_io.mmh.description.MMHReader",
+        lambda data: type("_R", (), {"tree": _Tree()})(),
+    )
+    _v3_archive(
+        tmp_path / "a.erf",
+        [
+            (fnv1(stem + ".mmh"), 0x427E18E9, gff_mmh),
+            (fnv1(stem + ".msh"), 0x2C7DF5B7, b"MESHPAYLOAD"),
+            (fnv1(stem + ".phy"), 0x43775E36, b"PHYPAYLOAD12345"),
+            (fnv1(stem + ".mao"), 0x3E7E125A, b'<?xml version="1.0"?><MaterialOverride/>'),
+        ],
+    )
+    db = tmp_path / "t.sqlite"
+    assert scan(tmp_path, db, game="DA2")["entries"] == 4
+    assert {(r["filename"], r["ext"]) for r in load(db)} == {
+        ("thing.mmh", ".mmh"),
+        ("thing.msh", ".msh"),
+        ("thing.phy", ".phy"),
+        ("thing.mao", ".mao"),
+    }
+    # a V3 entry has no name of its own, so extracting a recovered row has to
+    # resolve it through the stored hash instead of the display name
+    row = find_exact("thing.mmh", db_path=db, game="DA2")
+    assert row is not None and row["name_hash"] == _s64(fnv1(stem + ".mmh"))
+    # a label such as a texture resref resolves by hash even when the caller
+    # (material apply) does not know which game is loaded
+    assert find_exact(stem + ".mmh", db_path=db) is not None
+    assert extract(row, dest_dir=tmp_path / "out") == tmp_path / "out" / "thing.mmh"
+    assert (tmp_path / "out" / "thing.mmh").read_bytes() == gff_mmh
+    # the UI can only keep the 64-bit hash as hex text, not in a bpy int
+    assert (
+        payload(row["path"], row["filename"], f'{row["name_hash"] & 0xFFFFFFFFFFFFFFFF:016x}')
+        == gff_mmh
+    )
+
+
+def test_da2_extension_comes_from_the_entry_type_hash(tmp_path):
+    # ERF V3 stores fnv32(ext), so a hash-only entry gets its real extension
+    # even when the payload cannot be sniffed (and without decompressing it).
+    cases = [
+        ("art\\x\\y.msh", 0x2C7DF5B7, ".msh"),
+        ("art\\x\\z.ogg", 0x38798BF2, ".ogg"),
+        ("art\\x\\w.unknown", 0xDEADBEEF, ".bin"),
+    ]
+    _v3_archive(
+        tmp_path / "a.erf",
+        [(fnv1(name), type_hash, b"\x00\x01\x02\x03") for name, type_hash, _ in cases],
+    )
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db, game="DA2")
+    assert {(r["filename"], r["ext"]) for r in load(db)} == {
+        (f"hash_{fnv1(name):016x}{ext}", ext) for name, _, ext in cases
+    }
+
+
+def test_da2_bundled_hash_names_rename_and_fix_the_extension(tmp_path, monkeypatch):
+    # names recovered offline are keyed by the exact FNV-1 hash, so they win
+    # over the payload sniff, which mislabels e.g. .mor as plain .gff
+    import thedas_io.asset_db.da2_hashes as hashes
+
+    stem = "art\\models\\recovered"
+    monkeypatch.setattr(
+        hashes, "DA2_HASH_NAMES", {_s64(fnv1(stem + ".mor")): "recovered.mor"}
+    )
+    _v3_archive(
+        tmp_path / "a.erf",
+        [(fnv1(stem + ".mor"), 0x00000000, b"GFF V4.0PC  ZZZZ" + b"\x00" * 8)],
+    )
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db, game="DA2")
+    rows = [(r["filename"], r["ext"]) for r in load(db)]
+    assert rows == [("recovered.mor", ".mor")]

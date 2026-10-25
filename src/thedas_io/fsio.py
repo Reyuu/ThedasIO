@@ -10,20 +10,31 @@ from pathlib import Path
 def write_bytes_atomic(path, data: bytes) -> Path:
     """Write ``data`` to ``path``; the old file survives anything going wrong."""
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    try:
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        # a crash mid-write leaves the temp file; it is never the real one
+    last: Exception | None = None
+    for suffix in ("", ".1", ".2", ".3"):
+        tmp = path.with_name(path.name + ".tmp" + suffix)
         try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            return path
+        except PermissionError as exc:
+            last = exc
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            continue
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+    if last is not None:
+        raise last
     return path
 
 

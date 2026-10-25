@@ -13,6 +13,7 @@ FORMATS = {
     5: "<4B",
     6: "<2h",
     7: "<4h",
+    8: "<4B",   # UBYTE4N
     15: "<2e",
     16: "<4e",
 }
@@ -120,6 +121,12 @@ def decode_chunk(mesh, chunk):
     w_by_vert = {}
     b_by_vert = {}
 
+    # UBYTE4N (declarator type 8) stores 0-255 bytes that the engine
+    # normalises to [-1, 1] via (value - 128) / 127. DA2 uses it for
+    # normals/tangents; DAO ships none, so nothing existing depends on it.
+    def _norm8(values):
+        return tuple((c - 128) / 127 for c in values[:3])
+
     for d in chunk.declarators:
         if d.is_terminator:
             continue
@@ -127,8 +134,11 @@ def decode_chunk(mesh, chunk):
         size = info[1]
         if size is None or d.offset + size > stride:
             raise ValueError(f"chunk {chunk.name}: declarator overruns stride")
+
         for v in range(verts):
             values, _ = _decode_row(d.dtype, blob, v * stride + d.offset)
+            if d.dtype == 8 and d.usage in (USAGE_NORMAL, 6, 7):
+                values = _norm8(values)
             if d.usage == USAGE_POSITION:
                 positions.append((values[0], values[1], values[2]))
             elif d.usage == USAGE_NORMAL:

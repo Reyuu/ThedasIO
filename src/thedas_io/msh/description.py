@@ -114,6 +114,8 @@ class Declarator:
     def __init__(self, row):
         missing = []
         for l in _DECL_LABELS:
+            if l == L_DECL_METHOD:
+                continue  # DA2 omits the method cell
             if l not in row:
                 missing.append(label_name(l))
         if missing:
@@ -124,7 +126,8 @@ class Declarator:
         self.dtype = row[L_DECL_TYPE]
         self.usage = row[L_DECL_USAGE]
         self.usage_index = row[L_DECL_USAGE_INDEX]
-        self.method = row[L_DECL_METHOD]
+        # DA2 declarator rows omit the method cell (8031); default to DEFAULT
+        self.method = row.get(L_DECL_METHOD, 0)
 
     @property
     def is_terminator(self):

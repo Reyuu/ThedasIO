@@ -1,8 +1,23 @@
 import hashlib
 import struct
+import uuid
 import zlib
 
-from .passwords import DAO_PASSWORDS
+from .passwords import DA2_PASSWORDS, DAO_PASSWORDS
+
+# Plaintext magic prefixes a successful Blowfish decryption should start with.
+# DA2 DLC archives encrypt GFF/DDS/UTI/etc. payloads; wrong keys yield garbage.
+_PAYLOAD_MAGICS = (
+    b"GFF ",
+    b"DDS ",
+    b"UTI ",
+    b"UTP ",
+    b"UTC ",
+    b"NCS ",
+    b"PLO ",
+    b"BIOE",
+    b"GDA ",
+)
 
 # Three container layouts ship in the wild, told apart by the first 16 bytes:
 #
@@ -18,6 +33,7 @@ from .passwords import DAO_PASSWORDS
 MAGIC = "ERF V2.0".encode("utf-16-le")
 MAGIC_21 = b"ERF V2.1" + b"\x00" * 8
 MAGIC_22 = "ERF V2.2".encode("utf-16-le")
+MAGIC_V3 = "ERF V3.0".encode("utf-16-le")
 SENTINEL = 0xFFFFFFFF
 
 # 16-byte prefix -> (header size, row size, name field size, name encoding, codec)
@@ -42,7 +58,7 @@ def geometry(prefix):
 
 
 class ERFEntry:
-    def __init__(self, name, offset, packed_size, size):
+    def __init__(self, name, offset, packed_size, size, name_hash=0, type_hash=0):
         self.name = name
         self.offset = offset
         # bytes on disk, which for an encrypted entry carries padding up to
@@ -50,6 +66,8 @@ class ERFEntry:
         self.packed_size = packed_size
         # plaintext length, what the payload decodes to
         self.size = size
+        self.name_hash = name_hash
+        self.type_hash = type_hash
 
 
 class ERFReader:
@@ -61,11 +79,17 @@ class ERFReader:
         self.module_id = 0
         self.pw_hash = b""
         self.codec = None
+        self.string_table = b""
         self._key = None
         self._parse()
 
     def _parse(self):
-        header, row, name_size, encoding, self.codec = _layout(self.data[:16])
+        prefix = self.data[:16]
+        if prefix == MAGIC_V3:
+            self._parse_v3()
+            return
+
+        header, row, name_size, encoding, self.codec = _layout(prefix)
         entry_count = struct.unpack("<I", self.data[16:20])[0]
         if self.codec == "blowfish":
             self._parse_v22_header()
@@ -78,8 +102,8 @@ class ERFReader:
             start = header + i * row
             entry_data = self.data[start : start + row]
             # errors="ignore" is load-bearing: a name field can end mid
-            # surrogate (the 64B field has no room for every resref plus a
-            # NUL), and one odd byte would otherwise raise and lose the whole
+            # surrogate (the 64B field has no room for every resref plus a NUL),
+            # and one odd byte would otherwise raise and lose the whole
             # archive from the scan.
             name = entry_data[:name_size].decode(encoding, "ignore").split("\x00", 1)[0]
             numbers = struct.unpack(f"<{(row - name_size) // 4}I", entry_data[name_size:])
@@ -88,6 +112,44 @@ class ERFReader:
             # the plaintext length separately.
             packed_size, size = (numbers[1], numbers[1]) if len(numbers) == 2 else numbers[1:3]
             self.entries.append(ERFEntry(name, offset, packed_size, size))
+
+        if self.codec == "zlib":
+            self.compression = 1
+        if self.codec == "blowfish":
+            # V2.2 header already parsed; encryption/compression from flags
+            pass
+
+    # nightmare, nightmare, nightmare
+    def _parse_v3(self):
+        if len(self.data) < 48:
+            raise ValueError("Invalid ERF V3.0 header")
+        string_table_size, file_count, flags = struct.unpack("<III", self.data[16:28])
+        self.module_id = struct.unpack("<I", self.data[28:32])[0]
+        self.pw_hash = self.data[32:48]
+        self.encryption = (flags >> 4) & 0xF
+        self.compression = (flags >> 29) & 0x7
+        if 48 + string_table_size > len(self.data):
+            raise ValueError("Invalid ERF V3.0 string table")
+        self.string_table = self.data[48 : 48 + string_table_size]
+        toc_offset = 48 + string_table_size
+        row_size = 28
+        if toc_offset + file_count * row_size > len(self.data):
+            raise ValueError("Invalid ERF V3.0 table of contents")
+        for i in range(file_count):
+            start = toc_offset + i * row_size
+            entry_data = self.data[start : start + row_size]
+            name_offset, name_hash, type_hash, offset, packed_size, size = struct.unpack(
+                "<iQIIII", entry_data
+            )
+            name = ""
+            if name_offset >= 0 and name_offset < len(self.string_table):
+                end = self.string_table.find(b"\x00", name_offset)
+                if end < 0:
+                    end = len(self.string_table)
+                name = self.string_table[name_offset:end].decode("ascii", "replace")
+            self.entries.append(
+                ERFEntry(name, offset, packed_size, size, name_hash=name_hash, type_hash=type_hash)
+            )
 
     def _parse_v22_header(self):
         # V2.2 spends the 56-byte header on a flags word, the module id and
@@ -107,6 +169,44 @@ class ERFReader:
             self._key = self._find_key()
         return self._key
 
+    def _first_packed(self) -> bytes | None:
+        # raw packed bytes of the first entry, used to verify a DA2 key guess
+        for entry in self.entries:
+            raw = self.data[entry.offset : entry.offset + min(entry.packed_size, 64)]
+            if raw:
+                return raw
+        return None
+
+    def _da2_key(self) -> bytes | None:
+        # DA2 keys UUID passwords with the raw UUID bytes as the Blowfish key
+        # Encryption-3 headers store md5(Blowfish(key).encrypt(bytes(range(256))));
+        # check that first so compressed or headerless entries still resolve,
+        # and keep the magic check as a fallback for synthetic test archives
+        from Crypto.Cipher import Blowfish
+
+        probe = bytes(range(256))
+        keys = []
+        for password in DA2_PASSWORDS:
+            try:
+                key = uuid.UUID(password).bytes
+            except ValueError:
+                continue
+            keys.append(key)
+            if hashlib.md5(Blowfish.new(key, Blowfish.MODE_ECB).encrypt(probe)).digest() == self.pw_hash:
+                return key
+
+        packed = self._first_packed()
+        if packed is None:
+            return None
+        for key in keys:
+            try:
+                out = Blowfish.new(key, Blowfish.MODE_ECB).decrypt(packed)
+            except (ValueError, TypeError):
+                continue
+            if out[:4] in _PAYLOAD_MAGICS or out[:8] == b"GFF V4.0":
+                return key
+        return None
+
     def _find_key(self):
         # Blowfish keyed on the little-endian u64 of the module's numeric
         # password; the header only stores md5 of the decimal digits, so match
@@ -114,23 +214,64 @@ class ERFReader:
         for password in DAO_PASSWORDS:
             if hashlib.md5(password.encode("ascii")).digest() == self.pw_hash:
                 return struct.pack("<Q", int(password))
+        # DA2 DLC modules: raw UUID bytes are the key
+        key = self._da2_key()
+        if key is not None:
+            return key
         raise ValueError(f"no known password for ERF module {self.module_id}")
 
     def decode_payload(self, raw, entry):
         # Turn an entry's on-disk bytes into its plaintext.
         if self.codec == "zlib":
             return zlib.decompress(raw)
-        if self.codec == "blowfish":
-            # Raised here rather than in _parse so that an archive using
-            # something we cannot read still contributes its entry names.
-            if self.compression:
-                raise ValueError(f"unsupported ERF compression {self.compression}")
-            if self.encryption != 2:
-                raise ValueError(f"unsupported ERF encryption {self.encryption}")
-            from Crypto.Cipher import Blowfish
+        # V3 (and flag-driven) path: encryption and compression are independent(!)
+        data = raw
+        if self.encryption:
+            if self.encryption in (2, 3):
+                from Crypto.Cipher import Blowfish
 
-            return Blowfish.new(self.key, Blowfish.MODE_ECB).decrypt(raw)[: entry.size]
-        return raw
+                data = Blowfish.new(self.key, Blowfish.MODE_ECB).decrypt(data)
+            elif self.encryption == 1:
+                key = self._xor_key()
+                out = bytearray()
+                for i, b in enumerate(data):
+                    out.append(b ^ key[i % len(key)])
+                data = bytes(out)
+            else:
+                raise ValueError(f"unsupported ERF encryption {self.encryption}")
+
+        if self.compression:
+            if self.compression == 1:
+                # Bioware zlib: 1-byte header (window bits in high nibble), then raw deflate
+                data = zlib.decompress(data[1:], wbits=-15)
+            elif self.compression == 7:
+                data = zlib.decompress(data, wbits=-15)
+            else:
+                raise ValueError(f"unsupported ERF compression {self.compression}")
+
+        if entry is not None and getattr(entry, "size", 0):
+            data = data[: entry.size]
+        return data
+
+    def _xor_key(self):
+        # 9-byte key derived from the module password
+        password = ""
+        try:
+            # reuse the blowfish password match by digest
+            password = self._matched_password()
+        except Exception:  # noqa: BLE001
+            password = ""
+        value = int(password) if password.isdigit() else 0
+        key = value.to_bytes(9, "little")
+        return key
+
+    def _matched_password(self):
+        for password in DAO_PASSWORDS:
+            import hashlib
+
+            if hashlib.md5(password.encode("ascii")).digest() == self.pw_hash:
+                return password
+        return ""
 
     def entry(self, entry_name):
         for entry in self.entries:

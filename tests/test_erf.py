@@ -148,7 +148,7 @@ def test_v22_rejects_a_flag_we_cannot_honour(tmp_path):
     raw = bytearray(p.read_bytes())
     flags = struct.unpack("<I", raw[32:36])[0]
 
-    for bits, expected in (((3 - 2) << 4, "encryption"), ((1) << 29, "compression")):
+    for bits, expected in (((4) << 4, "encryption"), ((2) << 29, "compression")):
         broken = bytearray(raw)
         struct.pack_into("<I", broken, 32, flags | bits)
         with pytest.raises(ValueError, match=f"unsupported ERF {expected}"):

@@ -826,10 +826,36 @@ def _resolve_base_chunks(base, planned: list) -> list:
 def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
     # re-encode when Blender geometry diverges from the decoded source
     mesh = item["model"]
-    states = [
-        (obj, chunk, decode_chunk(mesh, chunk), _blender_state(obj))
-        for obj, chunk in item["objects"]
-    ]
+    live_objects = []
+    for entry in (item.get("objects") or []):
+        obj = entry[0] if isinstance(entry, (tuple, list)) else entry
+        chunk = entry[1] if isinstance(entry, (tuple, list)) and len(entry) > 1 else None
+        # a stored Object pointer can die after sculpt/undo/remesh; re-resolve
+        # by the chunk name (which is the object name created at import) before
+        # giving up, so an edit still exports instead of being reported SKIPPED
+        try:
+            _ = obj.name
+        except ReferenceError:
+            if chunk is not None and getattr(chunk, "name", None):
+                obj = bpy.data.objects.get(chunk.name)
+        try:
+            _ = obj.name
+        except (AttributeError, ReferenceError):
+            continue
+        if obj is None:
+            continue
+        live_objects.append((obj, chunk) if chunk is not None else obj)
+    item["objects"] = live_objects
+    states = []
+    for obj, chunk in live_objects:
+        if chunk is None:
+            continue
+        try:
+            decoded = decode_chunk(mesh, chunk)
+            bstate = _blender_state(obj)
+        except ReferenceError:
+            continue
+        states.append((obj, chunk, decoded, bstate))
     planned = []
     for obj, chunk, decoded, bstate in states:
         try:
@@ -957,9 +983,15 @@ def _evaluated_mesh(obj):
     try:
         ev = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
     except (AttributeError, ReferenceError, RuntimeError):
-        return obj.data
-    if len(ev.data.vertices) or not len(obj.data.vertices):
-        return ev.data
+        try:
+            return obj.data
+        except (AttributeError, ReferenceError):
+            return None
+    try:
+        if len(ev.data.vertices) or not len(obj.data.vertices):
+            return ev.data
+    except (AttributeError, ReferenceError):
+        return None
     return None
 
 
@@ -1549,8 +1581,10 @@ def _mmh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None
             else:
                 live = resolver.matrix_world
                 live_name = resolver.name
-        except ReferenceError as exc:
-            raise ValueError(f"node {node.name or path}: deleted in Blender") from exc
+        except ReferenceError:
+            # a host object/bone removed in Blender: skip its transform edit
+            # rather than failing the whole file
+            continue
         world = _live_world(live, snap, base_world[id(node)])
         name = live_name if node.name is not None and live_name != node.name else None
         if world is not None or name is not None:

@@ -129,6 +129,63 @@ def parse_mao(text):
     }
 
 
+# da2 ships maos as gff v4 rather than the dao xml dialect; same fields, so
+# both parse into the dict build_material and write_mao already understand
+_MAO_GFF_LABELS = {
+    "name": 33012,
+    "semantic": 33013,
+    "floats": 33016,
+    "vectors": 33017,
+    "textures": 33020,
+}
+_MAO_ITEM_LABELS = {
+    "texture": (33010, 33011),
+    "float": (33002, 33003),
+    "vector": (33004, 33005),
+}
+
+
+def parse_mao_binary(raw):
+    from .gff40.description import GFFReader
+
+    root = GFFReader(raw).get_from_data_block(0)
+    tex_name, tex_res = _MAO_ITEM_LABELS["texture"]
+    flt_name, flt_value = _MAO_ITEM_LABELS["float"]
+    vec_name, vec_value = _MAO_ITEM_LABELS["vector"]
+
+    textures = {}
+    for item in root.get(_MAO_GFF_LABELS["textures"]) or []:
+        if item.get(tex_name):
+            textures[item[tex_name]] = item.get(tex_res)
+    floats = {}
+    for item in root.get(_MAO_GFF_LABELS["floats"]) or []:
+        if item.get(flt_name):
+            floats[item[flt_name]] = float(item.get(flt_value) or 0.0)
+    vectors = {}
+    for item in root.get(_MAO_GFF_LABELS["vectors"]) or []:
+        if item.get(vec_name):
+            vectors[item[vec_name]] = list(item.get(vec_value) or ())
+
+    name = root.get(_MAO_GFF_LABELS["name"])
+    return {
+        "name": name,
+        "material": name,
+        "semantic": root.get(_MAO_GFF_LABELS["semantic"]),
+        "textures": textures,
+        "vectors": vectors,
+        "floats": floats,
+        "extra": [],
+        "header": "",
+        "binary": True,
+    }
+
+
+def parse_mao_bytes(raw: bytes):
+    if raw[:8] == b"GFF V4.0":
+        return parse_mao_binary(raw)
+    return parse_mao(raw.decode("utf-8"))
+
+
 def write_mao(parsed):
     root = ET.Element("MaterialObject", {"Name": parsed.get("name") or ""})
     ET.SubElement(root, "Material", {"Name": parsed.get("material") or ""})

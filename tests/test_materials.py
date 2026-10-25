@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from thedas_io.materials import (
     parse_mao,
+    parse_mao_bytes,
     role_of,
     semantic_role,
+    slot_roles,
     thedas_io_normals_to_rgba,
     write_mao,
 )
@@ -271,3 +275,38 @@ def test_mao_bytes_vector_drift_keeps_floats_and_extras():
     assert out["vectors"] == props
     assert out["floats"] == parse_mao(PARAMS)["floats"]
     assert out["extra"] == parse_mao(PARAMS)["extra"]
+
+
+def _mao_gff4(textures):
+    # minimal da2 mao: root "MAO " with one "tet " struct array for textures
+    from thedas_io.gff40.description import FLAGS, GFFStructDef, GFFWriter
+
+    writer = GFFWriter(b"PC  ", b"MAO ", b"V4.0")
+    root = writer.alloc(struct.pack("<I", 0))  # root instance must sit at block 0
+    writer.struct_defs.append(GFFStructDef(int.from_bytes(b"MAO ", "little"), 0, 0, 4))
+    writer.struct_defs.append(GFFStructDef(int.from_bytes(b"tet ", "little"), 0, 0, 8))
+    cells = []
+    for semantic, res in textures.items():
+        cells.append((writer.alloc_ecstring(semantic), writer.alloc_ecstring(res)))
+    rows = b"".join(struct.pack("<II", *cell) for cell in cells)
+    array = writer.alloc(struct.pack("<I", len(cells)) + rows)
+    writer.data_block[root : root + 4] = struct.pack("<I", array)
+    writer.add_field(0, 33020, 1, FLAGS["STRUCT_ARRAY"], 0)
+    writer.add_field(1, 33010, 14, FLAGS["NONE"], 0)
+    writer.add_field(1, 33011, 14, FLAGS["NONE"], 4)
+    return writer.write()
+
+
+def test_parse_mao_bytes_reads_da2_gff4_textures():
+    textures = {
+        "mml_tDiffuse": "art\\characters\\playercharacter\\humanmale\\textures\\hm_arm_flta_0d.dds",
+        "mml_tNormalMap": "art\\characters\\playercharacter\\humanmale\\textures\\hm_arm_flta_0n.dds",
+    }
+    parsed = parse_mao_bytes(_mao_gff4(textures))
+    assert parsed["textures"] == textures
+    assert parsed["binary"] is True
+    assert slot_roles(parsed["textures"]) == {
+        "mml_tDiffuse": "diffuse",
+        "mml_tNormalMap": "normal",
+    }
+

@@ -1,23 +1,57 @@
+import mmap
 import os
 import sqlite3
 import struct
+from contextlib import contextmanager
 from pathlib import Path
 
-from ..erf.description import ERFReader, geometry
+from ..erf.description import MAGIC_V3, ERFReader, geometry
 
-SCAN_EXTS = {".rim", ".erf"}
+SCAN_EXTS = {".rim", ".erf", ".crf", ".rimp"}
 LOOSE_EXTS = {".msh", ".mmh", ".mao", ".dds", ".tga"}
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path, prio);"
+    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path, prio, name_hash);"
     "CREATE INDEX IF NOT EXISTS idx_assets_ext_name ON assets(ext, filename);"
 )
 
 
-def _db_path(path=None):
+@contextmanager
+def _mapped(path):
+    # read_bytes() on the biggest DA2 archive is an 870MB spike; mmap lets the
+    # OS page it instead and the reader only slices what it needs.
+    with open(path, "rb") as fh:
+        try:
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except (ValueError, OSError):
+            yield fh.read()
+            return
+        try:
+            yield mm
+        finally:
+            mm.close()
+
+
+def fnv1(text: str) -> int:
+    # FNV-1 64-bit: multiply, then xor. ERF V3 (DA2) hashes names this way.
+    h = 0xCBF29CE484222325 # prime start
+    for b in text.encode():
+        h = (h * 0x100000001B3 ^ b) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def _s64(h: int) -> int:
+    # SQLite INTEGER is signed 64-bit; fold unsigned FNV hashes into range.
+    return h - (1 << 64) if h >= (1 << 63) else h
+
+
+def _db_path(path=None, game=None):
     if path is not None:
         return Path(path)
     base = os.environ.get("APPDATA", os.path.expanduser("~"))
-    return Path(base) / "BlenderDAOTools" / "asset_db.sqlite"
+    game = (game or "DAO").strip().upper()
+    if game not in ("DAO", "DA2"):
+        game = "DAO"
+    return Path(base) / "BlenderDAOTools" / f"asset_db_{game.lower()}.sqlite"
 
 
 def _entry_table(path):
@@ -40,6 +74,10 @@ def _entry_table(path):
 _ENTRY_TABLES: dict[tuple[str, int, int], bytes] = {}
 
 
+# magic, then the u32 at 16 and the one at 20
+_LEAD = struct.Struct("<16sII")
+
+
 def _read_entry_table(path):
     # header + entry_count rows, all of which have to fit in the file. the
     # bound comes from the file rather than a guess: a truncated or foreign
@@ -47,12 +85,18 @@ def _read_entry_table(path):
     # try to allocate up to 309GB and raise MemoryError mid-scan.
     size = os.path.getsize(path)
     with open(path, "rb") as f:
-        # 56B covers the longest header (V2.2); the magic says how much of it
-        # is really header.
-        head = f.read(56)
-        header, row = geometry(head[:16])
-        count = struct.unpack("<I", head[16:20])[0]
-        if len(head) < header or header + count * row > size:
+        # only the magic and the two u32 are needed to size the table; the rows
+        # themselves are re-read below.
+        head = f.read(_LEAD.size)
+        if len(head) < _LEAD.size:
+            raise ValueError(f"truncated ERF header ({len(head)} of {_LEAD.size}B)")
+        magic, field16, field20 = _LEAD.unpack(head)
+        if magic == MAGIC_V3:
+            header, row, count = 48 + field16, 28, field20
+        else:
+            header, row = geometry(magic)
+            count = field16
+        if header + count * row > size:
             raise ValueError(f"entry count {count} does not fit in {size} bytes")
         f.seek(0)
         return f.read(header + count * row)
@@ -84,15 +128,101 @@ def _priority(path, root, index: int) -> int:
     return prio
 
 
-def scan(root, db_path=None, progress=None):
+_DA2_TYPE_EXTS = None
+
+
+def _da2_type_ext(entry) -> str:
+    # ERF V3 (DA2) stores fnv32 of the lowercased extension as the entry's
+    # type_hash, so the real extension is known without decompressing it
+    global _DA2_TYPE_EXTS
+    if _DA2_TYPE_EXTS is None:
+        try:
+            from .da2_hashes import DA2_TYPE_EXTS
+        except ImportError:
+            DA2_TYPE_EXTS = {}
+        _DA2_TYPE_EXTS = DA2_TYPE_EXTS
+    return _DA2_TYPE_EXTS.get(getattr(entry, "type_hash", 0), "")
+
+
+def _synthetic_entry_name(entry, reader) -> str:
+    typed = _da2_type_ext(entry)
+    if typed:
+        return f"hash_{entry.name_hash:016x}{typed}"
+    ext = ".bin"
+    try:
+        raw = reader.data[entry.offset : entry.offset + entry.packed_size]
+        plain = reader.decode_payload(raw, entry)
+    except (OSError, ValueError, struct.error, Exception):  # noqa: BLE001
+        plain = b""
+    if plain[:4] == b"DDS ":
+        ext = ".dds"
+    elif len(plain) >= 8 and plain[3:4] == b" ":
+        kind = plain[:4].split(b" ")[0].strip()
+        if kind == b"GFF" and len(plain) >= 16:
+            ft = plain[12:16]
+            ext = {
+                b"MESH": ".msh",
+                b"MMH ": ".mmh",
+                b"MAO ": ".mao",
+                b"PHY ": ".phy",
+                b"ANI ": ".ani",
+                b"ANBT": ".anb",
+                b"EVT ": ".evt",
+                b"GAD ": ".gad",
+                b"LINE": ".cl",
+                b"MOR ": ".mor",
+                b"RML ": ".rml",
+                b"CUB ": ".cub",
+                b"TNT ": ".tnt",
+            }.get(ft, ".gff")
+        elif kind and kind.isalnum():
+            ext = "." + kind.decode("ascii").lower()
+    return f"hash_{entry.name_hash:016x}{ext}"
+
+
+def _archive_rows(path, prio):
+    # only the contents, not the archive itself
+    with _mapped(path) as data:
+        # guard against a garbage entry count before allocating
+        if data[:16] == MAGIC_V3:
+            string_table_size = struct.unpack("<I", data[16:20])[0]
+            count = struct.unpack("<I", data[20:24])[0]
+            header = 48 + string_table_size
+            row = 28
+        else:
+            header, row = geometry(data[:16])
+            count = struct.unpack("<I", data[16:20])[0]
+        if header + count * row > len(data):
+            raise ValueError("entry count does not fit in file")
+        reader = ERFReader(data)
+        rows = []
+        for e in reader.entries:
+            name = e.name or _synthetic_entry_name(e, reader)
+            rows.append(
+                (
+                    path.name,
+                    name,
+                    Path(name).suffix.lower(),
+                    str(path),
+                    prio,
+                    _s64(getattr(e, "name_hash", 0)),
+                )
+            )
+        return rows
+
+
+def scan(root, db_path=None, progress=None, game=None):
     roots = [Path(root)] if isinstance(root, (str, Path)) else [Path(r) for r in root]
-    db = _db_path(db_path)
+    db = _db_path(db_path, game)
     db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db)
     con.executescript(SCHEMA)
     cols = {r[1] for r in con.execute("PRAGMA table_info(assets)")}
     if "prio" not in cols:  # a database written before the column existed
         con.execute("ALTER TABLE assets ADD COLUMN prio INTEGER")
+    if "name_hash" not in cols:  # a database written before DA2 hash indexing
+        con.execute("ALTER TABLE assets ADD COLUMN name_hash INTEGER")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_assets_namehash ON assets(name_hash)")
     con.execute("DELETE FROM assets")
 
     files = 0
@@ -114,27 +244,25 @@ def scan(root, db_path=None, progress=None):
         prio = _priority(path, root_i, index)
         if suffix not in SCAN_EXTS:
             con.execute(
-                "INSERT INTO assets VALUES (?,?,?,?,?)",
-                (None, path.name, suffix, str(path), prio),
+                "INSERT INTO assets VALUES (?,?,?,?,?,?)",
+                (None, path.name, suffix, str(path), prio, 0),
             )
         else:
             files += 1
-            # only the contents, not the archive itself
-            rows = []
             try:
-                package = []
-                for e in ERFReader(_entry_table(path)).entries:
-                    package.append(
-                        (path.name, e.name, Path(e.name).suffix.lower(), str(path), prio)
-                    )
+                rows = _archive_rows(path, prio)
             except (OSError, ValueError, struct.error):
                 skipped.append(str(path))
-            else:
-                rows = package
-                entries += len(package)
-            con.executemany("INSERT INTO assets VALUES (?,?,?,?,?)", rows)
+                rows = []
+            entries += len(rows)
+            con.executemany("INSERT INTO assets VALUES (?,?,?,?,?,?)", rows)
         if progress is not None:
             progress(i + 1, total)
+    # DA2 archives store FNV-1 path hashes, not filenames. Name
+    # recovery: walk every MMH entry, read its label 6005 (a real path such as
+    # 'art\\vfx\\models\\vfx_shield_uhm.msh'), map FNV-1(path) -> basename, and
+    # rename the matching mesh (etc.) entries so the asset list shows real names.
+    _recover_names(con, game)
     con.commit()
     con.close()
     return {
@@ -145,16 +273,136 @@ def scan(root, db_path=None, progress=None):
     }
 
 
-def payload(archive, name):
+def _recover_names(con, game=None):
+    # DA2 only, since DAO stores real filenames in its archives
+    if str(game or "").upper() != "DA2":
+        return
+    from ..mmh.description import MMHReader
+
+    by_archive = {}
+    for rowid, filename, ext, path, package, name_hash in con.execute(
+        "SELECT rowid, filename, ext, path, package, name_hash FROM assets "
+        "WHERE ext='.mmh' AND name_hash IS NOT NULL AND name_hash != 0"
+    ):
+        by_archive.setdefault(path, []).append((rowid, filename, name_hash))
+
+    name_map = {}  # mesh name_hash -> real basename
+    # MMH label 6005 paths
+    for path, rows in by_archive.items():
+        try:
+            with _mapped(path) as data:
+                reader = ERFReader(data)
+                # DB rows hold signed hashes, the reader keeps the unsigned value
+                by_hash = {_s64(getattr(e, "name_hash", 0)): e for e in reader.entries}
+                for _rowid, _filename, name_hash in rows:
+                    e = by_hash.get(name_hash)
+                    if e is None:
+                        continue
+                    raw = data[e.offset : e.offset + e.packed_size]
+                    try:
+                        plain = reader.decode_payload(raw, e)
+                    except (OSError, ValueError, KeyError, IndexError, struct.error):
+                        continue
+                    try:
+                        tree = MMHReader(plain).tree
+                    except (OSError, ValueError, KeyError, IndexError, struct.error):
+                        continue
+                    v = tree.values.get(6005)
+                    if not isinstance(v, str) or not v:
+                        continue
+                    leaf = v.replace("\\", "/").rsplit("/", 1)[-1]
+                    if not leaf or "." not in leaf:
+                        continue
+                    # label 6005 is the mesh path, but mmh/phy/mao siblings share
+                    # its stem, so hash each candidate too: the exact hash
+                    # decides, and the ext check below keeps a guess from naming
+                    # the wrong kind of row.
+                    stem = (
+                        v[:-4] if v.lower().endswith(".msh") else v.rsplit(".", 1)[0]
+                    )
+                    for cand in (v, stem + ".mmh", stem + ".phy", stem + ".mao"):
+                        name_map.setdefault(
+                            _s64(fnv1(cand)), cand.replace("\\", "/").rsplit("/", 1)[-1]
+                        )
+        except (OSError, ValueError, struct.error):
+            continue
+
+    # bundled DA2 DLC filename wordlist (magpiedragon) — FNV-1
+    try:
+        from .da2_filenames import DA2_FILENAMES
+    except ImportError:
+        DA2_FILENAMES = ()
+
+    for fn in DA2_FILENAMES:
+        name_map.setdefault(_s64(fnv1(fn.lower())), os.path.basename(fn))
+
+    # names recovered offline from the archives themselves
+    try:
+        from .da2_hashes import DA2_HASH_NAMES
+    except ImportError:
+        DA2_HASH_NAMES = {}
+
+    for h, leaf in DA2_HASH_NAMES.items():
+        name_map.setdefault(h, leaf)
+
+    # only rename rows still synthetic, and do it in one statement: one UPDATE
+    # per wordlist entry made large DA2 scans crawl
+    unresolved = con.execute(
+        "SELECT DISTINCT name_hash FROM assets WHERE filename LIKE 'hash_%' "
+        "AND name_hash IS NOT NULL AND name_hash != 0"
+    ).fetchall()
+    # an exact 64-bit hash match is authoritative: the recovered name also
+    # supplies the real extension, which the payload sniff could not always
+    # derive (a .mor/.tnt/.cnv payload also parses as plain '.gff').
+    hits = []
+    for (h,) in unresolved:
+        leaf = name_map.get(h)
+        if leaf is not None:
+            hits.append((h, leaf, Path(leaf).suffix.lower()))
+    con.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS _recovered"
+        "(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT)"
+    )
+    con.execute("DELETE FROM _recovered")
+    con.executemany("INSERT OR REPLACE INTO _recovered VALUES (?,?,?)", hits)
+    con.execute(
+        "UPDATE assets SET "
+        "filename = (SELECT leaf FROM _recovered WHERE h = name_hash), "
+        "ext = (SELECT ext FROM _recovered WHERE h = name_hash) "
+        "WHERE name_hash IN (SELECT h FROM _recovered) AND filename LIKE 'hash_%'"
+    )
+
+
+def payload(archive, name, name_hash=None):
     archive = Path(archive)
-    reader = ERFReader(_entry_table(archive))
-    entry = next((e for e in reader.entries if e.name == name), None)
-    if entry is None:
-        raise KeyError(f"entry '{name}' not found in '{archive.name}'")
-    # the reader works on the bytes we hand it, so the seek stays here
-    with open(archive, "rb") as f:
-        f.seek(entry.offset)
-        return reader.decode_payload(f.read(entry.packed_size), entry)
+    # mmap: a full read of the biggest DA2 archive peaks at ~870MB, and the
+    # reader only ever slices one entry out of it.
+    with _mapped(archive) as data:
+        reader = ERFReader(data)
+        entry = next((e for e in reader.entries if name and e.name == name), None)
+        wanted = None
+        if entry is None and name_hash is not None:
+            try:
+                # bpy items carry it as 64-bit hex text; db rows as int
+                wanted = _s64(int(name_hash, 16) if isinstance(name_hash, str) else int(name_hash))
+            except ValueError:
+                wanted = None
+        elif entry is None and isinstance(name, str) and name.startswith("hash_"):
+            try:
+                wanted = _s64(int(name.split("_", 1)[1].split(".", 1)[0], 16))
+            except ValueError:
+                wanted = None
+        if wanted is not None:
+            # DA2 V3 entries are named by hash only; the db row carries it.
+            entry = next(
+                (e for e in reader.entries if _s64(getattr(e, "name_hash", 0)) == wanted),
+                None,
+            )
+        if entry is None:
+            raise KeyError(f"entry '{name}' not found in '{archive.name}'")
+        return reader.decode_payload(
+            data[entry.offset : entry.offset + entry.packed_size], entry
+        )
 
 
 def _where(ext=None, name=None, package=None):
@@ -173,8 +421,8 @@ def _where(ext=None, name=None, package=None):
     return where, params
 
 
-def count(ext=None, name=None, package=None, db_path=None) -> int:
-    db = _db_path(db_path)
+def count(ext=None, name=None, package=None, db_path=None, game=None) -> int:
+    db = _db_path(db_path, game)
     if not db.exists():
         return 0
     where, params = _where(_norm_ext(ext), name, package)
@@ -186,8 +434,8 @@ def count(ext=None, name=None, package=None, db_path=None) -> int:
     return int(row[0]) if row else 0
 
 
-def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0):
-    db = _db_path(db_path)
+def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0, game=None):
+    db = _db_path(db_path, game)
     if not db.exists():
         return []
     if limit is not None:
@@ -198,7 +446,7 @@ def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0):
     where, params = _where(_norm_ext(ext), name, package)
 
     # rowid order = scan insertion order, so pages are stable
-    sql = f"SELECT package, filename, ext, path FROM assets{where} ORDER BY rowid"
+    sql = f"SELECT package, filename, ext, path, name_hash FROM assets{where} ORDER BY rowid"
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params = [*params, limit, offset]
@@ -212,12 +460,12 @@ def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0):
     return out
 
 
-def find_exact(name, db_path=None):
+def find_exact(name, db_path=None, game=None):
     # loose files first so we skip extracting, then the latest-loaded package
     # so a player's override beats the stock data it shadows
     if not name:
         return None
-    db = _db_path(db_path)
+    db = _db_path(db_path, game)
     if not db.exists():
         return None
 
@@ -225,11 +473,23 @@ def find_exact(name, db_path=None):
     con.row_factory = sqlite3.Row
     try:
         row = con.execute(
-            "SELECT package, filename, ext, path FROM assets "
+            "SELECT package, filename, ext, path, name_hash FROM assets "
             "WHERE ext = ? AND filename = ? COLLATE NOCASE "
             "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
             (_norm_ext(Path(name).suffix), name),
         ).fetchone()
+        if row is None:
+            # DA2 indexes assets by the FNV-1 hash of the lowercased path, so a
+            # label such as 'art\\vfx\\models\\vfx_shield_uhm.msh' resolves by
+            # hash even though the entry is stored under a synthetic name.
+            # DAO rows all carry hash 0, so this never matches them
+            wanted = _s64(fnv1(str(name).lower()))
+            row = con.execute(
+                "SELECT package, filename, ext, path, name_hash FROM assets "
+                "WHERE name_hash = ? "
+                "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
+                (wanted,),
+            ).fetchone()
     finally:
         con.close()
 
