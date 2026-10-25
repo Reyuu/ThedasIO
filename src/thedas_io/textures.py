@@ -24,7 +24,10 @@ _CACHE_NOTED = False
 
 
 def _existing_tint(
-    stem: str, row: dict | None, db_path=None, local_only: bool = False
+    stem: str,
+    row: dict | None,
+    db_path: str | Path | None = None,
+    local_only: bool = False,
 ) -> dict | None:
     # tint values from stem.tnt next to mao or in db
 
@@ -38,7 +41,13 @@ def _existing_tint(
         return None
 
 
-def _resolve_texture(res, mao_path, row=None, db_path=None, local_only: bool = False):
+def _resolve_texture(
+    res: str,
+    mao_path: Path,
+    row: dict | None = None,
+    db_path: str | Path | None = None,
+    local_only: bool = False,
+) -> Any:
     # one resname to blender image via sibling, db or loaded bytes
 
     source = mao_path.parent / res
@@ -179,7 +188,7 @@ def _move_file(src: Path, dest: Path) -> None:
         src.unlink()
 
 
-def _relocate_cache(scene=None, depsgraph=None) -> None:
+def _relocate_cache(scene: Any = None, depsgraph: Any = None) -> None:
     # move temp cache beside blend once saved
 
     if not bpy.data.filepath:
@@ -250,7 +259,7 @@ def _scale_live_images(model: dict, repacked: dict, failed: list) -> set:
     return skipped
 
 
-def _blit(image, pil, role: str | None) -> None:
+def _blit(image: Any, pil: PilImage.Image, role: str | None) -> None:
     # push decoded dao pixels into image, normals unswizzled
 
     shown = thedas_io_normals_to_rgba(pil) if role == "normal" else pil
@@ -258,7 +267,7 @@ def _blit(image, pil, role: str | None) -> None:
     image.update()
 
 
-def _new_image(name, pil, raw):
+def _new_image(name: str, pil: PilImage.Image, raw: bytes) -> Any:
     # blender image from pillow pixels, stashes source bytes
 
     cached = _cache_dir() / Path(name).name
@@ -291,7 +300,7 @@ def _new_image(name, pil, raw):
     return image
 
 
-def load_image(path):
+def load_image(path: str | Path) -> Any:
     # dds/tga file to blender image, stashes source bytes
 
     raw = Path(path).read_bytes()
@@ -300,7 +309,7 @@ def load_image(path):
     return _new_image(Path(path).name, pil, raw)
 
 
-def _missing_image(res, images):
+def _missing_image(res: str, images: dict) -> Any:
     # magenta stand-in for unresolvable resname, tagged to skip export
 
     sizes = []

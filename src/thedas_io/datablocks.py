@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import bpy
 
 
-def tag(block, kind: str) -> None:
+def tag(block: Any, kind: str) -> None:
     # the sweep below must never free a datablock the user made
     try:
         block["thedas_io"] = kind

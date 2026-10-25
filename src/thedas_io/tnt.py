@@ -37,18 +37,18 @@ for name in NAMES:
         DEFAULTS[name] = (1.0, 1.0, 1.0, 1.0)
 
 
-def alpha_input(name):
+def alpha_input(name: str) -> str | None:
     # no alpha out on SeparateColor so opacities get their own float input
     if name in _OPAQUE:
         return f"{name} A"
     return None
 
 
-def group_name(side):
+def group_name(side: str) -> str:
     return f"DAO Tint {side}"
 
 
-def for_side(side):
+def for_side(side: str) -> tuple[str, ...]:
     out = []
     for name in NAMES:
         if name.startswith(f"{side} "):
@@ -69,7 +69,7 @@ _FIELDS_END = HEADER_SIZE + STRUCT_DEF_SIZE + len(FIELDS) * FIELD_SIZE
 _GAP = b"\xff" * (-_FIELDS_END % 16)
 
 
-def build(values):
+def build(values: dict) -> bytes:
     # missing names fall back to DEFAULTS
     writer = GFFWriter(b"PC  ", b"GFF ", b"V4.0", gap=_GAP)
     writer.struct_defs.append(GFFStructDef(_STRUCT, 0, 0, FIELD_TYPES[12] * len(FIELDS)))
@@ -83,7 +83,7 @@ def build(values):
     return writer.write()
 
 
-def parse(raw):
+def parse(raw: bytes) -> dict:
     if raw[:8] != b"GFF V4.0":
         raise ValueError("not a GFF V4.0 file")
     reader = GFFReader(raw)

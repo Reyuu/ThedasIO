@@ -69,3 +69,12 @@ module = ["bpy.*", "bpy", "mathutils.*", "mathutils"]
 ignore_missing_imports = true
 follow_imports = "skip"
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.datablocks",
+    "thedas_io.fsio",
+    "thedas_io.tnt",
+    "thedas_io.textures",
+]
+disallow_untyped_defs = true

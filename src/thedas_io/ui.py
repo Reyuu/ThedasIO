@@ -2332,7 +2332,8 @@ def _tint_group(side: str):
     for name in ("Tint mask (RGB)", side, *names):
         sock = tree.interface.new_socket(name, in_out="INPUT", socket_type="NodeSocketColor")
         sock.default_value = DEFAULTS.get(name, (0.0, 0.0, 0.0, 1.0))
-    for name in ("Tint mask (A)", *(alpha_input(n) for n in names if alpha_input(n))):
+    alpha_names = [a for n in names if (a := alpha_input(n)) is not None]
+    for name in ("Tint mask (A)", *alpha_names):
         tree.interface.new_socket(name, in_out="INPUT", socket_type="NodeSocketFloat")
     tree.interface.new_socket("Result", in_out="OUTPUT", socket_type="NodeSocketColor")
     nodes = tree.nodes

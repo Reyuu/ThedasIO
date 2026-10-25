@@ -6,6 +6,7 @@ import io
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 # Windows ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION. Antivirus and indexers
 # hold a just-written file briefly; anything else is a real permission problem.
@@ -16,7 +17,9 @@ def _sharing_violation(exc: PermissionError) -> bool:
     return getattr(exc, "winerror", None) in _TRANSIENT_WINERRORS
 
 
-def write_bytes_atomic(path, data: bytes, attempts: int = 3, delay: float = 0.05) -> Path:
+def write_bytes_atomic(
+    path: str | Path, data: bytes, attempts: int = 3, delay: float = 0.05
+) -> Path:
     """Write ``data`` to ``path``; the old file survives anything going wrong."""
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
@@ -43,11 +46,11 @@ def write_bytes_atomic(path, data: bytes, attempts: int = 3, delay: float = 0.05
     return path
 
 
-def write_text_atomic(path, text: str, encoding: str = "utf-8") -> Path:
+def write_text_atomic(path: str | Path, text: str, encoding: str = "utf-8") -> Path:
     return write_bytes_atomic(path, text.encode(encoding))
 
 
-def save_image_atomic(image, path, image_format: str) -> Path:
+def save_image_atomic(image: Any, path: str | Path, image_format: str) -> Path:
     # PIL writes straight to the path, so an encoder that dies partway would
     # leave the user's old PNG destroyed; a buffer keeps it in memory instead
     buf = io.BytesIO()
