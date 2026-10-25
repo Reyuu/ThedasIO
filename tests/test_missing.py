@@ -17,8 +17,8 @@ import fake_bpy
 
 sys.modules["bpy"] = fake_bpy.bpy
 
-from thedas_io import ui
 from thedas_io.export import ITEMS, reset
+from thedas_io.textures import _missing_image
 
 
 def _sized(w, h):
@@ -28,7 +28,7 @@ def _sized(w, h):
 def test_missing_image_is_magenta_tagged_and_sibling_sized():
     reset()
     before = dict(ITEMS)
-    image = ui._missing_image("pf_arm_0d.dds", {"a": _sized(128, 64), "b": _sized(64, 64)})
+    image = _missing_image("pf_arm_0d.dds", {"a": _sized(128, 64), "b": _sized(64, 64)})
     assert image.name == "pf_arm_0d.dds"
     assert list(image.size) == [128, 64]
     assert image.get("thedas_io_missing") == "pf_arm_0d.dds"
@@ -44,7 +44,7 @@ def test_missing_image_is_magenta_tagged_and_sibling_sized():
 
 def test_missing_image_falls_back_64():
     reset()
-    image = ui._missing_image("x_0n.dds", {})
+    image = _missing_image("x_0n.dds", {})
     assert list(image.size) == [64, 64]
     assert image.get("thedas_io_missing") == "x_0n.dds"
 
@@ -52,6 +52,6 @@ def test_missing_image_falls_back_64():
 def test_missing_image_writes_no_cache_file(tmp_path, monkeypatch):
     reset()
     before = sorted(p.name for p in tmp_path.iterdir())
-    ui._missing_image("x_0d.dds", {})
+    _missing_image("x_0d.dds", {})
     assert sorted(p.name for p in tmp_path.iterdir()) == before
     assert Path(tmp_path / "thedas_io_textures").exists() is False

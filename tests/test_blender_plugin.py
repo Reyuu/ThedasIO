@@ -1200,6 +1200,7 @@ def test_stock_tint_survives_a_material_round_trip():
     from types import SimpleNamespace
 
     from thedas_io import tnt
+    from thedas_io.blender_materials import _seed_tint
     from thedas_io.export import _group_tint
 
     raw = (EXT_DIR.parent.parent / "data" / "t1_mub_bk1.tnt").read_bytes()
@@ -1214,7 +1215,7 @@ def test_stock_tint_survives_a_material_round_trip():
             type="GROUP", inputs=inputs, node_tree=SimpleNamespace(name=tnt.group_name(side))
         )
         for name, colour in values.items():
-            ui._seed_tint(group, name, colour)
+            _seed_tint(group, name, colour)
         merged.update(_group_tint(group))
     assert tnt.build(merged) == raw
 

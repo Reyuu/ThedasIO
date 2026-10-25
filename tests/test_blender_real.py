@@ -392,7 +392,7 @@ def test_transparency_follows_the_semantic_not_the_alpha():
         def main():
             import sys
             sys.path.insert(0, "src")
-            import thedas_io.ui as ui
+            from thedas_io.blender_materials import _cutout_semantic, _transparent_semantic
             transparent = [
                 "AlphaArmourSkinTint", "AlphaEmissiveArmourSkinTint",
                 "AlphaEmissiveLerpedTint", "AlphaEmissiveMultiplyTint",
@@ -410,11 +410,11 @@ def test_transparency_follows_the_semantic_not_the_alpha():
                       "LOD1", "LOD2", "LOD3", "Hero", "Face", "Weapon"]
             return {
                 "transparent": sorted(s for s in transparent
-                                      if not ui._transparent_semantic({"semantic": s})),
+                                      if not _transparent_semantic({"semantic": s})),
                 "opaque": sorted(s for s in opaque
-                                 if ui._transparent_semantic({"semantic": s})),
+                                 if _transparent_semantic({"semantic": s})),
                 "cutout": sorted(s for s in transparent
-                                 if not ui._cutout_semantic({"semantic": s})),
+                                 if not _cutout_semantic({"semantic": s})),
             }
         """)
     ) == {
