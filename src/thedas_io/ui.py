@@ -3292,7 +3292,10 @@ def rebuild_registry(scene) -> list:
             return None
 
     meshes_by_name: dict[str, Any] = {}
-    for scene_obj in bpy.context.scene.objects if bpy.context.scene else []:
+    # the scene the registry belongs to, never the active one: rebuild_registry
+    # runs per scene on file load, and an object moved to another scene would
+    # otherwise be missing from its own registry
+    for scene_obj in getattr(scene, "objects", None) or []:
         meshes_by_name[scene_obj.name] = scene_obj
     images_by_name = {img.name: img for img in bpy.data.images}
     mats_by_name = {mat.name: mat for mat in bpy.data.materials}
