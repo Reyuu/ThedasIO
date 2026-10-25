@@ -2144,6 +2144,24 @@ def _repack_textures(scene=None, depsgraph=None) -> None:
         _store_registry(one)
 
 
+def _strip_suffix(name: str) -> str:
+    stem, dot, digits = name.rpartition(".")
+    if dot and len(digits) == 3 and digits.isdigit():
+        return stem
+    return name
+
+
+def _cache_file(image_name: str, folder: Path) -> str | None:
+    # the cache keeps the source name, so a re-imported texture ("name.001")
+    # still has to resolve to "name" or reload/repack silently skip it
+    if image_name and (folder / image_name).is_file():
+        return image_name
+    stem = _strip_suffix(image_name)
+    if stem != image_name and (folder / stem).is_file():
+        return stem
+    return None
+
+
 def _texture_images() -> list:
     # images with editable copy in cache, found via bpy data
 
@@ -2155,8 +2173,9 @@ def _texture_images() -> list:
             name = image.name
         except ReferenceError:
             continue
-        if name and (folder / name).is_file():
-            out.append((image, name))
+        cache = _cache_file(name, folder) if name else None
+        if cache is not None:
+            out.append((image, cache))
     return out
 
 
@@ -2268,9 +2287,14 @@ def _scale_live_images(model: dict, repacked: dict, failed: list) -> set:
     by_name: dict = {}
     for image in images:
         try:
-            by_name[image.name] = image
+            name = image.name
         except ReferenceError:
             continue
+        by_name[name] = image
+        stripped = _strip_suffix(name)
+        if stripped != name:
+            # the newer duplicate ("name.001") is the one the item exports
+            by_name[stripped] = image
 
     textures = model.get("textures") or {}
     skipped: set = set()

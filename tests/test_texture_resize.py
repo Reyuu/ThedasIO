@@ -128,3 +128,44 @@ def test_dxt_reencode_from_formatless_image():
     assert pil.format is None
     out = _encode_texture(_dxt5_raw(), pil, (8, 8), "diffuse")
     assert out[:4] == b"DDS "
+
+
+def test_texture_images_matches_a_uniquified_name(tmp_path, monkeypatch):
+    # re-importing a texture makes Blender rename the new image "t_0d.tga.001"
+    # while the cache keeps the source name; the lookup has to strip the
+    # uniquifier or the live image is silently skipped by reload/repack
+    from thedas_io import ui
+
+    cache = tmp_path / "thedas_io_textures"
+    cache.mkdir()
+    (cache / "t_0d.tga").write_bytes(b"x")
+    exact = _LiveImage("t_0d.tga", np.zeros((8, 8, 4), dtype=np.uint8))
+    live = _LiveImage("t_0d.tga.001", np.zeros((8, 8, 4), dtype=np.uint8))
+    monkeypatch.setattr(ui, "_cache_dir", lambda: cache)
+
+    fake_bpy.bpy.data.images.append(exact)
+    fake_bpy.bpy.data.images.append(live)
+    try:
+        found = ui._texture_images()
+    finally:
+        fake_bpy.bpy.data.images.remove(live)
+        fake_bpy.bpy.data.images.remove(exact)
+    assert found == [(exact, "t_0d.tga"), (live, "t_0d.tga")]
+
+
+def test_scale_live_images_finds_a_uniquified_name():
+    from thedas_io import ui
+
+    rgba = np.full((8, 8, 4), (10, 20, 30, 255), dtype=np.uint8)
+    live = _LiveImage("t_0d.tga.001", rgba)
+    fake_bpy.bpy.data.images.append(live)
+    try:
+        skipped = ui._scale_live_images(
+            {"textures": {"mml_tDiffuse": "t_0d.tga"}},
+            {"mml_tDiffuse": Image.new("RGBA", (16, 16))},
+            [],
+        )
+    finally:
+        fake_bpy.bpy.data.images.remove(live)
+    assert skipped == set()
+    assert live.scaled == [(16, 16)]
