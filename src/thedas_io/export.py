@@ -337,13 +337,29 @@ def _live_polys(obj) -> list | None:
         return None
 
 
+def _objects_by_chunk(entries) -> tuple[dict, dict]:
+    # live object per source chunk
+    by_chunk: dict = {}
+    by_name: dict = {}
+    for entry in entries:
+        obj = entry[0] if isinstance(entry, (tuple, list)) else entry
+        chunk = entry[1] if isinstance(entry, (tuple, list)) and len(entry) > 1 else None
+        if chunk is None:
+            continue
+        by_chunk[id(chunk)] = obj
+        name = getattr(chunk, "name", None)
+        if name:
+            by_name.setdefault(name, obj)
+    return by_chunk, by_name
+
+
 def _check_msh_item(item: dict, mao_by_material: dict) -> list:
     notes: list = []
     name = item.get("file") or "?"
     mesh = item.get("model")
     if mesh is None:
         return notes
-    entries = item.get("objects") or []
+    objects, objects_by_name = _objects_by_chunk(item.get("objects") or [])
     for ci, chunk in enumerate(mesh.chunks):
         try:
             decoded = decode_chunk(mesh, chunk)
@@ -357,10 +373,11 @@ def _check_msh_item(item: dict, mao_by_material: dict) -> list:
         label = f"{name}/{chunk.name or ci}"
         skinned = any(not d.is_terminator and d.usage == _USAGE_WEIGHT for d in chunk.declarators)
         if skinned:
+            weighted = {
+                vertex for members in decoded["groups"].values() for vertex, _ in members
+            }
             bare = [
-                str(v)
-                for v in range(decoded["vert_count"])
-                if not any(v in [m[0] for m in ms] for ms in decoded["groups"].values())
+                str(v) for v in range(decoded["vert_count"]) if v not in weighted
             ]
             if bare:
                 notes.append(
@@ -386,9 +403,9 @@ def _check_msh_item(item: dict, mao_by_material: dict) -> list:
                     f"{lo:.3g}..{hi:.3g} (outside [0, 1]; atlases wrap)"
                 )
 
-        obj = entries[ci][0] if ci < len(entries) else None
-        if isinstance(obj, (tuple, list)):
-            obj = obj[0] if obj else None
+        obj = objects.get(id(chunk))
+        if obj is None and chunk.name:
+            obj = objects_by_name.get(chunk.name)
         if obj is not None:
             notes.extend(_check_live_mesh(obj, label, chunk))
         for mat in _obj_materials(obj) if obj is not None else ():

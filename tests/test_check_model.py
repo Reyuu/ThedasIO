@@ -24,8 +24,8 @@ def _decl(offset, dtype, usage, uidx=0):
     return {8026: 0, 8027: offset, 8028: dtype, 8029: usage, 8030: uidx, 8031: 0}
 
 
-def _mesh(rows, tris, skinned=True):
-    # One-chunk Mesh: rows of (pos xyz, uv, weight or None).
+def _mesh(rows, tris, skinned=True, names=("c",)):
+    # One-row-layout Mesh; `names` gives each chunk its own identity.
     blob, iblob = bytearray(), bytearray()
     decls = [_decl(0, 2, 0), _decl(12, 1, 5)]
     stride = 20
@@ -41,7 +41,6 @@ def _mesh(rows, tris, skinned=True):
     for tri in tris:
         iblob += struct.pack(f"<{len(tri)}H", *tri)
     chunk = {
-        2: "c",
         8000: stride,
         8001: len(rows),
         8002: sum(map(len, tris)),
@@ -50,7 +49,8 @@ def _mesh(rows, tris, skinned=True):
         8009: 0,
         8025: decls,
     }
-    return Mesh({2: "m", 8021: [chunk], 8022: list(blob), 8023: list(iblob)})
+    chunks = [{**chunk, 2: name} for name in names]
+    return Mesh({2: "m", 8021: chunks, 8022: list(blob), 8023: list(iblob)})
 
 
 def _live(mats=(), npolys=1, mods=(), nlayers=1, shapes=None):
@@ -145,6 +145,19 @@ def test_missing_mao_and_texture_flagged():
     _remember_msh(_mesh(TRI, [(0, 1, 2)]))
     _remember_mao({"a": "ghost.dds"})
     assert any("ghost.dds" in n for n in check_model())
+
+
+def test_chunk_pairing_follows_the_chunk_not_its_position():
+    # Two chunks, only the second has a live object. Pairing by list position
+    # would report its problems under the first chunk and miss it entirely.
+    reset()
+    item = _remember_msh(_mesh(TRI, [(0, 1, 2)], names=("A", "B")))
+    obj = _live([SimpleNamespace(name="Ghost")])
+    item["objects"] = [(obj, item["model"].chunks[1])]
+
+    text = "\n".join(check_model())
+    assert "m.msh/B: material 'Ghost' has no MAO" in text
+    assert "m.msh/A:" not in text
 
 
 def test_uv_out_of_range_is_warning_only():
