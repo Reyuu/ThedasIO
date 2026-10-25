@@ -757,6 +757,64 @@ def test_untick_rebuilds_the_rename_table_from_a_timer(monkeypatch):
         ui._PRUNE_PENDING = ui._SYNC_PENDING = ui._SWEEPING = False
 
 
+def test_checked_keys_tells_no_list_from_nothing_ticked():
+    # an empty export list means "everything"; a list whose rows are all
+    # unticked means "nothing", and used to fall through to "everything"
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+
+    no_list = SimpleNamespace(thedas_io_export_items=FakeCollection())
+    assert ui._checked_keys(no_list) is None
+
+    rows = FakeCollection()
+    row = rows.add()
+    row.filename = "a.msh"
+    row.use = False
+    assert ui._checked_keys(SimpleNamespace(thedas_io_export_items=rows)) == set()
+
+
+def test_export_substance_refuses_unchecked_and_missing_folder(tmp_path):
+    from types import SimpleNamespace
+
+    from fake_bpy import FakeCollection
+    from thedas_io.export import ITEMS
+
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    try:
+        ITEMS["a.msh"] = {"file": "a.msh", "kind": "msh", "model": None, "objects": []}
+        rows = FakeCollection()
+        row = rows.add()
+        row.filename = "a.msh"
+        row.use = False
+
+        scene = SimpleNamespace(
+            thedas_io_export_items=rows,
+            thedas_io_sp_dir=str(tmp_path),
+            thedas_io_sp_split_packed=True,
+        )
+        op = ui.THEDAS_IO_OT_export_substance()
+        op.directory = ""
+        assert op.execute(SimpleNamespace(scene=scene)) == {"CANCELLED"}
+        assert any("Nothing checked" in text for _, text in op.reports)
+        assert list(tmp_path.iterdir()) == []
+
+        # Path("") is Path("."), so this used to write into Blender's cwd
+        empty = SimpleNamespace(
+            thedas_io_export_items=rows,
+            thedas_io_sp_dir="",
+            thedas_io_sp_split_packed=True,
+        )
+        op2 = ui.THEDAS_IO_OT_export_substance()
+        op2.directory = ""
+        assert op2.execute(SimpleNamespace(scene=empty)) == {"CANCELLED"}
+        assert any("Pick a Substance folder" in text for _, text in op2.reports)
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+
+
 def test_unticking_hides_the_whole_tree_but_keeps_it():
     # Uncheck hides every object under the root; blend data stays for re-tick.
     from types import SimpleNamespace

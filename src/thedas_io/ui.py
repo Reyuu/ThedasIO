@@ -465,16 +465,16 @@ class THEDAS_IO_OT_export_assets(bpy.types.Operator):
 
 
 def _checked_keys(scene) -> set | None:
-    # checked roots, none means export all
-
+    # checked roots. None means "no object list at all, export everything";
+    # a list that exists but has nothing ticked resolves to an empty set, so a
+    # caller can tell "all" from "none" instead of exporting everything
     try:
         rows = scene.thedas_io_export_items
     except AttributeError:
         return None
-    checked = {r.filename for r in rows if r.use}
-    if not checked:
+    if not rows:
         return None
-    return connected(checked)
+    return connected({r.filename for r in rows if getattr(r, "use", True)})
 
 
 class THEDAS_IO_OT_export_substance(bpy.types.Operator):
@@ -497,14 +497,21 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
             return {"CANCELLED"}
 
         scene = context.scene
-        dest = Path(bpy.path.abspath(self.directory or getattr(scene, "thedas_io_sp_dir", "")))
-        if not str(dest):
+        folder = self.directory or getattr(scene, "thedas_io_sp_dir", "")
+        if not folder:
+            # Path("") is Path("."), so an empty folder used to pass the old
+            # guard and write model.obj into whatever Blender's cwd happened
+            # to be
             self.report({"WARNING"}, "Pick a Substance folder first")
             return {"CANCELLED"}
+        dest = Path(bpy.path.abspath(folder))
 
         scene.thedas_io_sp_dir = str(dest)
         keys = _checked_keys(scene)
         wanted = [k for k in ITEMS if keys is None or k in keys]
+        if keys is not None and not wanted:
+            self.report({"WARNING"}, "Nothing checked to export")
+            return {"CANCELLED"}
         split_packed = bool(getattr(scene, "thedas_io_sp_split_packed", True))
 
         # chunk to mao via live materials, material equals mao name
