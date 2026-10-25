@@ -5,7 +5,7 @@ import math
 import struct
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import bpy
 import numpy as np
@@ -69,11 +69,32 @@ from .materials import (
 from .msh.description import MSHReader, MSHWriter
 from .tnt import NAMES, SIDES, alpha_input, group_name
 
-ITEMS: dict[str, dict] = {}
-_LOADED_ITEMS: list[dict] = []
+Item = TypedDict(
+    "Item",
+    {
+        "file": str,
+        "kind": str,
+        "model": Any,
+        "raw": bytes,
+        "objects": list,
+        "armature": Any,
+        "meshes": list,
+        "hosts": dict,
+        "as": str,
+        "as_tnt": str,
+        "phy_raw": bytes,
+        "phy_name": str,
+        "phy_additions": list,
+        "collision": list,
+    },
+    total=False,
+)
+
+ITEMS: dict[str, Item] = {}
+_LOADED_ITEMS: list[Item] = []
 
 
-def remember(filename, kind, model, raw):
+def remember(filename: str, kind: str, model: Any, raw: bytes) -> Item:
     # fresh import replaces the old one so edits export, not first-read bytes
     item = ITEMS.get(filename)
     if item is None:
@@ -87,14 +108,19 @@ def remember(filename, kind, model, raw):
         _LOADED_ITEMS.append(item)
     elif model is not None:
         if item.get("model") is not model:
-            item.update(kind=kind, model=model, raw=raw, objects=[])
+            item["kind"] = kind
+            item["model"] = model
+            item["raw"] = raw
+            item["objects"] = []
     else:
         # textures carry no model so just clear, newest image wins
-        item.update(kind=kind, raw=raw, objects=[])
+        item["kind"] = kind
+        item["raw"] = raw
+        item["objects"] = []
     return item
 
 
-def reset():
+def reset() -> None:
     ITEMS.clear()
     _LOADED_ITEMS.clear()
 
@@ -108,7 +134,7 @@ def _why(name: str, exc: Exception) -> str:
     return f"{name}: {type(exc).__name__}: {exc}"
 
 
-def export_bytes(item, tint=None, renames=None):
+def export_bytes(item: Item, tint: dict | None = None, renames: dict | None = None) -> bytes:
     # source bytes unless edited, then kind-specific re-encode
     check = _DIRTY.get(item["kind"])
     edited = None
@@ -209,7 +235,7 @@ def export_all(dest, tint=False, tint_name="", only=None):
     return written, errors
 
 
-def _phy_bytes(item: dict) -> "bytes | None":
+def _phy_bytes(item: Item) -> "bytes | None":
     # None means nothing changed, so the caller leaves the file out entirely.
     # edits first (they address shapes by their path in the original file and
     # change no structure), then additions on top of the edited bytes.
@@ -258,7 +284,7 @@ def phy_enabled(context=None) -> bool:
     return False
 
 
-def _tnt_name(item: dict, tint_name: str = "") -> str:
+def _tnt_name(item: Item, tint_name: str = "") -> str:
     name = (tint_name or "").strip().lower()
     if name:
         return name if name.endswith(".tnt") else f"{name}.tnt"
@@ -352,7 +378,7 @@ def _objects_by_chunk(entries) -> tuple[dict, dict]:
     return by_chunk, by_name
 
 
-def _check_msh_item(item: dict, mao_by_material: dict) -> list:
+def _check_msh_item(item: Item, mao_by_material: dict) -> list:
     notes: list = []
     name = item.get("file") or "?"
     mesh = item.get("model")
@@ -466,7 +492,7 @@ def _check_live_mesh(obj, label: str, chunk) -> list:
     return notes
 
 
-def _check_mao_item(item: dict) -> list:
+def _check_mao_item(item: Item) -> list:
     notes: list = []
     name = item.get("file") or "?"
     model = item.get("model")
@@ -479,7 +505,7 @@ def _check_mao_item(item: dict) -> list:
     return notes
 
 
-def _check_texture_item(item: dict) -> list:
+def _check_texture_item(item: Item) -> list:
     notes: list = []
     name = item.get("file") or "?"
     try:
@@ -570,7 +596,7 @@ def _obj_materials(obj) -> list:
     return names
 
 
-def _tint_by_material(item: dict) -> dict:
+def _tint_by_material(item: Item) -> dict:
     # {MAO MaterialObject name: that material's ten tint colours}
     wanted = {group_name(side) for side in SIDES}
     by_material = {}
@@ -626,7 +652,7 @@ def _tint_extra(parsed: dict, tint: dict | None) -> list | None:
 _DIRTY: dict = {}
 
 
-def _mao_bytes(item: dict, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
+def _mao_bytes(item: Item, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
     # re-encode MAO when vectors, texture links or the tint were edited
     parsed = item.get("model")
     if not isinstance(parsed, dict):
@@ -737,7 +763,7 @@ def _same_pixels(got: np.ndarray, source) -> bool:
 
 
 def _texture_bytes(
-    item: dict, tint: dict | None = None, renames: dict | None = None
+    item: Item, tint: dict | None = None, renames: dict | None = None
 ) -> bytes | None:
     # re-encode only when Blender pixels differ from the decoded source
     if not item.get("objects"):
@@ -860,7 +886,7 @@ def _resolve_base_chunks(base, planned: list) -> list:
     return out
 
 
-def _msh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
+def _msh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
     # re-encode when Blender geometry diverges from the decoded source
     mesh = item["model"]
     live_objects = []
@@ -1599,7 +1625,7 @@ def _rebounds(positions, bounds):
 _DIRTY["msh"] = _msh_bytes
 
 
-def _mmh_bytes(item: dict, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
+def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None) -> bytes | None:
     # patch node names/transforms, plus the tint flag, when Blender diverges
     tree, hosts = item["model"], item.get("hosts") or {}
     rows = list(node_paths(tree))
@@ -1715,7 +1741,7 @@ def _field(gff, struct_index: int, label: int):
     return None
 
 
-def _patch_msh_ref(gff, writer, item: dict, renames: dict) -> bool:
+def _patch_msh_ref(gff, writer, item: Item, renames: dict) -> bool:
     # repoint the hierarchy at its renamed .msh; False when nothing to do
     field = _field(gff, 0, 6005)
     if field is None or field.flags != 0 or field.type_id != 14:

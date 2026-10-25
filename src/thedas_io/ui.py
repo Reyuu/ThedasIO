@@ -25,6 +25,7 @@ from .assets import cleanup_session, extract, importer_for, resolve
 from .export import (
     _LOADED_ITEMS,
     ITEMS,
+    Item,
     _tnt_name,
     check_model,
     connected,
@@ -77,7 +78,7 @@ class THEDAS_IO_AssetItem(bpy.types.PropertyGroup):
     name_hash: bpy.props.StringProperty()  # type: ignore
 
 
-def _viewport_objects(item: dict) -> list:
+def _viewport_objects(item: Item) -> list:
     # viewport objects owned by one imported file
     kind = item.get("kind")
     if kind == "msh":
@@ -783,7 +784,7 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _root_alive(item: dict) -> bool:
+def _root_alive(item: Item) -> bool:
     # true while file objects still exist in blend
     arm = item.get("armature")
     if item.get("kind") == "mmh" and arm is not None:
