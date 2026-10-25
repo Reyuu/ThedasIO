@@ -92,7 +92,7 @@ def test_upscaled_live_exports_at_live_size():
 
 
 def test_reload_autoscales_to_file_size(tmp_path, monkeypatch):
-    from thedas_io import ui
+    from thedas_io import textures, ui
 
     rgba = np.full((8, 8, 4), (10, 20, 30, 255), dtype=np.uint8)
     live = _LiveImage("t_0d.tga", rgba)
@@ -100,8 +100,8 @@ def test_reload_autoscales_to_file_size(tmp_path, monkeypatch):
     cache.mkdir()
     Image.new("RGBA", (16, 16), (200, 100, 50, 255)).save(cache / "t_0d.tga", "PNG")
 
-    monkeypatch.setattr(ui, "_cache_dir", lambda: cache)
-    monkeypatch.setattr(ui, "_texture_images", lambda: [(live, "t_0d.tga")])
+    monkeypatch.setattr(textures, "_cache_dir", lambda: cache)
+    monkeypatch.setattr(textures, "_texture_images", lambda: [(live, "t_0d.tga")])
     done, _missing, failed = ui.reload_textures()
     assert done == ["t_0d.tga"]
     assert failed == []
@@ -134,19 +134,19 @@ def test_texture_images_matches_a_uniquified_name(tmp_path, monkeypatch):
     # re-importing a texture makes Blender rename the new image "t_0d.tga.001"
     # while the cache keeps the source name; the lookup has to strip the
     # uniquifier or the live image is silently skipped by reload/repack
-    from thedas_io import ui
+    from thedas_io import textures
 
     cache = tmp_path / "thedas_io_textures"
     cache.mkdir()
     (cache / "t_0d.tga").write_bytes(b"x")
     exact = _LiveImage("t_0d.tga", np.zeros((8, 8, 4), dtype=np.uint8))
     live = _LiveImage("t_0d.tga.001", np.zeros((8, 8, 4), dtype=np.uint8))
-    monkeypatch.setattr(ui, "_cache_dir", lambda: cache)
+    monkeypatch.setattr(textures, "_cache_dir", lambda: cache)
 
     fake_bpy.bpy.data.images.append(exact)
     fake_bpy.bpy.data.images.append(live)
     try:
-        found = ui._texture_images()
+        found = textures._texture_images()
     finally:
         fake_bpy.bpy.data.images.remove(live)
         fake_bpy.bpy.data.images.remove(exact)

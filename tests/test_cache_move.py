@@ -9,7 +9,7 @@ import fake_bpy
 
 sys.modules["bpy"] = fake_bpy.bpy
 
-from thedas_io.ui import _move_file
+from thedas_io.textures import _move_file
 
 
 def test_move_file_copies_when_rename_cannot_cross_drives(tmp_path, monkeypatch):
