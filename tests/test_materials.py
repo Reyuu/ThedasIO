@@ -220,6 +220,39 @@ def test_mao_bytes_texture_swap_reencodes():
     assert out["vectors"] == parse_mao(MAO)["vectors"]
 
 
+def test_mao_bytes_applies_edits_from_every_material():
+    # one MAO backs several mesh materials. A tint run used to return on the
+    # first live material, dropping a swap or vector edit made through a later
+    # one while still writing the tint
+    from thedas_io.export import _mao_bytes
+    from thedas_io.tnt import NAMES
+
+    parsed = parse_mao(MAO)
+    props = {key: list(value) for key, value in parsed["vectors"].items()}
+    edited = {**props, "mml_vHairParameters": [0.5, 60.0, 62.0, 7.32]}
+    item = {
+        "file": "x.mao",
+        "kind": "mao",
+        "model": parsed,
+        "raw": MAO.encode("utf-8"),
+        "objects": [
+            _fake_mat(props, ["uh_har_0t.dds"]),
+            _fake_mat(edited, ["edited_0t.dds"]),
+        ],
+    }
+    tint = {name: (1.0, 0.0, 0.0, 1.0) for name in NAMES}
+
+    out = _mao_bytes(item, tint)
+    assert out is not None
+    again = parse_mao(out.decode("utf-8"))
+    assert again["textures"]["mml_tTintNoise"] == "edited_0t.dds"
+    assert again["vectors"]["mml_vHairParameters"] == [0.5, 60.0, 62.0, 7.32]
+    assert any(
+        tag == "Vector4fArray" and attrs.get("Name") == "mml_vTintMaskColours"
+        for tag, attrs in again["extra"]
+    )
+
+
 def test_mao_bytes_missing_prop_and_dead_mat_are_none():
     assert _mao_item({}) is None
     from thedas_io.export import _mao_bytes

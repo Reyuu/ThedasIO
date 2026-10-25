@@ -671,6 +671,13 @@ def _mao_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     extra = None if binary else _tint_extra(parsed, tint)
     roles = slot_roles(textures)
 
+    # one MAO backs every mesh material that uses it, so gather the edits from
+    # all of them: returning on the first live material dropped a texture swap
+    # or vector tweak made through any later one
+    live_parsed = dict(parsed)
+    changed = extra is not None
+    swaps: dict = {}
+    vectors_done = False
     for mat in item.get("objects") or []:
         try:
             state = _mao_mat_state(mat, vectors)
@@ -679,26 +686,29 @@ def _mao_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
             continue  # material deleted; leave raw bytes
         if state is None:
             continue
-        swaps = {}
+        if state["drift"] and not vectors_done:
+            # first edited material wins; the values live on the shared MAO
+            live_parsed["vectors"] = state["vectors"]
+            vectors_done = True
+            changed = True
         for semantic, res in textures.items():
             role = roles.get(semantic)
             if role is None or role not in live or live[role] == res:
                 continue
-            swaps[semantic] = live[role]
-        if not state["drift"] and not swaps and not extra:
-            continue
-        live_parsed = dict(parsed)
-        live_parsed["vectors"] = state["vectors"]
-        live_parsed["textures"] = {**textures, **swaps}
-        if extra is not None:
-            live_parsed["extra"] = extra
-        if binary:
-            return write_mao_binary(live_parsed, item.get("raw") or b"")
-        return write_mao(live_parsed).encode("utf-8")
+            # two materials disagreeing on one slot cannot both be written;
+            # the first swap wins and the conflict is left to the user
+            swaps.setdefault(semantic, live[role])
 
+    if swaps:
+        live_parsed["textures"] = {**textures, **swaps}
+        changed = True
+    if not changed:
+        return None
     if extra is not None:
-        return write_mao({**parsed, "extra": extra}).encode("utf-8")
-    return None
+        live_parsed["extra"] = extra
+    if binary:
+        return write_mao_binary(live_parsed, item.get("raw") or b"")
+    return write_mao(live_parsed).encode("utf-8")
 
 
 def _mao_mat_state(mat, vectors: dict) -> dict | None:
