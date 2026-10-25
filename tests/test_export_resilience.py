@@ -144,8 +144,8 @@ def test_a_failed_phy_write_does_not_take_the_batch_with_it(only_item, tmp_path,
 
 
 def test_check_model_reports_an_unreadable_chunk_instead_of_raising(only_item):
-    # the vertex blob stops short of the rows 8001 promises, so the row decode
-    # raises struct.error -- the failure mode that used to abort the check
+    # the vertex blob stops short of the rows 8001 promises; decode names the
+    # shortfall and the check reports it instead of aborting the whole model
     chunk = {
         2: "c",
         8000: 12,  # matches the FLOAT3 declarator below
@@ -168,7 +168,8 @@ def test_check_model_reports_an_unreadable_chunk_instead_of_raising(only_item):
     notes = check_model()
 
     assert len(notes) == 1
-    assert notes[0].startswith("a.msh: chunk c unreadable (error:")
+    assert notes[0].startswith("a.msh: chunk c unreadable (ValueError:")
+    assert "vertex blob" in notes[0]
 
 
 def test_check_model_keeps_checking_the_rest_of_the_model(only_item):

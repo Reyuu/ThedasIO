@@ -2,6 +2,8 @@
 
 import struct
 
+import numpy as np
+
 from .msh.description import DECLTYPE
 
 FORMATS = {
@@ -16,6 +18,22 @@ FORMATS = {
     8: "<4B",   # UBYTE4N
     15: "<2e",
     16: "<4e",
+}
+
+# dtype -> (numpy scalar dtype, components). Mirrors FORMATS: a chunk we could
+# decode before still decodes, and an unknown dtype is still refused.
+_NUMPY = {
+    0: ("<f4", 1),
+    1: ("<f4", 2),
+    2: ("<f4", 3),
+    3: ("<f4", 4),
+    4: ("u1", 4),
+    5: ("u1", 4),
+    6: ("<i2", 2),
+    7: ("<i2", 4),
+    8: ("u1", 4),
+    15: ("<f2", 2),
+    16: ("<f2", 4),
 }
 
 USAGE_POSITION = 0
@@ -86,6 +104,76 @@ def _decode_row(dtype, blob, offset):
     return list(struct.unpack_from(fmt, blob, offset)), size
 
 
+def _norm8_rows(rows, start: int = 0) -> list:
+    # UBYTE4N (type 8): 0-255 bytes the engine normalises via
+    # (value - 128) / 127. DA2 uses it for normals/tangents.
+    return [
+        (
+            (int(r[start]) - 128) / 127,
+            (int(r[start + 1]) - 128) / 127,
+            (int(r[start + 2]) - 128) / 127,
+        )
+        for r in rows
+    ]
+
+
+def _pad4(rows, verts: int, fill) -> list:
+    # the common chunk already has four weight/index components per row; only
+    # copy when it has fewer (or an unexpected extra), so 78k rows do not turn
+    # into 156k throwaway lists
+    if rows is not None:
+        n = len(rows[0]) if rows else 0
+        if n == 4:
+            return rows
+        if n > 4:
+            return [row[:4] for row in rows]
+    out = [[fill, fill, fill, fill] for _ in range(verts)]
+    if rows is not None:
+        for v, row in enumerate(rows):
+            out[v][: len(row)] = row
+    return out
+
+
+def _groups(weights, bones, verts: int) -> dict:
+    groups: dict = {}
+    for v in range(verts):
+        vals = weights[v]
+        total = sum(vals)
+        if not total:
+            total = 1.0
+        row_bones = bones[v]
+        for i in range(4):
+            weight = vals[i]
+            if weight > 1e-4:
+                groups.setdefault(row_bones[i], []).append((v, weight / total))
+    return groups
+
+
+def _row_format(chunk, stride: int):
+    parts: list[str] = []
+    slices = []
+    cursor_bytes = 0
+    components = 0
+    decls = sorted((d for d in chunk.declarators if not d.is_terminator), key=lambda d: d.offset)
+    for d in decls:
+        fmt = FORMATS.get(d.dtype)
+        spec = _NUMPY.get(d.dtype)
+        if fmt is None or spec is None:
+            return None
+        size = struct.calcsize(fmt)
+        if d.offset < cursor_bytes or d.offset + size > stride:
+            return None
+        if d.offset > cursor_bytes:
+            parts.append(f"{d.offset - cursor_bytes}x")
+        parts.append(fmt[1:])  # little-endian is declared once, below
+        slices.append((components, d, spec[1]))
+        components += spec[1]
+        cursor_bytes = d.offset + size
+    if cursor_bytes < stride:
+        parts.append(f"{stride - cursor_bytes}x")
+    return "<" + "".join(parts), slices
+
+
 def decode_chunk(mesh, chunk):
     if chunk.cells.get(8003, 0) != 0:
         raise ValueError(f"chunk {chunk.name}: only trilist primitive 0 supported")
@@ -96,6 +184,13 @@ def decode_chunk(mesh, chunk):
     verts = chunk.cells.get(8001, 0)
     v0 = chunk.cells.get(8006, 0)
     blob = bytes(mesh.vertex_data[v0 : v0 + verts * stride])
+    if len(blob) != verts * stride:
+        # a truncated blob used to surface as a struct.error from whichever
+        # row ran off the end; name the shortfall instead
+        raise ValueError(
+            f"chunk {chunk.name}: vertex blob holds {len(blob)}B, "
+            f"{verts} rows need {verts * stride}B"
+        )
 
     ncounts = chunk.cells.get(8002, 0)
     width = chunk_index_width(chunk, mesh)
@@ -108,9 +203,9 @@ def decode_chunk(mesh, chunk):
             f"{verts} verts need {ncounts * width}B at width {width}"
         )
     if width == 4:
-        indices = list(struct.unpack(f"<{ncounts}I", iblob))
+        indices = np.frombuffer(iblob, dtype="<u4").tolist()
     else:
-        indices = list(struct.unpack(f"<{ncounts}H", iblob))
+        indices = np.frombuffer(iblob, dtype="<u2").tolist()
     if len(indices) % 3:
         raise ValueError(f"chunk {chunk.name}: indices not a multiple of 3")
 
@@ -118,71 +213,75 @@ def decode_chunk(mesh, chunk):
     normals = []
     uvs = {}
     tangents = {}
-    w_by_vert = {}
-    b_by_vert = {}
+    weights_rows = None
+    bones_rows = None
 
-    # UBYTE4N (declarator type 8) stores 0-255 bytes that the engine
-    # normalises to [-1, 1] via (value - 128) / 127. DA2 uses it for
-    # normals/tangents; DAO ships none, so nothing existing depends on it.
-    def _norm8(values):
-        return tuple((c - 128) / 127 for c in values[:3])
-
-    for d in chunk.declarators:
-        if d.is_terminator:
-            continue
-        info = DECLTYPE.get(d.dtype, (None, None))
-        size = info[1]
-        if size is None or d.offset + size > stride:
-            raise ValueError(f"chunk {chunk.name}: declarator overruns stride")
-
-        for v in range(verts):
-            values, _ = _decode_row(d.dtype, blob, v * stride + d.offset)
-            if d.dtype == 8 and d.usage in (USAGE_NORMAL, 6, 7):
-                values = _norm8(values)
+    layout = _row_format(chunk, stride)
+    if layout is not None:
+        row_fmt, slices = layout
+        # one C-level unpack per vertex for every declarator at once, instead
+        # of struct.unpack_from per declarator per vertex
+        rows = list(struct.iter_unpack(row_fmt, blob))
+        for start, d, comps in slices:
             if d.usage == USAGE_POSITION:
-                positions.append((values[0], values[1], values[2]))
+                positions = [(r[start], r[start + 1], r[start + 2]) for r in rows]
             elif d.usage == USAGE_NORMAL:
-                normals.append((values[0], values[1], values[2]))
+                normals = (
+                    _norm8_rows(rows, start)
+                    if d.dtype == 8
+                    else [(r[start], r[start + 1], r[start + 2]) for r in rows]
+                )
             elif d.usage == USAGE_TEXCOORD:
-                if d.usage_index not in uvs:
-                    uvs[d.usage_index] = []
-                uvs[d.usage_index].append((values[0], 1.0 - values[1]))
-            elif d.usage == 6 or d.usage == 7:
-                if d.usage not in tangents:
-                    tangents[d.usage] = []
-                tangents[d.usage].append(tuple(values))
+                uvs.setdefault(d.usage_index, []).extend(
+                    [(r[start], 1.0 - r[start + 1]) for r in rows]
+                )
+            elif d.usage in (USAGE_TANGENT, USAGE_BINORMAL):
+                tangents.setdefault(d.usage, []).extend(
+                    _norm8_rows(rows, start)
+                    if d.dtype == 8
+                    else [r[start : start + comps] for r in rows]
+                )
             elif d.usage == USAGE_BLENDWEIGHT:
-                w_by_vert[v] = list(values)
+                weights_rows = [r[start : start + comps] for r in rows]
             elif d.usage == USAGE_BLENDINDICES:
-                bl = []
-                for x in values:
-                    bl.append(int(x))
-                b_by_vert[v] = bl
+                bones_rows = [r[start : start + comps] for r in rows]
+    else:
+        for d in chunk.declarators:
+            if d.is_terminator:
+                continue
+            info = DECLTYPE.get(d.dtype, (None, None))
+            size = info[1]
+            if size is None or d.offset + size > stride:
+                raise ValueError(f"chunk {chunk.name}: declarator overruns stride")
+            spec = _NUMPY.get(d.dtype)
+            if spec is None:
+                raise ValueError(f"no decoder for declarator type {d.dtype}")
+            dtype, comps = spec
+            view = np.ndarray(
+                shape=(verts, comps),
+                dtype=dtype,
+                buffer=blob,
+                offset=d.offset,
+                strides=(stride, np.dtype(dtype).itemsize),
+            )
+            rows = view.tolist()
+            if d.usage == USAGE_POSITION:
+                positions = [(r[0], r[1], r[2]) for r in rows]
+            elif d.usage == USAGE_NORMAL:
+                normals = _norm8_rows(rows) if d.dtype == 8 else [(r[0], r[1], r[2]) for r in rows]
+            elif d.usage == USAGE_TEXCOORD:
+                uvs.setdefault(d.usage_index, []).extend([(r[0], 1.0 - r[1]) for r in rows])
+            elif d.usage in (USAGE_TANGENT, USAGE_BINORMAL):
+                tangents.setdefault(d.usage, []).extend(
+                    _norm8_rows(rows) if d.dtype == 8 else [tuple(r) for r in rows]
+                )
+            elif d.usage == USAGE_BLENDWEIGHT:
+                weights_rows = [r[:4] for r in rows]
+            elif d.usage == USAGE_BLENDINDICES:
+                bones_rows = [r[:4] for r in rows]
 
-    groups = {}
-    for v in range(verts):
-        vals = w_by_vert.get(v)
-        if not vals:
-            vals = [0.0] * 4
-        vals = vals[:4]
-        bones = b_by_vert.get(v)
-        if not bones:
-            bones = [0] * 4
-        bones = bones[:4]
-        total = sum(vals)
-        if not total:
-            total = 1.0
-        for i in range(4):
-            weight = vals[i]
-            bone = bones[i]
-            if weight > 1e-4:
-                if bone not in groups:
-                    groups[bone] = []
-                groups[bone].append((v, weight / total))
-
-    tris = []
-    for i in range(0, len(indices), 3):
-        tris.append((indices[i], indices[i + 1], indices[i + 2]))
+    groups = _groups(_pad4(weights_rows, verts, 0.0), _pad4(bones_rows, verts, 0), verts)
+    tris = list(zip(indices[0::3], indices[1::3], indices[2::3]))
 
     return {
         "positions": positions,

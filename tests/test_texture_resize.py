@@ -169,3 +169,19 @@ def test_scale_live_images_finds_a_uniquified_name():
         fake_bpy.bpy.data.images.remove(live)
     assert skipped == set()
     assert live.scaled == [(16, 16)]
+
+
+def test_one_byte_texture_edit_is_detected():
+    # the chunked 8-bit comparison must not round a real edit away
+    from thedas_io.export import _texture_bytes
+
+    raw = _tga((10, 20, 30, 255))
+    rgba = np.full((8, 8, 4), (10, 20, 30, 255), dtype=np.uint8)
+    rgba[3, 4, 1] = 21
+    item = {
+        "file": "t_0d.tga",
+        "kind": "texture",
+        "raw": raw,
+        "objects": [_LiveImage("t_0d.tga", rgba)],
+    }
+    assert _texture_bytes(item) is not None

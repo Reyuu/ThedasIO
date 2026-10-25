@@ -58,7 +58,6 @@ from .geometry import (
 from .gff40.description import GFFReader, GFFWriter
 from .materials import (
     blender_to_pil,
-    pil_to_blender,
     resize_rgba,
     role_of,
     slot_roles,
@@ -726,6 +725,21 @@ def _tex_image_name(node) -> str | None:
         return None
 
 
+def _same_pixels(got: np.ndarray, source) -> bool:
+    # compare in 8-bit space a chunk at a time. pil_to_blender(source) would
+    # hold a second full float buffer: 268MB more on one 4K texture.
+    pixels = np.asarray(source.convert("RGBA"))
+    flat = np.ascontiguousarray(pixels[::-1]).reshape(-1)
+    if flat.size != got.size:
+        return False
+    step = 1 << 20
+    for start in range(0, flat.size, step):
+        ref = flat[start : start + step].astype(np.float32) / 255.0
+        if not np.allclose(ref, got[start : start + step], atol=0.5 / 255.0):
+            return False
+    return True
+
+
 def _texture_bytes(
     item: dict, tint: dict | None = None, renames: dict | None = None
 ) -> bytes | None:
@@ -742,9 +756,7 @@ def _texture_bytes(
 
     if tuple(pil.size) == (width, height):
         source = thedas_io_normals_to_rgba(pil) if role == "normal" else pil
-        # compare in blender's own orientation so the two cannot drift
-        want = pil_to_blender(source)
-        if want.shape == got.shape and np.allclose(want, got, atol=0.5 / 255.0):
+        if _same_pixels(got, source):
             return None
 
     _warn_size(item["file"], width, height)

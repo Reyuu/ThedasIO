@@ -231,3 +231,75 @@ def test_unmodelled_vertex_channels_are_reported_not_zeroed():
     # a terminator is not a channel and must not be reported
     chunk.declarators.append(SimpleNamespace(usage=99, is_terminator=True))
     assert _unmodelled_usages(chunk) == [4, 10]
+
+
+def _synthetic_chunk(stride, rows, decls, indices=b""):
+    chunk = {
+        2: "c",
+        8000: stride,
+        8001: len(rows) // stride,
+        8002: len(indices) // 2,
+        8003: 0,
+        8004: 0,
+        8006: 0,
+        8009: 0,
+        8025: decls,
+    }
+    return Mesh({2: "m", 8021: [chunk], 8022: list(rows), 8023: list(indices)})
+
+
+def _decl(offset, dtype, usage, uidx=0):
+    return {8026: 0, 8027: offset, 8028: dtype, 8029: usage, 8030: uidx, 8031: 0}
+
+
+def test_decode_chunk_handles_padding_between_declarators():
+    # position at 0, 8 unused bytes, uv at 20, weights at 28, indices at 44:
+    # the combined-format path has to skip the gap, not read it as a channel
+    stride = 48
+    rows = b"".join(
+        struct.pack("<3f", *p)
+        + bytes(8)
+        + struct.pack("<2f", *uv)
+        + struct.pack("<4f", *w)
+        + struct.pack("<4B", bone, 0, 0, 0)
+        for p, uv, w, bone in (
+            ((0.0, 0.0, 0.0), (0.0, 0.0), (1.0, 0.0, 0.0, 0.0), 7),
+            ((1.0, 0.0, 0.0), (1.0, 0.0), (1.0, 0.0, 0.0, 0.0), 7),
+            ((0.0, 1.0, 0.0), (0.0, 1.0), (1.0, 0.0, 0.0, 0.0), 7),
+        )
+    )
+    decls = [
+        _decl(0, 2, 0),
+        _decl(20, 1, 5),
+        _decl(28, 3, 1),
+        _decl(44, 5, 2),
+    ]
+    mesh = _synthetic_chunk(stride, rows, decls, struct.pack("<3H", 0, 1, 2))
+    build = decode_chunk(mesh, mesh.chunks[0])
+
+    assert build["positions"] == [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+    assert build["uvs"][0] == [(0.0, 1.0), (1.0, 1.0), (0.0, 0.0)]
+    assert build["groups"] == {7: [(0, 1.0), (1, 1.0), (2, 1.0)]}
+    assert build["triangles"] == [(0, 1, 2)]
+
+
+def test_decode_chunk_normalises_ubyte4n_normals_and_tangents():
+    stride = 24
+    rows = b"".join(
+        struct.pack("<3f", *p)
+        + bytes([128, 255, 0, 1])  # normal
+        + bytes([64, 192, 255, 1])  # tangent
+        + bytes(4)
+        for p in ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    )
+    decls = [
+        _decl(0, 2, 0),
+        _decl(12, 8, 3),
+        _decl(16, 8, 6),
+        _decl(20, 4, 10),  # fills the row tail; an unhandled channel is ignored
+    ]
+    mesh = _synthetic_chunk(stride, rows, decls)
+    build = decode_chunk(mesh, mesh.chunks[0])
+
+    assert build["normals"][0] == pytest.approx((0.0, 1.0, -128 / 127))
+    assert build["tangents"][6][0] == pytest.approx((-64 / 127, 64 / 127, 1.0))
