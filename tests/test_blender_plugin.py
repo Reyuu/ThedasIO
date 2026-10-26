@@ -11,7 +11,7 @@ import fake_bpy
 sys.modules["bpy"] = fake_bpy.bpy
 
 import thedas_io as ext
-from thedas_io import ui
+from thedas_io import export_registry, ui
 
 EXT_DIR = Path(__file__).resolve().parent.parent / "src" / "thedas_io"
 # blender's own bpy.ops namespaces, not ours: anything else is addon drift
@@ -459,10 +459,10 @@ def test_rename_table_lists_checked_trees_files():
             "d.mmh",
         ]
         scene.thedas_io_rename_items[0].export_name = "x_l2.mmh"
-        ui._sync_rename_items(scene)  # edits survive a re-sync
+        export_registry._sync_rename_items(scene)  # edits survive a re-sync
         assert scene.thedas_io_rename_items[0].export_name == "x_l2.mmh"
         scene.thedas_io_export_items[0].use = False
-        ui._sync_rename_items(scene)  # unchecked tree drops its files
+        export_registry._sync_rename_items(scene)  # unchecked tree drops its files
         assert list(scene.thedas_io_rename_items) == []
     finally:
         ITEMS.clear()
@@ -538,22 +538,22 @@ def test_rename_sync_ignores_a_depsgraph_re_entry():
         )
         ui._sync_export_items(scene)
 
-        real = ui.connected
+        real = export_registry.connected
 
         def reentering(checked):
             fired.append(checked)
-            ui._sync_rename_items(scene)  # the depsgraph handler, mid-sync
+            export_registry._sync_rename_items(scene)  # the depsgraph handler, mid-sync
             return real(checked)
 
-        ui.connected = reentering
+        export_registry.connected = reentering
         try:
-            ui._sync_rename_items(scene)
+            export_registry._sync_rename_items(scene)
         finally:
-            ui.connected = real
+            export_registry.connected = real
 
         assert len(fired) == 1, "the inner sync must not re-enter connected()"
         assert [r.filename for r in scene.thedas_io_rename_items] == ["d.mmh"]
-        assert not ui._SYNCING_RENAMES, "the guard must be released again"
+        assert not export_registry._SYNCING_RENAMES, "the guard must be released again"
     finally:
         ITEMS.clear()
         ITEMS.update(saved)
@@ -709,18 +709,20 @@ def test_depsgraph_prune_is_deferred_to_a_timer(monkeypatch):
 
         ui._on_depsgraph_update(scene)
         assert [r.filename for r in scene.thedas_io_export_items] == ["d.mmh"]
-        assert calls == [ui._prune_timer]
+        assert calls == [export_registry._prune_timer]
 
-        ui._prune_timer()
+        export_registry._prune_timer()
         assert list(scene.thedas_io_export_items) == []
         assert list(scene.thedas_io_rename_items) == []
-        assert not ui._PRUNE_PENDING
+        assert not export_registry._PRUNE_PENDING
     finally:
         ITEMS.clear()
         ITEMS.update(saved)
         if scene in fake_bpy.bpy.data.scenes:
             fake_bpy.bpy.data.scenes.remove(scene)
-        ui._PRUNE_PENDING = ui._SYNC_PENDING = ui._SWEEPING = False
+        export_registry._PRUNE_PENDING = export_registry._SYNC_PENDING = (
+            export_registry._SWEEPING
+        ) = False
 
 
 def test_untick_rebuilds_the_rename_table_from_a_timer(monkeypatch):
@@ -745,18 +747,20 @@ def test_untick_rebuilds_the_rename_table_from_a_timer(monkeypatch):
         fake_bpy.bpy.data.scenes.append(scene)
 
         ui._on_use_toggled(row, SimpleNamespace(scene=scene))
-        assert calls == [ui._sync_rename_timer]
+        assert calls == [export_registry._sync_rename_timer]
         assert list(scene.thedas_io_rename_items) == []
 
-        ui._sync_rename_timer()
+        export_registry._sync_rename_timer()
         assert [r.filename for r in scene.thedas_io_rename_items] == ["d.mmh"]
-        assert not ui._SYNC_PENDING
+        assert not export_registry._SYNC_PENDING
     finally:
         ITEMS.clear()
         ITEMS.update(saved)
         if scene in fake_bpy.bpy.data.scenes:
             fake_bpy.bpy.data.scenes.remove(scene)
-        ui._PRUNE_PENDING = ui._SYNC_PENDING = ui._SWEEPING = False
+        export_registry._PRUNE_PENDING = export_registry._SYNC_PENDING = (
+            export_registry._SWEEPING
+        ) = False
 
 
 def test_checked_keys_tells_no_list_from_nothing_ticked():
