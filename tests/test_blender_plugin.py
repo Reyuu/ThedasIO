@@ -769,15 +769,16 @@ def test_checked_keys_tells_no_list_from_nothing_ticked():
     from types import SimpleNamespace
 
     from fake_bpy import FakeCollection
+    from thedas_io import exporters
 
     no_list = SimpleNamespace(thedas_io_export_items=FakeCollection())
-    assert ui._checked_keys(no_list) is None
+    assert exporters._checked_keys(no_list) is None
 
     rows = FakeCollection()
     row = rows.add()
     row.filename = "a.msh"
     row.use = False
-    assert ui._checked_keys(SimpleNamespace(thedas_io_export_items=rows)) == set()
+    assert exporters._checked_keys(SimpleNamespace(thedas_io_export_items=rows)) == set()
 
 
 def test_export_substance_refuses_unchecked_and_missing_folder(tmp_path):

@@ -154,13 +154,13 @@ def test_texture_images_matches_a_uniquified_name(tmp_path, monkeypatch):
 
 
 def test_scale_live_images_finds_a_uniquified_name():
-    from thedas_io import ui
+    from thedas_io import textures
 
     rgba = np.full((8, 8, 4), (10, 20, 30, 255), dtype=np.uint8)
     live = _LiveImage("t_0d.tga.001", rgba)
     fake_bpy.bpy.data.images.append(live)
     try:
-        skipped = ui._scale_live_images(
+        skipped = textures._scale_live_images(
             {"textures": {"mml_tDiffuse": "t_0d.tga"}},
             {"mml_tDiffuse": Image.new("RGBA", (16, 16))},
             [],
