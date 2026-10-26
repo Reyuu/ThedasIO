@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import math
 from pathlib import Path
+from typing import Any
 
 import bpy
 
@@ -12,7 +13,7 @@ from ..assets import extract
 from ..fsio import write_bytes_atomic
 
 
-def _play_animation(context, raw: bytes, name: str, fps: float, emit) -> set:
+def _play_animation(context: Any, raw: bytes, name: str, fps: float, emit: Any) -> set:
     from .description import ANIReader
     from .scene import _fcurves, build_action
 
@@ -70,7 +71,7 @@ class THEDAS_IO_OT_load_animation(bpy.types.Operator):
         name="Frames per second",
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         arm = context.active_object
         if arm is None or arm.type != "ARMATURE":
             self.report({"WARNING"}, "Select the armature that should play the animation")
@@ -129,7 +130,7 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
     )
     filepath: bpy.props.StringProperty(default="", subtype="FILE_PATH")  # type: ignore
 
-    def invoke(self, context, event) -> set:
+    def invoke(self, context: Any, event: Any) -> set:
         action = self._action(context)
         if action is None:
             return {"CANCELLED"}
@@ -137,7 +138,7 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
-    def _action(self, context):
+    def _action(self, context: Any) -> Any:
         arm = context.active_object
         if arm is None or arm.type != "ARMATURE" or arm.animation_data is None:
             self.report({"WARNING"}, "Select the armature that plays the animation")
@@ -150,7 +151,7 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
             return None
         return action
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         from .export import export_action
 
         action = self._action(context)

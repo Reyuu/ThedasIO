@@ -85,3 +85,13 @@ module = [
     "thedas_io.materials",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.ani.operators",
+    "thedas_io.builders",
+    "thedas_io.exporters",
+    "thedas_io.importers",
+    "thedas_io.phy.operators",
+]
+disallow_untyped_defs = true

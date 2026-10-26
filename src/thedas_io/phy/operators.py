@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+from typing import Any
 
 import bpy
 
@@ -36,11 +37,11 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
     _db_path = ""
 
     @classmethod
-    def poll(cls, context) -> bool:
+    def poll(cls, context: Any) -> bool:
 
         return phy_enabled(context)
 
-    def _target(self, context):
+    def _target(self, context: Any) -> Any:
         # the model whose .phy gets the new shape: prefer the armature in
         # context, else the one item that was imported
         arm = context.active_object
@@ -63,7 +64,7 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
             bone = active or (arm.data.bones[0] if len(arm.data.bones) else None)
         return arm, bone
 
-    def invoke(self, context, event) -> set:
+    def invoke(self, context: Any, event: Any) -> set:
 
         if not phy_enabled(context):
             self.report(
@@ -110,11 +111,11 @@ class THEDAS_IO_OT_add_collision(bpy.types.Operator):
         )
         return {"FINISHED"}
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         return self.invoke(context, None)
 
 
-def _collision_item(arm):
+def _collision_item(arm: Any) -> Any:
 
     for item in ITEMS.values():
         if item.get("kind") != "mmh" or not item.get("phy_raw"):
@@ -124,7 +125,7 @@ def _collision_item(arm):
     return None
 
 
-def _spawn_added_proxy(context, item, spec) -> str:
+def _spawn_added_proxy(context: Any, item: Any, spec: dict) -> str:
     """give the new shape a proxy straight away, at the bone it was added to"""
     arm = item.get("armature")
     bone = arm.data.bones.get(spec["bone"]) if arm is not None else None
@@ -137,7 +138,16 @@ def _spawn_added_proxy(context, item, spec) -> str:
     return obj.name
 
 
-def _load_collision(context, row, stem, reg, arm_obj, db, local_only, emit) -> list:
+def _load_collision(
+    context: Any,
+    row: dict,
+    stem: str,
+    reg: Any,
+    arm_obj: Any,
+    db: Any,
+    local_only: bool,
+    emit: Any,
+) -> list:
     # a .phy beside the .mmh becomes plain proxy objects on the bones it names,
     # only while experimental PHY support is switched on
 

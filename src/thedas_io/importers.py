@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import bpy
 
@@ -19,7 +20,14 @@ from .msh.description import MSHReader
 from .phy.operators import _load_collision
 
 
-def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = True) -> set:
+def _import_row(
+    context: Any,
+    row: dict,
+    db: Any,
+    local_only: bool,
+    emit: Any,
+    weld: bool = True,
+) -> set:
     # shared msh/mmh import for one row, emit reports to user
     game = getattr(context.scene, "thedas_io_game", "DAO")
     # a blank override must still mean this game's default db, not DAO's
@@ -109,7 +117,13 @@ def _import_row(context, row: dict, db, local_only: bool, emit, weld: bool = Tru
     return {"CANCELLED"}
 
 
-def _mao_for_node(node, stem: str, row: dict, db_path=None, local_only: bool = False):
+def _mao_for_node(
+    node: Any,
+    stem: str,
+    row: dict,
+    db_path: Any = None,
+    local_only: bool = False,
+) -> Any:
     # mao file for one mshh node, tries verbatim then lowered
 
     tried = []
@@ -134,7 +148,7 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
         "or a .ani played on the active armature"
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         scene = context.scene
         try:
             item = scene.thedas_io_assets[scene.thedas_io_index]
@@ -175,7 +189,7 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
         "or a .ani played on the active armature"
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         scene = context.scene
         path = bpy.path.abspath(scene.thedas_io_disk_file or "")
         if not path or not Path(path).is_file():

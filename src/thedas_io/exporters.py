@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 import bpy
 from PIL import Image as PilImage
@@ -25,7 +26,7 @@ from .substance import (
 from .textures import _cache_dir, _scale_live_images, reload_textures
 
 
-def _commit_edit_cages(context) -> str:
+def _commit_edit_cages(context: Any) -> str:
     # leave edit mode so cage edits reach the mesh datablock
     if not context.mode.startswith("EDIT") or context.view_layer.objects.active is None:
         return ""
@@ -44,7 +45,7 @@ class THEDAS_IO_OT_check_model(bpy.types.Operator):
         "modifiers, shape keys and texture sizes."
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         if not ITEMS:
             self.report({"WARNING"}, "Nothing imported yet")
             return {"CANCELLED"}
@@ -80,7 +81,7 @@ class THEDAS_IO_OT_export_assets(bpy.types.Operator):
         description="Export here instead of the Export to folder for this run",
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         if not ITEMS:
             self.report({"WARNING"}, "Nothing imported yet")
             return {"CANCELLED"}
@@ -117,7 +118,7 @@ class THEDAS_IO_OT_export_assets(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _checked_keys(scene) -> set | None:
+def _checked_keys(scene: Any) -> set | None:
     # checked roots. None means "no object list at all, export everything";
     # a list that exists but has nothing ticked resolves to an empty set, so a
     # caller can tell "all" from "none" instead of exporting everything
@@ -144,7 +145,7 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
         description="Export here instead of the Substance folder for this run",
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         if not ITEMS:
             self.report({"WARNING"}, "Nothing imported yet")
             return {"CANCELLED"}
@@ -296,7 +297,7 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
         description="Read Substance output here instead of the Substance folder for this run",
     )
 
-    def execute(self, context) -> set:
+    def execute(self, context: Any) -> set:
         if not ITEMS:
             self.report({"WARNING"}, "Nothing imported yet")
             return {"CANCELLED"}
@@ -312,7 +313,7 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
         keep_size = bool(getattr(scene, "thedas_io_sp_keep_resolution", False))
         folder = _cache_dir()
 
-        def read_png(png):
+        def read_png(png: Any) -> Any:
             with PilImage.open(png) as im:
                 im.load()
                 return im.copy()

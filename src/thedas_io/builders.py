@@ -24,12 +24,12 @@ from .geometry import (
 _LEAF_BONE_LEN = 0.02
 
 
-def build_hierarchy(context, tree, chunks):
+def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
     # armature from nodes, empties for hooks, skinned chunks on armature
 
     arm_data = bpy.data.armatures.new(tree.name or "skeleton")
     tag(arm_data, "armature")
-    arm_obj = bpy.data.objects.new(arm_data.name, arm_data)
+    arm_obj: Any = bpy.data.objects.new(arm_data.name, arm_data)
     context.collection.objects.link(arm_obj)
     arm_obj.select_set(True)
     context.view_layer.objects.active = arm_obj
@@ -45,7 +45,7 @@ def build_hierarchy(context, tree, chunks):
         paths = {id(n): path for n, path in node_paths(tree)}
         lengths = _bone_lengths(rows)
 
-        def host_of(node, want_bone=False):
+        def host_of(node: Any, want_bone: bool = False) -> Any:
             ancestor = parents[id(node)]
             while ancestor is not None and id(ancestor) not in hosts:
                 ancestor = parents[id(ancestor)]
@@ -102,8 +102,8 @@ def build_hierarchy(context, tree, chunks):
     for node, _, _, _ in rows:
         if node.kind != "node":
             continue
-        bone = arm_obj.data.bones.get(node.name)
-        if bone is None:
+        recipe_bone = arm_obj.data.bones.get(node.name)
+        if recipe_bone is None:
             continue
         exports = [
             str(c.values.get(6052))
@@ -111,14 +111,14 @@ def build_hierarchy(context, tree, chunks):
             if c.kind == "xprt" and c.values.get(6052)
         ]
         if exports:
-            bone["thedas_io_xprt"] = ",".join(exports)
+            recipe_bone["thedas_io_xprt"] = ",".join(exports)
         # the node's own parent-relative transform: the animation value at rest,
         # so the anim importer can subtract it (pose = rest^-1 * channel)
         bn_pos, bn_rot = node_local(node.values)
         if bn_rot:
-            bone["thedas_io_node_rot"] = tuple(float(v) for v in bn_rot)
+            recipe_bone["thedas_io_node_rot"] = tuple(float(v) for v in bn_rot)
         if bn_pos:
-            bone["thedas_io_node_pos"] = tuple(float(v) for v in bn_pos)
+            recipe_bone["thedas_io_node_pos"] = tuple(float(v) for v in bn_pos)
 
     # bone names stable in object mode, attach hooks then snapshot rest
 
@@ -163,7 +163,7 @@ def build_hierarchy(context, tree, chunks):
     return stats
 
 
-def _edit_bone_name(host):
+def _edit_bone_name(host: Any) -> str | None:
     # bone name while editbone ref still valid
     if host is None or host[0] != "bone":
         return None
@@ -173,7 +173,9 @@ def _edit_bone_name(host):
         return None
 
 
-def _attach_object(obj, arm_obj, bone_name=None, host_obj=None):
+def _attach_object(
+    obj: Any, arm_obj: Any, bone_name: str | None = None, host_obj: Any = None
+) -> None:
     # parent rigid hook to host empty, bone, else armature
     if host_obj is not None:
         try:
@@ -189,7 +191,7 @@ def _attach_object(obj, arm_obj, bone_name=None, host_obj=None):
         obj.parent = arm_obj
 
 
-def _bone_lengths(rows) -> dict:
+def _bone_lengths(rows: list) -> dict:
     heads = {id(n): loc for n, _, loc, _ in rows}
     out: dict = {}
     for node, _, loc, _ in rows:
@@ -202,7 +204,7 @@ def _bone_lengths(rows) -> dict:
     return out
 
 
-def _bind_skin(chunk, names, arm_obj, node=None):
+def _bind_skin(chunk: Any, names: dict, arm_obj: Any, node: Any = None) -> None:
     # rename bone groups to bone names, tag index map, add modifier
     order = (node.values.get(6255) if node is not None else None) or []
     if not isinstance(order, list):
@@ -225,7 +227,7 @@ def _bind_skin(chunk, names, arm_obj, node=None):
         mod.object = arm_obj
 
 
-def _unit_normal(n) -> tuple:
+def _unit_normal(n: Any) -> tuple:
     x, y, z = (float(c) for c in n)
     length = math.sqrt(x * x + y * y + z * z)
     if not math.isfinite(length) or length < 1e-6:
@@ -233,7 +235,9 @@ def _unit_normal(n) -> tuple:
     return (x / length, y / length, z / length)
 
 
-def build_chunk_object(context, mesh, chunk, raw, source, weld=True):
+def build_chunk_object(
+    context: Any, mesh: Any, chunk: Any, raw: bytes, source: str, weld: bool = True
+) -> Any:
     # one blender object per chunk, registers source msh for export
 
     build = decode_chunk(mesh, chunk)
