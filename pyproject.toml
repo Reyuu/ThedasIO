@@ -104,3 +104,10 @@ module = [
     "thedas_io.panels",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.assets",
+    "thedas_io.ui",
+]
+disallow_untyped_defs = true

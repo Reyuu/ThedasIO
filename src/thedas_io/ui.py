@@ -1,6 +1,7 @@
 # blender ui panels, lists and operators
 
 import sqlite3
+from typing import Any
 
 import bpy
 
@@ -182,7 +183,7 @@ _SCENE_PROPS = (
 )
 
 
-def register():
+def register() -> None:
     global _LOAD_HANDLER, _PRUNE_HANDLER
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
@@ -328,7 +329,7 @@ _LOAD_HANDLER = None
 _PRUNE_HANDLER = None
 
 
-def _autoload_db():
+def _autoload_db() -> None:
     # fill empty asset lists from saved database on file load
     scenes = getattr(getattr(bpy, "data", None), "scenes", None) or []
     for scene in list(scenes):
@@ -345,7 +346,7 @@ def _autoload_db():
             print(f"DAO: asset list refresh failed: {e}")
 
 
-def _on_file_load(_dummy):
+def _on_file_load(_dummy: Any) -> None:
     _autoload_db()
     # import registry is python-side and does not survive save. reset() first:
     # without it the previous file's items keep their source bytes (and dead
@@ -373,7 +374,7 @@ def _on_file_load(_dummy):
             continue
 
 
-def unregister():
+def unregister() -> None:
     global _LOAD_HANDLER, _PRUNE_HANDLER
 
     for prop in _SCENE_PROPS:

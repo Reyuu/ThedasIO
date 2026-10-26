@@ -4,6 +4,7 @@ import atexit
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from .asset_db.scanner import find_exact, payload
 
@@ -11,13 +12,13 @@ IMPORTERS = {"msh": "msh", "mmh": "mmh"}
 _SESSION_DIR = None
 
 
-def importer_for(ext):
+def importer_for(ext: str | None) -> str | None:
     if not ext:
         return None
     return IMPORTERS.get(ext.lower().lstrip("."))
 
 
-def _safe_name(name) -> str:
+def _safe_name(name: Any) -> str:
     # archive entry and package names are archive-controlled. a crafted
     # `..\..\evil.dll` must land as `evil.dll` under the extraction dir, never
     # above it
@@ -27,7 +28,7 @@ def _safe_name(name) -> str:
     return leaf
 
 
-def _extract_dir():
+def _extract_dir() -> Path:
     # one scratch dir per session so extracts don't pile up
     global _SESSION_DIR
     if _SESSION_DIR is None:
@@ -44,7 +45,7 @@ def cleanup_session() -> None:
         shutil.rmtree(directory, ignore_errors=True)
 
 
-def extract(row, dest_dir=None):
+def extract(row: dict, dest_dir: Any = None) -> Path:
     # archive entries go to temp, loose files just pass through
     src = Path(row["path"])
     if not row["package"]:
@@ -62,7 +63,9 @@ def extract(row, dest_dir=None):
     return out
 
 
-def resolve(name, row, db_path=None, local_only=False, game=None):
+def resolve(
+    name: str, row: dict, db_path: Any = None, local_only: bool = False, game: str | None = None
+) -> Path | None:
     # same dir first, then db, unless local_only
     if not name:
         return None
