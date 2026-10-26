@@ -11,6 +11,7 @@ import math
 import struct
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from ..gff40.description import FIELD_TYPES, FLAGS, GFFReader
 from ..gff40.labels import DATA as LABELS
@@ -79,7 +80,7 @@ def _field_ratio(code: int, bits: int) -> float:
     return (code - centre) / (SQRT2 * (centre - 1))
 
 
-def _read_fields(word: int, bits) -> list:
+def _read_fields(word: int, bits: Any) -> list:
     # mirror of _write_fields: walk up from the index bits, filling in reverse
     fields = [0] * len(bits)
     shift = INDEX_BITS
@@ -89,7 +90,7 @@ def _read_fields(word: int, bits) -> list:
     return fields
 
 
-def _write_fields(fields, bits, index: int) -> int:
+def _write_fields(fields: list, bits: Any, index: int) -> int:
     word = 0
     for value, width in zip(fields, bits):
         word = (word << width) | value
@@ -108,7 +109,7 @@ def decode_quat64(word: int) -> tuple:
     return _rebuild(word & INDEX_MASK, ratios)
 
 
-def decode_key(target: int, raw: dict):
+def decode_key(target: int, raw: dict) -> Any:
     d = raw.get(L_KEY_DATA0)
     if target == ROTATION32 and isinstance(d, int):
         return decode_quat32(d)
@@ -126,7 +127,7 @@ def decode_key(target: int, raw: dict):
 
 
 class AnimNode:
-    def __init__(self, name, target, keys):
+    def __init__(self, name: str, target: Any, keys: list) -> None:
         self.name = name
         self.target = target
         self.keys = keys
@@ -139,12 +140,19 @@ class AnimNode:
             return "position"
         return "scalar"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<AnimNode {self.name!r} {self.kind} keys={len(self.keys)}>"
 
 
 class Animation:
-    def __init__(self, name, length, additive, nodes, skipped=()):
+    def __init__(
+        self,
+        name: str,
+        length: float,
+        additive: Any,
+        nodes: list,
+        skipped: Any = (),
+    ) -> None:
         self.name = name
         self.length = length
         self.additive = additive
@@ -186,7 +194,7 @@ def _decode_node(node: dict, length: float) -> AnimNode | None:
 
     if not keys:
         return None
-    return AnimNode(node.get(L_NODE_NAME), target, keys)
+    return AnimNode(str(node.get(L_NODE_NAME) or ""), target, keys)
 
 
 class ANIReader:
@@ -212,7 +220,7 @@ class ANIReader:
         return self.animation.summary()
 
 
-def load(path) -> ANIReader:
+def load(path: Any) -> ANIReader:
     return ANIReader(Path(path).read_bytes())
 
 
@@ -223,7 +231,7 @@ def load(path) -> ANIReader:
 
 # -q is the same rotation, and _rebuild always puts the dropped component
 # back positive, so flip the sign here before it is dropped.
-def _largest_first(q) -> tuple:
+def _largest_first(q: Any) -> tuple:
     comps = [float(c) for c in q]
     idx = max(range(4), key=lambda i: abs(comps[i]))
     if comps[idx] < 0:
@@ -231,13 +239,13 @@ def _largest_first(q) -> tuple:
     return idx, [comps[i] for i in range(4) if i != idx]
 
 
-def encode_quat32(q) -> int:
+def encode_quat32(q: Any) -> int:
     idx, rest = _largest_first(q)
     fields = [_field_code(r, b) for r, b in zip(rest, Q32_BITS)]
     return _write_fields(fields, Q32_BITS, idx)
 
 
-def encode_quat64(q) -> int:
+def encode_quat64(q: Any) -> int:
     idx, rest = _largest_first(q)
     fields = [_field_code(r, b) for r, b in zip(rest, Q64_BITS)]
     return _write_fields(fields, Q64_BITS, idx)
@@ -247,7 +255,14 @@ def encode_quat64(q) -> int:
 # rows are ksize bytes apart, time_rel/data_rel are field offsets inside a
 # key struct (the data ones paired with their type ids).
 class _KeyLayout:
-    def __init__(self, ref_cell, first, ksize, time_rel, data_rel):
+    def __init__(
+        self,
+        ref_cell: int,
+        first: int,
+        ksize: int,
+        time_rel: Any,
+        data_rel: Any,
+    ) -> None:
         self.ref_cell = ref_cell
         self.first = first
         self.ksize = ksize
@@ -257,10 +272,10 @@ class _KeyLayout:
 
 def _locate_keys(reader: GFFReader) -> list:
     # where each root node's key list lives, in file order, None where it has none
-    def field(struct_def, label):
+    def field(struct_def: Any, label: int) -> Any:
         return next((f for f in struct_def.field_instances if f.label_id == label), None)
 
-    def u32(block, offset):
+    def u32(block: int, offset: int) -> int:
         at = reader.data_offset + block + offset
         if at + 4 > len(reader.data):
             raise ValueError(f"key list reads past end of file at {at}")
@@ -315,7 +330,7 @@ def _locate_keys(reader: GFFReader) -> list:
     return out
 
 
-def _put(buf: bytearray, at: int, type_id: int, value) -> None:
+def _put(buf: bytearray, at: int, type_id: int, value: Any) -> None:
     size = FIELD_TYPES[type_id]
     if isinstance(value, float):
         struct.pack_into(_float_fmt(type_id), buf, at, value)
@@ -323,7 +338,7 @@ def _put(buf: bytearray, at: int, type_id: int, value) -> None:
         buf[at : at + size] = int(value).to_bytes(size, "little")
 
 
-def _write_value(buf: bytearray, base: int, layout: _KeyLayout, target: int, value) -> None:
+def _write_value(buf: bytearray, base: int, layout: _KeyLayout, target: int, value: Any) -> None:
     if target in (ROTATION32, ROTATION64):
         if target == ROTATION32:
             word = encode_quat32(value)
@@ -367,7 +382,7 @@ def _float_fmt(type_id: int) -> str:
 # None value keeps that key's bytes; or (times, values) with any other times
 # for a brand-new key list (no Nones allowed), appended to the data block
 # with the node repointed at it.
-def patch_ani(raw: bytes, values, length: float | None = None) -> bytes:
+def patch_ani(raw: bytes, values: Any, length: float | None = None) -> bytes:
     reader = GFFReader(raw)
     root = reader.get_from_data_block(0, 0)
     old_len = float(root.get(L_LENGTH) or 0.0)

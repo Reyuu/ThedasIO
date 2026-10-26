@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
@@ -19,7 +20,7 @@ BONE_NODE_ROT = "thedas_io_node_rot"
 SUFFIXES = ("_rotation", "_translation")
 
 
-def bones_by_export(arm_obj) -> dict:
+def bones_by_export(arm_obj: Any) -> dict:
     out: dict = {}
     for bone in arm_obj.data.bones:
         stamped = bone.get(BONE_EXPORT_KEY) or ""
@@ -36,7 +37,7 @@ def bones_by_export(arm_obj) -> dict:
     return out
 
 
-def _match(by_export: dict, node_name: str):
+def _match(by_export: dict, node_name: str) -> Any:
     if node_name in by_export:
         return by_export[node_name]
     key = node_name.lower()
@@ -45,12 +46,12 @@ def _match(by_export: dict, node_name: str):
     return by_export.get(key)
 
 
-def _quat(q_file) -> Quaternion:
+def _quat(q_file: Any) -> Quaternion:
     x, y, z, w = q_file
     return Quaternion((w, x, y, z)).normalized()
 
 
-def _sample(keys: list, time: float):
+def _sample(keys: list, time: float) -> Any:
     if not keys:
         return None
     if time <= keys[0][0]:
@@ -76,7 +77,7 @@ def _sample(keys: list, time: float):
 # Modern actions keep their curves in channelbags; action.fcurves is gone in
 # 5.x and is a first-slot-only accessor in the 4.4-4.5 window, so walk the bags
 # whenever there are any and only fall back to the flat accessor.
-def _fcurves(action) -> list:
+def _fcurves(action: Any) -> list:
     out: list = []
     for layer in getattr(action, "layers", ()):
         for strip in layer.strips:
@@ -88,7 +89,7 @@ def _fcurves(action) -> list:
 
 
 # A bone's MMH node at rest; unstamped bones fall back to the Blender rest.
-def rest_local(arm_obj, name: str) -> tuple:
+def rest_local(arm_obj: Any, name: str) -> tuple:
     bone = arm_obj.data.bones[name]
     pos = bone.get(BONE_NODE_POS)
     rot = bone.get(BONE_NODE_ROT)
@@ -105,7 +106,7 @@ def rest_local(arm_obj, name: str) -> tuple:
 
 # Evaluated in MMH node space, so no frame conversion anywhere: each bone is
 # driven to the target world transform the animation implies.
-def build_action(anim, arm_obj, fps: float = 30.0) -> bpy.types.Action:
+def build_action(anim: Any, arm_obj: Any, fps: float = 30.0) -> bpy.types.Action:
     # Work out what the clip would drive before touching the armature. A clip
     # whose channel names match nothing used to replace the action the user
     # already had on this armature, which the caller then reports as a failed

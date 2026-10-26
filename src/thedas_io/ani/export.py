@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from typing import Any
 
 from mathutils import Matrix, Vector
 
@@ -24,7 +25,7 @@ TIME_TOL = 1e-3  # frames: keyframes this close count as one
 _BONE = re.compile(r'pose\.bones\["(.+)"\]')
 
 
-def _node_rests(arm) -> dict:
+def _node_rests(arm: Any) -> dict:
     out = {}
 
     for bone in arm.data.bones:
@@ -41,7 +42,7 @@ def _node_rests(arm) -> dict:
     return out
 
 
-def _locals_at(context, arm, rests, frame: float) -> dict:
+def _locals_at(context: Any, arm: Any, rests: dict, frame: float) -> dict:
     whole = math.floor(frame)
     context.scene.frame_set(whole, subframe=frame - whole)
     context.view_layer.update()
@@ -62,7 +63,7 @@ def _locals_at(context, arm, rests, frame: float) -> dict:
 
 
 # Keyframes build_action did not bake came from the user.
-def _hand_keys(action, fps: float) -> dict:
+def _hand_keys(action: Any, fps: float) -> dict:
     if action is None:
         return {}
 
@@ -84,20 +85,20 @@ def _hand_keys(action, fps: float) -> dict:
 
 # q and -q are the same rotation, so match the file's sign to keep q and -q
 # from being written back as a flip.
-def _same_sign(new, old, is_rot: bool):
+def _same_sign(new: Any, old: Any, is_rot: bool) -> Any:
     if is_rot and sum(a * b for a, b in zip(new, old)) < 0:
         return tuple(-c for c in new)
     return new
 
 
-def _differs(new, old, is_rot: bool) -> bool:
+def _differs(new: Any, old: Any, is_rot: bool) -> bool:
     if is_rot:
         dot = abs(sum(a * b for a, b in zip(new, old)))
         return 2 * math.acos(min(1.0, dot)) >= ROT_TOL
     return (Vector(new) - Vector(old)).length >= POS_TOL
 
 
-def export_action(context, arm, raw: bytes, fps: float) -> bytes:
+def export_action(context: Any, arm: Any, raw: bytes, fps: float) -> bytes:
     scene = context.scene
     keep = (scene.frame_current, scene.frame_subframe)
     bone_names = bones_by_export(arm)
@@ -117,7 +118,7 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
             cache[time] = _locals_at(context, arm, node_rests, time * fps)
         return cache[time]
 
-    def value_at(node, time: float, bone: str):
+    def value_at(node: Any, time: float, bone: str) -> Any:
         rest_pos, rest_rot = rest_local(arm, bone)
         local = locals_for(time)[bone]
         if node.target == TRANSLATION:
@@ -126,7 +127,7 @@ def export_action(context, arm, raw: bytes, fps: float) -> bytes:
         quat = local.to_quaternion()
         return (quat.x, quat.y, quat.z, quat.w)
 
-    def values(node):
+    def values(node: Any) -> Any:
         own_times = [time for time, _ in node.keys]
 
         # vfx channels are not bone-driven, so nothing here can edit them; a
