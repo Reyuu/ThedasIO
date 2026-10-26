@@ -63,7 +63,7 @@ def _root_alive(item: Item) -> bool:
     return False
 
 
-def _prune_export_items(scene) -> bool:
+def _prune_export_items(scene: Any) -> bool:
     # drop rows with deleted objects, never call from draw
 
     try:
@@ -96,7 +96,7 @@ def _show_materials() -> None:
                     space.shading.type = "MATERIAL"  # type: ignore
 
 
-def _sync_export_items(scene) -> None:
+def _sync_export_items(scene: Any) -> None:
     # object list mirrors hierarchy roots, never call from draw
 
     try:
@@ -119,7 +119,7 @@ def _sync_export_items(scene) -> None:
     _sync_rename_items(scene)
 
 
-def _sync_rename_items(scene) -> None:
+def _sync_rename_items(scene: Any) -> None:
     # rename table lists exported files of checked roots
 
     # rebuilding the collection mutates data the UI list is bound to, so it must
@@ -145,7 +145,7 @@ def _sync_rename_later() -> None:
         _SYNC_PENDING = False
 
 
-def _sync_rename_timer():
+def _sync_rename_timer() -> None:
     # falling off the end returns None, which stops the one-shot timer
     global _SYNC_PENDING
     _SYNC_PENDING = False
@@ -156,7 +156,7 @@ def _sync_rename_timer():
         pass
 
 
-def _fill_rename_items(scene) -> None:
+def _fill_rename_items(scene: Any) -> None:
     try:
         rows = scene.thedas_io_export_items
         renames = scene.thedas_io_rename_items
@@ -188,7 +188,7 @@ def _fill_rename_items(scene) -> None:
             row.export_name = keep[key]
 
 
-def _push_renames(scene) -> None:
+def _push_renames(scene: Any) -> None:
     # export-name edits into items before export
 
     if not getattr(scene, "thedas_io_rename_export", False):
@@ -223,7 +223,7 @@ def _push_renames(scene) -> None:
             mmh["as_tnt"] = new if not new or new.lower().endswith(".tnt") else f"{new}.tnt"
 
 
-def _stale_export_rows(scene) -> bool:
+def _stale_export_rows(scene: Any) -> bool:
     try:
         rows = scene.thedas_io_export_items
     except AttributeError:
@@ -246,7 +246,7 @@ def _prune_later() -> None:
         _PRUNE_PENDING = False
 
 
-def _prune_timer():
+def _prune_timer() -> None:
     # falling off the end returns None, which stops the one-shot timer
     global _PRUNE_PENDING
     _PRUNE_PENDING = False
@@ -274,7 +274,7 @@ def _sweep_later() -> None:
         _SWEEPING = False
 
 
-def _sweep_timer():
+def _sweep_timer() -> None:
     # falling off the end returns None, which stops the one-shot timer
     global _SWEEPING
     _SWEEPING = False
@@ -284,7 +284,7 @@ def _sweep_timer():
         pass
 
 
-def _on_depsgraph_update(scene, depsgraph=None) -> None:
+def _on_depsgraph_update(scene: Any, depsgraph: Any = None) -> None:
     # keep the object list honest on viewport deletes. nothing is removed here:
     # mutating scene data inside a depsgraph handler is the crash class this
     # function used to hit, so a stale row only schedules the prune timer
@@ -324,21 +324,21 @@ def registry_blob() -> str:
     return json.dumps(out)
 
 
-def _safe_name(obj) -> str:
+def _safe_name(obj: Any) -> str:
     try:
         return obj.name if obj is not None else ""
     except (AttributeError, ReferenceError):
         return ""
 
 
-def _store_registry(scene) -> None:
+def _store_registry(scene: Any) -> None:
     try:
         scene.thedas_io_registry = registry_blob()
     except (AttributeError, TypeError):
         pass
 
 
-def rebuild_registry(scene) -> list:
+def rebuild_registry(scene: Any) -> list:
     # re-populate import registry after blend is opened
 
     try:
@@ -354,7 +354,7 @@ def rebuild_registry(scene) -> list:
     db = _scene_db(scene)
     notes: list = []
 
-    def fetch(name):
+    def fetch(name: str) -> Any:
         row = {"package": None, "filename": name, "ext": Path(name).suffix, "path": ""}
         try:
             return resolve(name, row, db, False)

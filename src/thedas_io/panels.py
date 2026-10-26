@@ -1,6 +1,6 @@
 """Panels, lists, property groups and add-on preferences for the sidebar."""
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import bpy
 
@@ -27,7 +27,7 @@ def _set_tree_visible(root_key: str, show: bool) -> None:
                 continue
 
 
-def _on_use_toggled(self, context) -> None:
+def _on_use_toggled(self: Any, context: Any) -> None:
     # object list checkbox, hides tree but keeps it in blend
     _set_tree_visible(self.filename, self.use)
     _sync_rename_later()
@@ -65,8 +65,17 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
     COLUMNS = (0.55, 0.15, 0.30)
 
     def draw_item(
-        self, context, layout, data, item, icon, active_data, active_property, index, flt_flag=None
-    ):
+        self: Any,
+        context: Any,
+        layout: Any,
+        data: Any,
+        item: Any,
+        icon: int | None,
+        active_data: Any,
+        active_property: str | None,
+        index: int | None,
+        flt_flag: int | None = None,
+    ) -> None:
         if item is None:
             return
         if self.layout_type == "GRID":
@@ -83,7 +92,7 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
         split.label(text=item.package or "—")
 
     @classmethod
-    def draw_header(cls, layout):
+    def draw_header(cls: Any, layout: Any) -> None:
         split = layout.split(factor=cls.COLUMNS[0], align=True)
         split.label(text="File")
         split = split.split(factor=cls.COLUMNS[1] / (1.0 - cls.COLUMNS[0]), align=True)
@@ -93,8 +102,17 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
 
 class THEDAS_IO_UL_export(bpy.types.UIList):
     def draw_item(
-        self, context, layout, data, item, icon, active_data, active_property, index, flt_flag=None
-    ):
+        self: Any,
+        context: Any,
+        layout: Any,
+        data: Any,
+        item: Any,
+        icon: int | None,
+        active_data: Any,
+        active_property: str | None,
+        index: int | None,
+        flt_flag: int | None = None,
+    ) -> None:
         if item is None:
             return
         if self.layout_type == "GRID":
@@ -105,7 +123,7 @@ class THEDAS_IO_UL_export(bpy.types.UIList):
         split.label(text=item.filename)
 
     @classmethod
-    def draw_header(cls, layout):
+    def draw_header(cls: Any, layout: Any) -> None:
         split = layout.split(factor=0.12, align=True)
         split.label(text="Show")
         split.label(text="File")
@@ -113,8 +131,17 @@ class THEDAS_IO_UL_export(bpy.types.UIList):
 
 class THEDAS_IO_UL_rename(bpy.types.UIList):
     def draw_item(
-        self, context, layout, data, item, icon, active_data, active_property, index, flt_flag=None
-    ):
+        self: Any,
+        context: Any,
+        layout: Any,
+        data: Any,
+        item: Any,
+        icon: int | None,
+        active_data: Any,
+        active_property: str | None,
+        index: int | None,
+        flt_flag: int | None = None,
+    ) -> None:
         if item is None:
             return
         if self.layout_type == "GRID":
@@ -125,7 +152,7 @@ class THEDAS_IO_UL_rename(bpy.types.UIList):
         split.prop(item, "export_name", text="")
 
     @classmethod
-    def draw_header(cls, layout):
+    def draw_header(cls: Any, layout: Any) -> None:
         split = layout.split(factor=0.5, align=True)
         split.label(text="File")
         split.label(text="Export as")
@@ -138,7 +165,7 @@ class THEDAS_IO_PT_assets(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "ThedasIO"
 
-    def draw(self, context):
+    def draw(self: Any, context: Any) -> None:
         pass
 
 
@@ -151,7 +178,7 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
     bl_parent_id = "THEDAS_IO_PT_assets"
     bl_options: ClassVar[set[str]] = {"DEFAULT_CLOSED"}  # type: ignore
 
-    def draw(self, context):
+    def draw(self: Any, context: Any) -> None:
         scene = context.scene
         if self.layout is None:
             return
@@ -226,7 +253,7 @@ class THEDAS_IO_PT_export(bpy.types.Panel):
     bl_parent_id = "THEDAS_IO_PT_assets"
     bl_options: ClassVar[set[str]] = {"DEFAULT_CLOSED"}  # type: ignore
 
-    def draw(self, context):
+    def draw(self: Any, context: Any) -> None:
         scene = context.scene
         if self.layout is None:
             return
@@ -275,7 +302,7 @@ class THEDAS_IO_PT_substance(bpy.types.Panel):
     bl_parent_id = "THEDAS_IO_PT_assets"
     bl_options: ClassVar[set[str]] = {"DEFAULT_CLOSED"}  # type: ignore
 
-    def draw(self, context):
+    def draw(self: Any, context: Any) -> None:
         scene = context.scene
         if self.layout is None:
             return
@@ -319,7 +346,7 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         "leave off and use search instead",
     )
 
-    def draw(self, context):
+    def draw(self: Any, context: Any) -> None:
         if self.layout is None:
             return
         self.layout.prop(self, "thedas_io_game_dir")

@@ -17,8 +17,14 @@ from .tnt import DEFAULTS, alpha_input, for_side, group_name
 
 
 def apply_materials(
-    mao_path, objs, color=None, row=None, db_path=None, notes=None, local_only: bool = False
-):
+    mao_path: Any,
+    objs: list,
+    color: Any = None,
+    row: dict | None = None,
+    db_path: Any = None,
+    notes: list | None = None,
+    local_only: bool = False,
+) -> Any:
     # parsed mao onto chunk objects, silent when absent
 
     if mao_path is None:
@@ -83,7 +89,7 @@ def apply_materials(
     return mat
 
 
-def _seed_tint(group, name: str, colour) -> None:
+def _seed_tint(group: Any, name: str, colour: Any) -> None:
     # push one tnt value into group, colour plus alpha float
 
     if name not in group.inputs:
@@ -96,7 +102,7 @@ def _seed_tint(group, name: str, colour) -> None:
     alpha.default_value = float(colour[3])
 
 
-def build_material(name, mao, images, color=None, tint=None):
+def build_material(name: str, mao: dict, images: dict, color: Any = None, tint: Any = None) -> Any:
     # specular-bsdf wiring from dao channel packing
     mat: Any = bpy.data.materials.new(name)
     tag(mat, "material")
@@ -131,7 +137,7 @@ _POS_GROUP = {"Diffuse": (769.6, 333.7), "Specular": (769.6, 733.7)}
 _POS_MIX6335 = (975.0, -160.0)
 
 
-def _wire_material(mat, mao, images, color=None, tint=None):
+def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: Any = None) -> None:
     by_role: dict = {}
     packed: dict = {}
     roles = slot_roles(mao.get("textures"))
@@ -287,7 +293,7 @@ def _wire_material(mat, mao, images, color=None, tint=None):
             node.label = by_semantic.get(id(node.image), "")
 
 
-def _tint_group(side: str):
+def _tint_group(side: str) -> Any:
     # One shared group per side, built once. Creating one per material made
     # Blender uniquify the name ("DAO Tint Diffuse.001") for every material
     # after the first, and the exporter finds the group by exact name, so those
@@ -367,7 +373,7 @@ def _tint_group(side: str):
     return tree
 
 
-def _image_node(mat, image, vector=None, pos=None):
+def _image_node(mat: Any, image: Any, vector: Any = None, pos: Any = None) -> Any:
     tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
     tex.image = image
     tex.width = 240.0
@@ -378,7 +384,7 @@ def _image_node(mat, image, vector=None, pos=None):
     return tex
 
 
-def _to_transparency(mat, bsdf, alpha_out, cutout: bool = False):
+def _to_transparency(mat: Any, bsdf: Any, alpha_out: Any, cutout: bool = False) -> Any:
     # dao alpha into transparency socket, cutout clips rather than blends
     links = mat.node_tree.links
     invert = mat.node_tree.nodes.new("ShaderNodeInvert")
@@ -399,17 +405,17 @@ _TRANSPARENT_SEMANTICS = ("alpha", "punchthrough", "addvpunchthrough")
 _CUTOUT_SEMANTICS = ("punchthrough", "addvpunchthrough")
 
 
-def _transparent_semantic(mao) -> bool:
+def _transparent_semantic(mao: dict) -> bool:
     semantic = (mao.get("semantic") or "").lower()
     return semantic.startswith(_TRANSPARENT_SEMANTICS)
 
 
-def _cutout_semantic(mao) -> bool:
+def _cutout_semantic(mao: dict) -> bool:
     semantic = (mao.get("semantic") or "").lower()
     return semantic.startswith(_CUTOUT_SEMANTICS)
 
 
-def _channel_varies(image, channel: int) -> bool:
+def _channel_varies(image: Any, channel: int) -> bool:
     # true if channel varies, reads via foreach_get into numpy
 
     try:
@@ -428,5 +434,5 @@ def _channel_varies(image, channel: int) -> bool:
     return bool(vals.size) and float(vals.max()) - float(vals.min()) > 1e-3
 
 
-def _has_alpha(image) -> bool:
+def _has_alpha(image: Any) -> bool:
     return _channel_varies(image, 3)

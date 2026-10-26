@@ -6,6 +6,7 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
+from typing import Any
 
 import bpy
 
@@ -17,7 +18,7 @@ ASSET_LIMIT = 1000
 _UNLIMITED_CACHE: tuple | None = None
 
 
-def default_addins_dir(game=None, game_dir=None) -> str:
+def default_addins_dir(game: str | None = None, game_dir: str | None = None) -> str:
     # where the installer drops DLC and mods, next to the game data
     game = (game or "DAO").upper()
     if game == "DA2":
@@ -28,7 +29,7 @@ def default_addins_dir(game=None, game_dir=None) -> str:
     return str(Path(home) / "Documents" / "BioWare" / "Dragon Age" / "AddIns")
 
 
-def _prefs_game_dir(context) -> str:
+def _prefs_game_dir(context: Any) -> str:
     game = "DAO"
     try:
         scene = getattr(context, "scene", None)
@@ -59,13 +60,13 @@ def _prefs_game_dir(context) -> str:
     return ""
 
 
-def _invalidate_asset_limit(_self=None, _context=None) -> None:
+def _invalidate_asset_limit(_self: Any = None, _context: Any = None) -> None:
     # the preference checkbox changed; the next draw recomputes it
     global _UNLIMITED_CACHE
     _UNLIMITED_CACHE = None
 
 
-def _prefs_unlimited(context=None) -> bool:
+def _prefs_unlimited(context: Any = None) -> bool:
     # old uncapped list, opt-in via preferences; default capped. Cached by the
     # preferences object: this runs from every panel draw, and walking the
     # add-on map each redraw was pure overhead
@@ -98,17 +99,17 @@ def _prefs_unlimited(context=None) -> bool:
     return False
 
 
-def _asset_limit(context=None):
+def _asset_limit(context: Any = None) -> int | None:
     return None if _prefs_unlimited(context) else ASSET_LIMIT
 
 
-def _page_count(total: int, limit) -> int:
+def _page_count(total: int, limit: int | None) -> int:
     if limit is None or total <= 0:
         return 1
     return (total + limit - 1) // limit
 
 
-def _asset_message(shown: int, total: int, page: int = 0, limit=None) -> str:
+def _asset_message(shown: int, total: int, page: int = 0, limit: int | None = None) -> str:
     if limit is None or total <= limit:
         return f"{total} assets"
     pages = _page_count(total, limit)
@@ -117,7 +118,7 @@ def _asset_message(shown: int, total: int, page: int = 0, limit=None) -> str:
     return f"{start}-{start + shown - 1}/{total} assets (page {page + 1}/{pages})"
 
 
-def _scene_db(scene):
+def _scene_db(scene: Any) -> Path:
     # blank override means the per-game default; resolving it here keeps every
     # lookup on the same file as the asset list instead of falling back to DAO
     return _db_path(
@@ -127,14 +128,14 @@ def _scene_db(scene):
 
 
 def _fill_assets(
-    scene,
-    db_path=None,
-    ext=None,
-    name=None,
-    package=None,
-    limit="default",
-    offset=0,
-    context=None,
+    scene: Any,
+    db_path: Any = None,
+    ext: Any = None,
+    name: Any = None,
+    package: Any = None,
+    limit: Any = "default",
+    offset: int = 0,
+    context: Any = None,
 ) -> tuple:
     if isinstance(ext, str):
         ext = ext.strip() or None
@@ -183,12 +184,12 @@ def _fill_assets(
     return rows, total
 
 
-def _ext_filter(value) -> str | None:
+def _ext_filter(value: Any) -> str | None:
     # none drops extension filter, find normalises case
     return None if not value or value == "NONE" else value
 
 
-def _refresh_assets_page(context, scene=None, page=0) -> tuple:
+def _refresh_assets_page(context: Any, scene: Any = None, page: int = 0) -> tuple:
     # one place that maps filters + page to a LIMIT/OFFSET slice
     scene = scene if scene is not None else context.scene
     limit = _asset_limit(context)
@@ -222,7 +223,7 @@ def _refresh_assets_page(context, scene=None, page=0) -> tuple:
     return rows, total, page
 
 
-def _scan_async(root, db_path, game=None) -> dict:
+def _scan_async(root: Any, db_path: Any, game: str | None = None) -> dict:
     # scanner scan in worker thread, poll current/total/done
 
     state: dict = {
@@ -234,10 +235,10 @@ def _scan_async(root, db_path, game=None) -> dict:
         "thread": None,
     }
 
-    def work():
+    def work() -> None:
         try:
 
-            def progress(done, total):
+            def progress(done: int, total: int) -> None:
                 state["current"] = done
                 state["total"] = total
 
@@ -273,7 +274,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
     _db_path = ""
     _scene = None
 
-    def _resolve(self, context):
+    def _resolve(self: Any, context: Any) -> tuple:
         # one or two roots: the game folder, plus the AddIns folder if asked
         roots = []
         root = bpy.path.abspath(getattr(self, "directory", "") or _prefs_game_dir(context))
@@ -297,7 +298,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
                 roots.append(addins)
         return roots, ""
 
-    def invoke(self, context, event) -> set:
+    def invoke(self: Any, context: Any, event: Any) -> set:
         # scan in worker thread, progress via modal timer
         if getattr(context.scene, "thedas_io_scan_active", False):
             self.report({"WARNING"}, "A scan is already running")
@@ -328,7 +329,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         wm.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
-    def execute(self, context) -> set:
+    def execute(self: Any, context: Any) -> set:
         # synchronous path for scripts, background mode, tests
         if getattr(context.scene, "thedas_io_scan_active", False):
             self.report({"WARNING"}, "A scan is already running")
@@ -349,7 +350,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         self._state["thread"].join()
         return self._finish(context)
 
-    def modal(self, context, event) -> set:
+    def modal(self: Any, context: Any, event: Any) -> set:
         if event.type == "ESC":
             self._cancel_timer(context)
             if self._scene is not None:
@@ -359,7 +360,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
             return {"PASS_THROUGH"}
         return self._tick(context)
 
-    def _tick(self, context) -> set:
+    def _tick(self: Any, context: Any) -> set:
         # one progress tick, callable without event pump
         state = self._state or {}
         scene = self._scene or context.scene
@@ -375,7 +376,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         self._cancel_timer(context)
         return self._finish(context)
 
-    def _finish(self, context) -> set:
+    def _finish(self: Any, context: Any) -> set:
         scene = self._scene or context.scene
         scene.thedas_io_scan_active = False
         state = self._state or {}
@@ -408,7 +409,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
         )
         return {"FINISHED"}
 
-    def _cancel_timer(self, context):
+    def _cancel_timer(self: Any, context: Any) -> None:
         wm = getattr(context, "window_manager", None)
         if wm is not None and self._timer is not None:
             try:
@@ -417,7 +418,7 @@ class THEDAS_IO_OT_scan_assets(bpy.types.Operator):
                 pass
             self._timer = None
 
-    def cancel(self, context):
+    def cancel(self: Any, context: Any) -> None:
         self._cancel_timer(context)
         if self._scene is not None:
             self._scene.thedas_io_scan_active = False
@@ -431,7 +432,7 @@ class THEDAS_IO_OT_refresh_assets(bpy.types.Operator):
         "asset database without rescanning the archives"
     )
 
-    def execute(self, context) -> set:
+    def execute(self: Any, context: Any) -> set:
         rows, total, page = _refresh_assets_page(context, page=0)
 
         self.report({"INFO"}, _asset_message(len(rows), total, page, _asset_limit(context)))
@@ -444,7 +445,7 @@ class THEDAS_IO_OT_assets_page(bpy.types.Operator):
     bl_description = "Show the previous or next page of the asset list"
     step: bpy.props.IntProperty(default=1)  # type: ignore
 
-    def execute(self, context) -> set:
+    def execute(self: Any, context: Any) -> set:
         scene = context.scene
         if _asset_limit(context) is None:
             self.report({"INFO"}, "All assets already shown")

@@ -95,3 +95,12 @@ module = [
     "thedas_io.phy.operators",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.asset_browser",
+    "thedas_io.blender_materials",
+    "thedas_io.export_registry",
+    "thedas_io.panels",
+]
+disallow_untyped_defs = true
