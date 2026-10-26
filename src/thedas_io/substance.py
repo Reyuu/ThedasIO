@@ -1,6 +1,7 @@
 # dao <-> substance painter bits
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image as PilImage
@@ -29,7 +30,7 @@ SP_MAPS = {
 SP_ALIASES = {"diffuse": MAP_BASECOLOR}
 
 
-def flat_map_target(filename):
+def flat_map_target(filename: str) -> tuple[str, str] | None:
     stem = Path(filename).stem
     mat, sep, tail = stem.rpartition("_")
     if sep and mat:
@@ -44,7 +45,7 @@ def flat_map_target(filename):
     return None
 
 
-def attribute_bare(have, mao_names):
+def attribute_bare(have: dict, mao_names: list) -> tuple[dict, list]:
     bare = have.pop("", None)
     if not bare:
         return have, []
@@ -58,9 +59,9 @@ def attribute_bare(have, mao_names):
         dropped = []
         for p in bare.values():
             dropped.append(p.name)
-        dropped = ", ".join(sorted(dropped))
+        dropped_text = ", ".join(sorted(dropped))
         return have, [
-            f"ambiguous bare maps ({dropped}): several materials imported, use $textureSet_$map names"
+            f"ambiguous bare maps ({dropped_text}): several materials imported, use $textureSet_$map names"
         ]
 
     merged = dict(have)
@@ -72,9 +73,9 @@ def attribute_bare(have, mao_names):
     return merged, []
 
 
-def collect_sp_maps(root):
+def collect_sp_maps(root: Any) -> dict:
     root = Path(root)
-    out = {}
+    out: dict = {}
 
     if root.is_dir():
         for png in sorted(root.glob("*.png")):
@@ -99,7 +100,7 @@ def collect_sp_maps(root):
     return out
 
 
-def obj_text(chunks, mtl_name="model.mtl"):
+def obj_text(chunks: list, mtl_name: str = "model.mtl") -> str:
     lines = ["# exported from dao for substance", f"mtllib {mtl_name}"]
     voff = 1
     voff_uv = 1
@@ -155,7 +156,7 @@ MTL_MAPS = {
 }
 
 
-def mtl_text(materials):
+def mtl_text(materials: list) -> str:
     lines = ["# exported from dao for substance"]
 
     for mat, stems in materials:
@@ -177,13 +178,13 @@ _TRANSPARENT = ("alpha", "punchthrough", "addvpunchthrough")
 _CUTOUT = ("punchthrough", "addvpunchthrough")
 
 
-def unpack_plan(mao, split_packed=True):
+def unpack_plan(mao: dict, split_packed: bool = True) -> dict:
     # slot to sp map, mirrors importer channel rules
     textures = mao.get("textures") or {}
     roles = slot_roles(textures)
     semantic = (mao.get("semantic") or "").lower()
     transparent = semantic.startswith(_TRANSPARENT)
-    plan = {}
+    plan: dict = {}
 
     for slot, res in textures.items():
         if not res:
@@ -220,10 +221,10 @@ def unpack_plan(mao, split_packed=True):
     return plan
 
 
-def unpack_images(mao, images, split_packed=True):
+def unpack_images(mao: dict, images: dict, split_packed: bool = True) -> dict:
     # dao textures to sp maps at source size, alpha goes to sidecar
     plan = unpack_plan(mao, split_packed)
-    out = {}
+    out: dict = {}
     # face-style falls back to diffuse alpha when no spec slot exists
     has_spec = False
     for s in images:
@@ -231,10 +232,10 @@ def unpack_images(mao, images, split_packed=True):
             has_spec = True
             break
 
-    def rgba(img):
+    def rgba(img: Any) -> Any:
         return np.asarray(img.convert("RGBA")).astype(np.uint8)
 
-    def opaque(rgb):
+    def opaque(rgb: Any) -> Any:
         return np.concatenate([rgb, np.full_like(rgb[..., :1], 255)], -1)
 
     for slot, pil in images.items():
@@ -277,14 +278,14 @@ def unpack_images(mao, images, split_packed=True):
     return out
 
 
-def _has_spec_slot(plan, mao):
+def _has_spec_slot(plan: dict, mao: dict) -> bool:
     for s in mao.get("textures") or {}:
         if plan.get(s, (None, None))[0] == MAP_SPECULAR:
             return True
     return False
 
 
-def _source_alpha(sources, slot, size):
+def _source_alpha(sources: dict | None, slot: str, size: Any) -> Any:
     if not sources or slot not in sources:
         return None
 
@@ -294,17 +295,23 @@ def _source_alpha(sources, slot, size):
     return np.asarray(src).astype(np.uint8)[..., 3]
 
 
-def repack_images(mao, sp, split_packed=True, sizes=None, sources=None):
+def repack_images(
+    mao: dict,
+    sp: Any,
+    split_packed: bool = True,
+    sizes: dict | None = None,
+    sources: dict | None = None,
+) -> dict:
     # sp maps back to dao layout, sidecars resampled to slot size
     plan = unpack_plan(mao, split_packed)
-    out = {}
+    out: dict = {}
 
-    def fit(img, size):
+    def fit(img: Any, size: Any) -> Any:
         if img is None or size is None:
             return img
         return resize_rgba(img, tuple(size))
 
-    def gray(img, channel=0):
+    def gray(img: Any, channel: int = 0) -> Any:
         a = np.asarray(img.convert("RGBA")).astype(np.uint8)
         return a[..., channel]
 

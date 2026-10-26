@@ -111,3 +111,10 @@ module = [
     "thedas_io.ui",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.asset_db.scanner",
+    "thedas_io.substance",
+]
+disallow_untyped_defs = true

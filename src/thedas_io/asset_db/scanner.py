@@ -4,6 +4,7 @@ import sqlite3
 import struct
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from ..erf.description import MAGIC_V3, ERFReader, geometry
 
@@ -16,7 +17,7 @@ SCHEMA = (
 
 
 @contextmanager
-def _mapped(path):
+def _mapped(path: Any) -> Any:
     # read_bytes() on the biggest DA2 archive is an 870MB spike; mmap lets the
     # OS page it instead and the reader only slices what it needs.
     with open(path, "rb") as fh:
@@ -44,7 +45,7 @@ def _s64(h: int) -> int:
     return h - (1 << 64) if h >= (1 << 63) else h
 
 
-def _db_path(path=None, game=None):
+def _db_path(path: Any = None, game: str | None = None) -> Path:
     if path is not None:
         return Path(path)
     base = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -54,7 +55,7 @@ def _db_path(path=None, game=None):
     return Path(base) / "BlenderDAOTools" / f"asset_db_{game.lower()}.sqlite"
 
 
-def _connect(db):
+def _connect(db: Any) -> sqlite3.Connection:
     # the scan runs on a worker thread, so a reader must not fail with
     # "database is locked": WAL (set at scan time) lets it use its snapshot
     # while a write is in flight, and the timeout covers a checkpoint
@@ -63,7 +64,7 @@ def _connect(db):
     return con
 
 
-def _entry_table(path):
+def _entry_table(path: Any) -> bytes:
     path = Path(path)
     try:
         st = path.stat()
@@ -87,7 +88,7 @@ _ENTRY_TABLES: dict[tuple[str, int, int], bytes] = {}
 _LEAD = struct.Struct("<16sII")
 
 
-def _read_entry_table(path):
+def _read_entry_table(path: Any) -> bytes:
     # header + entry_count rows, all of which have to fit in the file. the
     # bound comes from the file rather than a guess: a truncated or foreign
     # archive reports a garbage count, and reading count * row bytes would then
@@ -111,7 +112,7 @@ def _read_entry_table(path):
         return f.read(header + count * row)
 
 
-def _norm_ext(ext):
+def _norm_ext(ext: Any) -> str | None:
     if ext is None:
         return None
     ext = str(ext).strip().lower()
@@ -122,7 +123,7 @@ def _norm_ext(ext):
     return f".{ext}"
 
 
-def _priority(path, root, index: int) -> int:
+def _priority(path: Any, root: Any, index: int) -> int:
     # higher wins when two archives hold the same file name. roots come in load
     # order, so a later root (AddIns, which the engine loads after the base
     # game) beats an earlier one; within a root the deeper path wins, and an
@@ -140,7 +141,7 @@ def _priority(path, root, index: int) -> int:
 _DA2_TYPE_EXTS = None
 
 
-def _da2_type_ext(entry) -> str:
+def _da2_type_ext(entry: Any) -> str:
     # ERF V3 (DA2) stores fnv32 of the lowercased extension as the entry's
     # type_hash, so the real extension is known without decompressing it
     global _DA2_TYPE_EXTS
@@ -151,7 +152,7 @@ def _da2_type_ext(entry) -> str:
     return _DA2_TYPE_EXTS.get(getattr(entry, "type_hash", 0), "")
 
 
-def _synthetic_entry_name(entry, reader) -> str:
+def _synthetic_entry_name(entry: Any, reader: Any) -> str:
     typed = _da2_type_ext(entry)
     if typed:
         return f"hash_{entry.name_hash:016x}{typed}"
@@ -187,7 +188,7 @@ def _synthetic_entry_name(entry, reader) -> str:
     return f"hash_{entry.name_hash:016x}{ext}"
 
 
-def _archive_rows(path, prio):
+def _archive_rows(path: Any, prio: int) -> list:
     # only the contents, not the archive itself
     with _mapped(path) as data:
         # guard against a garbage entry count before allocating
@@ -218,7 +219,7 @@ def _archive_rows(path, prio):
         return rows
 
 
-def scan(root, db_path=None, progress=None, game=None):
+def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None = None) -> dict:
     roots = [Path(root)] if isinstance(root, (str, Path)) else [Path(r) for r in root]
     db = _db_path(db_path, game)
     db.parent.mkdir(parents=True, exist_ok=True)
@@ -294,7 +295,7 @@ def scan(root, db_path=None, progress=None, game=None):
     }
 
 
-def _recover_names(con, game=None):
+def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
     # DA2 only, since DAO stores real filenames in its archives. Names come from
     # three places, in this order: the MMH label 6005 (the real mesh path), the
     # bundled wordlist, then names recovered offline. The last two are already
@@ -313,14 +314,14 @@ def _recover_names(con, game=None):
     from ..mmh.description import MMHReader
     from .da2_data import names
 
-    by_archive = {}
+    by_archive: dict = {}
     for rowid, filename, ext, path, package, name_hash in con.execute(
         "SELECT rowid, filename, ext, path, package, name_hash FROM assets "
         "WHERE ext='.mmh' AND name_hash IS NOT NULL AND name_hash != 0"
     ):
         by_archive.setdefault(path, []).append((rowid, filename, name_hash))
 
-    name_map = {}  # mesh name_hash -> real basename
+    name_map: dict = {}  # mesh name_hash -> real basename
     # MMH label 6005 paths
     for path, rows in by_archive.items():
         try:
@@ -368,13 +369,13 @@ def _recover_names(con, game=None):
     # derive (a .mor/.tnt/.cnv payload also parses as plain '.gff').
     hits = []
     for (h,) in unresolved:
-        leaf = name_map.get(h)
-        if leaf is None:
+        hit_leaf: Any = name_map.get(h)
+        if hit_leaf is None:
             if bundled is None:
                 bundled = names()
-            leaf = bundled.get(h)
-        if leaf is not None:
-            hits.append((h, leaf, Path(leaf).suffix.lower()))
+            hit_leaf = bundled.get(h)
+        if hit_leaf is not None:
+            hits.append((h, hit_leaf, Path(hit_leaf).suffix.lower()))
     con.execute(
         "CREATE TEMP TABLE IF NOT EXISTS _recovered(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT)"
     )
@@ -388,7 +389,7 @@ def _recover_names(con, game=None):
     )
 
 
-def payload(archive, name, name_hash=None):
+def payload(archive: Any, name: str, name_hash: Any = None) -> bytes:
     archive = Path(archive)
     # mmap: a full read of the biggest DA2 archive peaks at ~870MB, and the
     # reader only ever slices one entry out of it.
@@ -418,7 +419,7 @@ def payload(archive, name, name_hash=None):
         return reader.decode_payload(data[entry.offset : entry.offset + entry.packed_size], entry)
 
 
-def _where(ext=None, name=None, package=None):
+def _where(ext: Any = None, name: Any = None, package: Any = None) -> tuple:
     clauses = []
     params: list = []
     if ext is not None:
@@ -434,7 +435,13 @@ def _where(ext=None, name=None, package=None):
     return where, params
 
 
-def count(ext=None, name=None, package=None, db_path=None, game=None) -> int:
+def count(
+    ext: Any = None,
+    name: Any = None,
+    package: Any = None,
+    db_path: Any = None,
+    game: str | None = None,
+) -> int:
     db = _db_path(db_path, game)
     if not db.exists():
         return 0
@@ -447,7 +454,15 @@ def count(ext=None, name=None, package=None, db_path=None, game=None) -> int:
     return int(row[0]) if row else 0
 
 
-def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0, game=None):
+def find(
+    ext: Any = None,
+    name: Any = None,
+    package: Any = None,
+    db_path: Any = None,
+    limit: int | None = None,
+    offset: int = 0,
+    game: str | None = None,
+) -> list:
     db = _db_path(db_path, game)
     if not db.exists():
         return []
@@ -473,7 +488,7 @@ def find(ext=None, name=None, package=None, db_path=None, limit=None, offset=0, 
     return out
 
 
-def find_exact(name, db_path=None, game=None):
+def find_exact(name: str, db_path: Any = None, game: str | None = None) -> dict | None:
     # loose files first so we skip extracting, then the latest-loaded package
     # so a player's override beats the stock data it shadows
     if not name:
@@ -511,5 +526,5 @@ def find_exact(name, db_path=None, game=None):
     return None
 
 
-def load(db_path=None):
+def load(db_path: Any = None) -> list:
     return find(db_path=db_path)
