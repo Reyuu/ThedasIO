@@ -140,3 +140,12 @@ module = [
     "thedas_io.msh.description",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.phy.description",
+    "thedas_io.phy.export",
+    "thedas_io.phy.nxs",
+    "thedas_io.phy.scene",
+]
+disallow_untyped_defs = true

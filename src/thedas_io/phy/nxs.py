@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import struct
+from typing import Any
 
 MAGIC = b"NXS"
 SECTION = b"MESH"
@@ -38,7 +39,7 @@ U8_LIMIT = 256
 class NxsMesh:
     __slots__ = ("raw", "tris", "vertices")
 
-    def __init__(self, raw: bytes, vertices, tris):
+    def __init__(self, raw: bytes, vertices: list, tris: list) -> None:
         self.raw = raw
         self.vertices = vertices
         self.tris = tris
@@ -59,12 +60,12 @@ class NxsMesh:
         zs = [v[2] for v in self.vertices]
         return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
 
-    def translated(self, offset) -> NxsMesh:
+    def translated(self, offset: Any) -> NxsMesh:
         dx, dy, dz = offset
         moved = [(x + dx, y + dy, z + dz) for x, y, z in self.vertices]
         return NxsMesh(_write(moved, self.tris, self.raw), moved, self.tris)
 
-    def scaled(self, factor) -> NxsMesh:
+    def scaled(self, factor: float) -> NxsMesh:
         f = float(factor)
         scaled = [(x * f, y * f, z * f) for x, y, z in self.vertices]
         return NxsMesh(_write(scaled, self.tris, self.raw), scaled, self.tris)
@@ -74,15 +75,15 @@ def _index_width(verts: int) -> int:
     return 1 if verts <= U8_LIMIT else 2
 
 
-def _write(vertices, tris, template: bytes) -> bytes:
+def _write(vertices: list, tris: list, template: bytes) -> bytes:
     # Rebuild the stream from arrays, preserving template's header and tail.
     verts = len(vertices)
-    tris = len(tris)
+    tri_count = len(tris)
     width = _index_width(verts)
     start = HEADER_SIZE + 12 * verts
-    idx_bytes = 3 * tris * width
+    idx_bytes = 3 * tri_count * width
     head = bytearray(template[:HEADER_SIZE])
-    struct.pack_into("<II", head, OFF_VERTS, verts, tris)
+    struct.pack_into("<II", head, OFF_VERTS, verts, tri_count)
     positions = struct.pack(f"<{verts * 3}f", *[c for v in vertices for c in v])
     indices = template[start : start + idx_bytes]
     return bytes(head) + positions + indices + template[start + idx_bytes :]

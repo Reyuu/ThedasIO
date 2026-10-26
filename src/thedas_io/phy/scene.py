@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import bpy
 from mathutils import Matrix
@@ -14,7 +15,7 @@ MASK_PREFIX = "thedas_io_phy_mask_"
 SIDES = 12
 
 
-def _capsule(radius, height):
+def _capsule(radius: float | None, height: float | None) -> tuple[list, list]:
     r = float(radius) if radius else 0.05
     h = float(height) if height else 0.0
     cap = 4
@@ -39,7 +40,7 @@ def _capsule(radius, height):
     return verts, faces
 
 
-def _sphere(radius):
+def _sphere(radius: float | None) -> tuple[list, list]:
     r = float(radius) if radius else 0.05
     half = SIDES // 2
     verts, faces = [], []
@@ -57,21 +58,21 @@ def _sphere(radius):
     return verts, faces
 
 
-def _box(radius):
+def _box(radius: float | None) -> tuple[list, list]:
     s = (float(radius) if radius else 0.25) / 2
     verts = [(x, y, z) for x in (-s, s) for y in (-s, s) for z in (-s, s)]
     faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
     return verts, faces
 
 
-def _mesh_from(nxs_mesh) -> bpy.types.Mesh:
+def _mesh_from(nxs_mesh: Any) -> bpy.types.Mesh:
     mesh = bpy.data.meshes.new(f"thedas_io_proxy_mesh_{nxs_mesh.vertex_count}")
     mesh.from_pydata(nxs_mesh.vertices, [], nxs_mesh.tris)
     mesh.update()
     return mesh
 
 
-def _mesh_for(shape) -> bpy.types.Mesh:
+def _mesh_for(shape: Any) -> bpy.types.Mesh:
     kind = shape.kind
     if kind in ("mshs", "mesh") and shape.mesh is not None:
         return _mesh_from(shape.mesh)
@@ -87,7 +88,7 @@ def _mesh_for(shape) -> bpy.types.Mesh:
     return mesh
 
 
-def _box_verts(size) -> list:
+def _box_verts(size: Any) -> list:
     s = size / 2.0
     return [(x, y, z) for x in (-s, s) for y in (-s, s) for z in (-s, s)]
 
@@ -96,7 +97,9 @@ def _box_faces() -> list:
     return [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
 
 
-def _mesh_for_kind(kind: str, radius=None, height=None, size=None) -> bpy.types.Mesh:
+def _mesh_for_kind(
+    kind: str, radius: float | None = None, height: float | None = None, size: Any = None
+) -> bpy.types.Mesh:
     if kind in ("caps", "capsule"):
         verts, faces = _capsule(radius, height)
     elif kind in ("sphs", "sphere"):
@@ -111,7 +114,7 @@ def _mesh_for_kind(kind: str, radius=None, height=None, size=None) -> bpy.types.
     return mesh
 
 
-def _collection(context):
+def _collection(context: Any) -> Any:
     existing = bpy.data.collections.get(COLLECTION)
     if existing is None:
         existing = bpy.data.collections.new(COLLECTION)
@@ -123,13 +126,13 @@ def _collection(context):
     return existing
 
 
-def _bone_parent_inverse(bone) -> Matrix:
+def _bone_parent_inverse(bone: Any) -> Matrix:
     tail = Matrix.Translation((0.0, bone.length, 0.0))
     parent = bone.matrix_local @ tail
     return parent.inverted_safe() @ Matrix.Translation(bone.head_local)
 
 
-def build_proxies(context, reader: PhyReader, bones) -> list:
+def build_proxies(context: Any, reader: PhyReader, bones: Any) -> list:
     if not reader.shapes:
         return []
     collection = _collection(context)
@@ -191,7 +194,7 @@ def default_name(kind: str, bone: str = "") -> str:
     return f"{label}_{bone}" if bone else label
 
 
-def add_proxy_for(context, spec, arm_obj, bone) -> bpy.types.Object:
+def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any) -> bpy.types.Object:
     kind = str(spec.get("kind") or "capsule")
     mesh = _mesh_for_kind(kind, spec.get("radius"), spec.get("height"), spec.get("size"))
     name = str(spec.get("name") or default_name(kind, spec.get("bone") or ""))
@@ -219,7 +222,7 @@ def add_proxy_for(context, spec, arm_obj, bone) -> bpy.types.Object:
     return obj
 
 
-def _path_of(obj) -> tuple:
+def _path_of(obj: Any) -> tuple:
     raw = obj.get("thedas_io_phy_path") or ""
     try:
         return tuple(int(p) for p in str(raw).split(",") if p != "")
@@ -227,7 +230,7 @@ def _path_of(obj) -> tuple:
         return ()
 
 
-def _values(obj) -> dict:
+def _values(obj: Any) -> dict:
     out: dict = {}
     name = obj.get("thedas_io_phy_name")
     if name is not None:
@@ -264,7 +267,7 @@ def _values(obj) -> dict:
     return out
 
 
-def _same(a, b) -> bool:
+def _same(a: Any, b: Any) -> bool:
     if isinstance(a, float) or isinstance(b, float):
         try:
             return abs(float(a) - float(b)) <= 1e-6
@@ -273,17 +276,17 @@ def _same(a, b) -> bool:
     return a == b
 
 
-def proxies_for(item) -> list:
+def proxies_for(item: Any) -> list:
     return list(item.get("collision") or [])
 
 
-def mark_snapshots(objects) -> None:
+def mark_snapshots(objects: list) -> None:
     for obj in objects:
         for key, value in _values(obj).items():
             obj[f"thedas_io_phy_base_{key}"] = value
 
 
-def edits_for(item) -> dict:
+def edits_for(item: Any) -> dict:
     edits: dict = {}
     for obj in proxies_for(item):
         if obj.get("thedas_io_phy_new"):
@@ -301,7 +304,7 @@ def edits_for(item) -> dict:
     return edits
 
 
-def _adopted_spec(obj, arm_obj, bone_name) -> dict:
+def _adopted_spec(obj: Any, arm_obj: Any, bone_name: str) -> dict:
     from mathutils import Vector
 
     bone = arm_obj.data.bones[bone_name]
@@ -321,7 +324,7 @@ def _adopted_spec(obj, arm_obj, bone_name) -> dict:
         "boxs": "box",
     }.get(kind, "box")
 
-    spec = {
+    spec: dict[str, Any] = {
         "bone": bone_name,
         "kind": kind,
         "position": pos,
@@ -349,7 +352,7 @@ def _adopted_spec(obj, arm_obj, bone_name) -> dict:
     return spec
 
 
-def adopted_specs(item) -> list:
+def adopted_specs(item: Any) -> list:
     import bpy
 
     arm = item.get("armature")

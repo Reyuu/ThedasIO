@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+from typing import Any
 
 from ..gff40.description import GFFWriter
 from .description import (
@@ -36,14 +37,14 @@ OBJ_LABELS = {"density": L_COBJ_DENSITY, "obj_type": L_COBJ_TYPE, "group": L_COB
 DIM_LABELS = {"radius": L_RADIUS, "height": L_HEIGHT, "box_dim": L_BOX_DIM}
 
 
-def _field(gff, struct_index, label):
+def _field(gff: Any, struct_index: int, label: int) -> Any:
     for f in gff.struct_defs[struct_index].field_instances:
         if f.label_id == label:
             return f
     return None
 
 
-def _walk(gff, struct_index, base, path=()):
+def _walk(gff: Any, struct_index: int, base: int, path: Any = ()) -> Any:
     yield path, struct_index, base
     i = 0
     entries = gff.get_from_data_block(struct_index, base, L_CHILDREN) or []
@@ -54,7 +55,9 @@ def _walk(gff, struct_index, base, path=()):
         i += 1
 
 
-def _pack_inline(writer, gff, struct_index, base, label, value) -> bool:
+def _pack_inline(
+    writer: Any, gff: Any, struct_index: int, base: int, label: int, value: Any
+) -> bool:
     # write a scalar or short vector straight into the instance's data block
     field = _field(gff, struct_index, label)
     if field is None or field.flags != 0:
@@ -75,14 +78,14 @@ def _pack_inline(writer, gff, struct_index, base, label, value) -> bool:
     return True
 
 
-def _current(gff, struct_index, base, label):
+def _current(gff: Any, struct_index: int, base: int, label: int) -> Any:
     try:
         return gff.get_from_data_block(struct_index, base, label)
     except (ValueError, IndexError):
         return None
 
 
-def _type_struct(gff, struct_index, base) -> tuple[int, int] | None:
+def _type_struct(gff: Any, struct_index: int, base: int) -> tuple[int, int] | None:
     # resolve the TYPE_STRUCT generic on this shap to (struct index, instance base)
     ref = gff.get_from_data_block(struct_index, base, L_SHAPE_TYPESTRUCT)
     if isinstance(ref, dict) and ref.get("offset") != 0xFFFFFFFF:
@@ -153,7 +156,9 @@ def phy_bytes(raw: bytes, edits: dict | None = None) -> bytes | None:
     return writer.write() if changed else None
 
 
-def _pack_string(writer, gff, struct_index, base, label, text) -> bool:
+def _pack_string(
+    writer: Any, gff: Any, struct_index: int, base: int, label: int, text: str
+) -> bool:
     # ecstring is an offset to <I count><utf16>; allocate a new one and repoint
     field = _field(gff, struct_index, label)
     if field is None or field.flags != 0 or field.type_id != 14:
@@ -175,7 +180,7 @@ PRIMITIVES = {
 }
 
 
-def _add_label(kind):
+def _add_label(kind: str) -> Any:
     return {"capsule": "Capsule", "sphere": "Sphere", "box": "Box"}.get(kind, "Shape")
 
 
@@ -185,33 +190,35 @@ NULL_REF = 0xFFFFFFFF
 GENERIC_STRUCT = 0x4000
 
 
-def _fourcc_of(gff, struct_index) -> bytes:
+def _fourcc_of(gff: Any, struct_index: int) -> bytes:
     return gff.struct_defs[struct_index].type_fourcc.to_bytes(4, "little")
 
 
-def _struct_of(gff, fourcc):
+def _struct_of(gff: Any, fourcc: bytes) -> Any:
     for i, sd in enumerate(gff.struct_defs):
         if _fourcc_of(gff, i) == fourcc:
             return i
     return None
 
 
-def _instances(gff):
+def _instances(gff: Any) -> list:
     return list(_walk(gff, 0, 0))
 
 
-def _clone(writer, gff, struct_index, base):
+def _clone(writer: Any, gff: Any, struct_index: int, base: int) -> int:
     size = gff.struct_defs[struct_index].struct_size
     at = len(writer.data_block)
     writer.data_block += gff.data[gff.data_offset + base : gff.data_offset + base + size]
     return at
 
 
-def _set_inline(writer, gff, struct_index, base, label, fmt, values) -> bool:
+def _set_inline(
+    writer: Any, gff: Any, struct_index: int, base: int, label: int, fmt: str, values: Any
+) -> bool:
     return _pack_inline(writer, gff, struct_index, base, label, values)
 
 
-def _child_entries(gff, struct_index, base):
+def _child_entries(gff: Any, struct_index: int, base: int) -> Any:
     field = _field(gff, struct_index, L_CHILDREN)
     if field is None:
         return None
@@ -228,7 +235,7 @@ def _child_entries(gff, struct_index, base):
     return out
 
 
-def _replace_children(writer, gff, struct_index, base, entries) -> bool:
+def _replace_children(writer: Any, gff: Any, struct_index: int, base: int, entries: Any) -> bool:
     field = _field(gff, struct_index, L_CHILDREN)
     if field is None or field.flags == 0:
         return False
@@ -247,7 +254,7 @@ def _replace_children(writer, gff, struct_index, base, entries) -> bool:
     return True
 
 
-def _cobj_under(gff, bone, instances):
+def _cobj_under(gff: Any, bone: str, instances: list) -> tuple[Any, Any]:
     for path, struct_index, base in instances:
         if _fourcc_of(gff, struct_index) != b"node":
             continue
@@ -266,7 +273,7 @@ def _cobj_under(gff, bone, instances):
     return None, None
 
 
-def _existing_names(gff) -> set:
+def _existing_names(gff: Any) -> set:
     shap_si = _struct_of(gff, TEMPLATE_FOURCC)
     if shap_si is None:
         return set()
@@ -283,7 +290,7 @@ def _existing_names(gff) -> set:
     return out
 
 
-def add_shapes(raw: bytes, additions) -> bytes | None:
+def add_shapes(raw: bytes, additions: Any) -> bytes | None:
     # Append new collision primitives. Returns None when nothing was added.
     #
     # ``additions`` is a list of dicts::

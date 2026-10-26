@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
+from typing import Any
 
 from ..gff40.description import GFFReader
 from ..gff40.labels import DATA as LABELS
@@ -67,7 +68,7 @@ def _fourcc(value: int) -> str:
     return struct.pack("<I", value).decode("ascii", "replace")
 
 
-def _mesh(value) -> object:
+def _mesh(value: Any) -> object:
     if not isinstance(value, (list, tuple)):
         return None
     try:
@@ -107,12 +108,12 @@ class Shape:
     path: tuple
     mesh: object
 
-    def __init__(self, **kw):
+    def __init__(self, **kw: Any) -> None:
         for slot in self.__slots__:
             setattr(self, slot, kw.get(slot))
         self.masks = self.masks or {}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Shape {self.kind} {self.name!r} on {self.bone!r} r={self.radius} h={self.height}>"
 
     @property
@@ -142,12 +143,12 @@ class CollisionObject:
     path: tuple
     shapes: list
 
-    def __init__(self, **kw):
+    def __init__(self, **kw: Any) -> None:
         for slot in self.__slots__:
             setattr(self, slot, kw.get(slot))
         self.shapes = self.shapes or []
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<CollisionObject on {self.bone!r} shapes={len(self.shapes or [])}>"
 
 
@@ -162,7 +163,7 @@ class PhyReader:
         self._walk(self.root, None, ())
 
     # -- tree walk ---------------------------------------------------------
-    def _walk(self, node, bone, path):
+    def _walk(self, node: Any, bone: Any, path: Any) -> None:
         # recurse into every child, not just bone nodes: mesh collision hangs off
         # an mshh chunk, capsule collision off the bone. only a 'node' updates
         # which bone we are on.
@@ -190,7 +191,7 @@ class PhyReader:
             else:
                 self._walk(values, bone, here)
 
-    def _cobj(self, values, bone, path) -> CollisionObject:
+    def _cobj(self, values: dict, bone: Any, path: Any) -> CollisionObject:
         shapes = []
         children = values.get(L_CHILDREN) or []
         i = 0
@@ -211,8 +212,8 @@ class PhyReader:
             path=path,
         )
 
-    def _shape(self, values, bone, path) -> Shape:
-        type_id = values.get(L_SHAPE_TYPE)
+    def _shape(self, values: dict, bone: Any, path: Any) -> Shape:
+        type_id: Any = values.get(L_SHAPE_TYPE)
         kind = TYPE_IDS.get(type_id, f"type{type_id}")
         radius = height = None
         box_dim = None
@@ -267,5 +268,5 @@ class PhyReader:
         }
 
 
-def load(path) -> PhyReader:
+def load(path: Any) -> PhyReader:
     return PhyReader(Path(path).read_bytes())
