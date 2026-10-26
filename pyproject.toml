@@ -149,3 +149,7 @@ module = [
     "thedas_io.phy.scene",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["thedas_io", "thedas_io.export"]
+disallow_untyped_defs = true

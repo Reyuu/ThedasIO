@@ -145,7 +145,9 @@ def export_bytes(item: Item, tint: dict | None = None, renames: dict | None = No
     return edited
 
 
-def export_all(dest, tint=False, tint_name="", only=None):
+def export_all(
+    dest: Any, tint: bool = False, tint_name: str = "", only: set | None = None
+) -> tuple[list, list]:
     # tint goes two places, a .tnt plus baked into the mao, and 6340 gets cleared
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -253,7 +255,7 @@ def _phy_bytes(item: Item) -> "bytes | None":
     return out
 
 
-def phy_enabled(context=None) -> bool:
+def phy_enabled(context: Any = None) -> bool:
     # The "Enable experimental PHY support" switch in addon settings.
     addons: Any = {}
     if context is not None:
@@ -313,7 +315,7 @@ def roots() -> list:
     ]
 
 
-def _short_list(values, limit: int = 5) -> str:
+def _short_list(values: Any, limit: int = 5) -> str:
     values = list(values)
     shown = ", ".join(str(v) for v in values[:limit])
     return shown if len(values) <= limit else f"{shown} (+{len(values) - limit} more)"
@@ -350,7 +352,7 @@ def check_model(only: set | None = None) -> list:
     return notes
 
 
-def _live_polys(obj) -> list | None:
+def _live_polys(obj: Any) -> list | None:
     # blender polygons, or None when the object cannot be read headless
     try:
         data = obj.data
@@ -362,7 +364,7 @@ def _live_polys(obj) -> list | None:
         return None
 
 
-def _objects_by_chunk(entries) -> tuple[dict, dict]:
+def _objects_by_chunk(entries: Any) -> tuple[dict, dict]:
     # live object per source chunk
     by_chunk: dict = {}
     by_name: dict = {}
@@ -435,7 +437,7 @@ def _check_msh_item(item: Item, mao_by_material: dict) -> list:
     return notes
 
 
-def _tri_area(points) -> float:
+def _tri_area(points: Any) -> float:
     (ax, ay, az), (bx, by, bz), (cx, cy, cz) = points
     ux, uy, uz = bx - ax, by - ay, bz - az
     vx, vy, vz = cx - ax, cy - ay, cz - az
@@ -445,7 +447,7 @@ def _tri_area(points) -> float:
     )
 
 
-def _check_live_mesh(obj, label: str, chunk) -> list:
+def _check_live_mesh(obj: Any, label: str, chunk: Any) -> list:
     # viewport-side checks: topology Blender edits may have introduced
     notes: list = []
     polys = _live_polys(obj)
@@ -520,7 +522,7 @@ def _check_texture_item(item: Item) -> list:
     return notes
 
 
-def connected(seeds) -> set:
+def connected(seeds: Any) -> set:
     # ITEMS keys in the same hierarchy as any seed
     by_key = {k.lower(): k for k in ITEMS}
     mao_by_material = {}
@@ -580,7 +582,7 @@ def connected(seeds) -> set:
     return out
 
 
-def _obj_materials(obj) -> list:
+def _obj_materials(obj: Any) -> list:
     # blender material names on one object; [] when deleted or material-less
     try:
         mats = obj.data.materials
@@ -614,7 +616,7 @@ def _tint_by_material(item: Item) -> dict:
     return by_material
 
 
-def _group_tint(node) -> dict:
+def _group_tint(node: Any) -> dict:
     # the tnt values one DAO Tint group carries, splitting no socket in half
     values = {}
     for name in NAMES:
@@ -711,7 +713,7 @@ def _mao_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     return write_mao(live_parsed).encode("utf-8")
 
 
-def _mao_mat_state(mat, vectors: dict) -> dict | None:
+def _mao_mat_state(mat: Any, vectors: dict) -> dict | None:
     # custom-prop vectors vs parsed; None when a prop is missing/not a list
     current = {}
     for key in vectors:
@@ -728,7 +730,7 @@ def _mao_mat_state(mat, vectors: dict) -> dict | None:
     return {"vectors": current, "drift": drift}
 
 
-def _live_textures(mat) -> dict:
+def _live_textures(mat: Any) -> dict:
     # role -> image name for every TexImage node carrying an image
     found: dict = {}
     try:
@@ -747,7 +749,7 @@ def _live_textures(mat) -> dict:
     return found
 
 
-def _tex_image_name(node) -> str | None:
+def _tex_image_name(node: Any) -> str | None:
     # image name of a TexImage node; None when missing or dead
     try:
         if node.type != "TEX_IMAGE" or node.image is None:
@@ -757,7 +759,7 @@ def _tex_image_name(node) -> str | None:
         return None
 
 
-def _same_pixels(got: np.ndarray, source) -> bool:
+def _same_pixels(got: np.ndarray, source: Any) -> bool:
     # compare in 8-bit space a chunk at a time. pil_to_blender(source) would
     # hold a second full float buffer: 268MB more on one 4K texture.
     pixels = np.asarray(source.convert("RGBA"))
@@ -796,7 +798,7 @@ def _texture_bytes(
     return _encode_texture(item["raw"], edited, (width, height), role)
 
 
-def _warn_size(name, width: int, height: int) -> None:
+def _warn_size(name: Any, width: int, height: int) -> None:
     # warn-only oversize notice: export proceeds regardless
     biggest = max(width, height)
     if width & (width - 1) or height & (height - 1):
@@ -805,7 +807,7 @@ def _warn_size(name, width: int, height: int) -> None:
         print(f"DAO: {name}: {width}x{height} exceeds the 4096 build cap")
 
 
-def _encode_texture(raw: bytes, pil, size, role: str | None) -> bytes:
+def _encode_texture(raw: bytes, pil: Any, size: Any, role: str | None) -> bytes:
     # source-compressed -> nvtt re-compress with matching format; else Pillow
     fmt, _ = _dds_format(raw)
     image = _swizzle_for_encode(_blender_image(pil, size), role)
@@ -840,14 +842,14 @@ def _encode_texture(raw: bytes, pil, size, role: str | None) -> bytes:
         Path(out_path).unlink(missing_ok=True)
 
 
-def _blender_image(pil, size):
+def _blender_image(pil: Any, size: Any) -> Any:
     # pillow image resampled to the Blender image size (crop/extend match)
     if pil.size == tuple(size):
         return pil.convert("RGBA")
     return resize_rgba(pil.convert("RGBA"), tuple(size))
 
 
-def _swizzle_for_encode(image, role: str | None):
+def _swizzle_for_encode(image: Any, role: str | None) -> Any:
     # kept for compatibility; the implementation lives in materials
     return swizzle_for_encode(image, role)
 
@@ -875,12 +877,12 @@ class _TopologyChanged(ValueError):
     pass
 
 
-def _chunk_identity(chunk) -> tuple:
+def _chunk_identity(chunk: Any) -> tuple:
     # a name is not an identity: files repeat it
     return (chunk.name, chunk.cells.get(8006), chunk.cells.get(8002))
 
 
-def _resolve_base_chunks(base, planned: list) -> list:
+def _resolve_base_chunks(base: Any, planned: list) -> list:
     by_identity: dict = {}
     for candidate in base.chunks:
         by_identity.setdefault(_chunk_identity(candidate), []).append(candidate)
@@ -999,7 +1001,7 @@ def _msh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     return writer.write()
 
 
-def _append_index_region(chunk, iblob: bytearray, indices, ncounts: int) -> None:
+def _append_index_region(chunk: Any, iblob: bytearray, indices: Any, ncounts: int) -> None:
     # one chunk's index region appended to the shared blob, with 8009 left
     # pointing at it as an *element* offset at the chunk's own width
     width = chunk_index_width(chunk)
@@ -1014,7 +1016,7 @@ def _append_index_region(chunk, iblob: bytearray, indices, ncounts: int) -> None
     chunk.cells[8004] = chunk_index_format(chunk, width=width)
 
 
-def _widen_indices(base, rebuilt: list, iblob: bytearray) -> bool:
+def _widen_indices(base: Any, rebuilt: list, iblob: bytearray) -> bool:
     # promote the whole mesh to 32-bit indices if a rebuild outgrew u16
     if not any(result[2] > 0xFFFF for _chunk, _obj, result in rebuilt):
         return False
@@ -1051,7 +1053,7 @@ def _widen_indices(base, rebuilt: list, iblob: bytearray) -> bool:
     return True
 
 
-def _evaluated_mesh(obj):
+def _evaluated_mesh(obj: Any) -> Any:
     # mesh as the depsgraph sees it (armature pose, modifiers, sculpt)
     try:
         ev = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
@@ -1068,7 +1070,7 @@ def _evaluated_mesh(obj):
     return None
 
 
-def _blender_state(obj) -> dict:
+def _blender_state(obj: Any) -> dict:
     # current positions/triangles/uvs/normals/weights read back from Blender
     data = _evaluated_mesh(obj)
     if data is None:
@@ -1076,7 +1078,7 @@ def _blender_state(obj) -> dict:
     n = len(data.vertices)
     loops = [loop.vertex_index for loop in data.loops]
 
-    def per_vertex(read) -> list:
+    def per_vertex(read: Any) -> list:
         first: dict = {}
         for i, lv in enumerate(loops):
             first.setdefault(lv, read(i))
@@ -1108,7 +1110,7 @@ def _blender_state(obj) -> dict:
     }
 
 
-def _row_map(obj, n_rows: int, n_verts: int):
+def _row_map(obj: Any, n_rows: int, n_verts: int) -> Any:
     # MSH-row -> Blender-vert indices, or None for the legacy layout
     try:
         raw = obj.get("thedas_io_row_to_vert")
@@ -1125,7 +1127,7 @@ def _row_map(obj, n_rows: int, n_verts: int):
     return m
 
 
-def _live_row_loop(data) -> dict:
+def _live_row_loop(data: Any) -> dict:
     # vertex -> one representative loop index, for the per-loop reads
     out: dict = {}
     for poly in data.polygons:
@@ -1135,7 +1137,7 @@ def _live_row_loop(data) -> dict:
     return out
 
 
-def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
+def _expand_rows(decoded: dict, obj: Any, bstate: dict) -> dict:
     # expand Blender-indexed state back to MSH-row indexing
     n = decoded["vert_count"]
     m = _row_map(obj, n, len(bstate["positions"]))
@@ -1210,7 +1212,7 @@ def _expand_rows(decoded: dict, obj, bstate: dict) -> dict:
     }
 
 
-def _collapsed_rows(row_map, triangles) -> set:
+def _collapsed_rows(row_map: Any, triangles: Any) -> set:
     """Rows whose Blender normal is meaningless, so trust the stored one.
 
     Welding puts two source rows on one Blender vertex, which turns any
@@ -1234,7 +1236,7 @@ def _collapsed_rows(row_map, triangles) -> set:
     return collapsed
 
 
-def _loop_tangents(data, row_loop: dict) -> dict | None:
+def _loop_tangents(data: Any, row_loop: dict) -> dict | None:
     # per-row (tangent xyz, binormal xyz) via Blender's MikkTSpace
     try:
         layers = data.uv_layers
@@ -1265,7 +1267,7 @@ def _loop_tangents(data, row_loop: dict) -> dict | None:
             pass
 
 
-def _bone_rename_map(obj, bone_map: dict) -> dict:
+def _bone_rename_map(obj: Any, bone_map: dict) -> dict:
     # current bone name -> import bone index, via the pose-bone thedas_io_node tags
     try:
         mods = list(obj.modifiers)
@@ -1294,7 +1296,7 @@ def _bone_rename_map(obj, bone_map: dict) -> dict:
     return out
 
 
-def _bone_index(name: str, bone_map: dict, rename_map: dict):
+def _bone_index(name: str, bone_map: dict, rename_map: dict) -> Any:
     if name.startswith("bone_"):
         try:
             return int(name[5:])
@@ -1305,7 +1307,7 @@ def _bone_index(name: str, bone_map: dict, rename_map: dict):
     return rename_map.get(name)
 
 
-def _chunk_edited(decoded: dict, state: dict, obj) -> bool:
+def _chunk_edited(decoded: dict, state: dict, obj: Any) -> bool:
     n = decoded["vert_count"]
     if len(state["positions"]) != n:
         raise _TopologyChanged(f"{obj.name}: vertex count changed")
@@ -1332,7 +1334,7 @@ def _chunk_edited(decoded: dict, state: dict, obj) -> bool:
     return _weights_edited(decoded, state)
 
 
-def _normal_drift(cur, want, tol: float = 0.02) -> bool:
+def _normal_drift(cur: Any, want: Any, tol: float = 0.02) -> bool:
     # blender can't hold a zero normal (it substitutes its own) and stores
     # near-unit normals a hair off
     #
@@ -1361,11 +1363,13 @@ def _group_weights(groups: dict, n: int) -> list:
     return out
 
 
-def _drift(a, b, tol: float = 1e-6) -> bool:
+def _drift(a: Any, b: Any, tol: float = 1e-6) -> bool:
     return any(abs(x - y) > tol for x, y in zip(a, b))
 
 
-def _patch_chunk(chunk, obj, state, decoded, base_blob, vblob, iblob):
+def _patch_chunk(
+    chunk: Any, obj: Any, state: Any, decoded: Any, base_blob: Any, vblob: Any, iblob: Any
+) -> Any:
     # overwrite editable fields, indices and bounds in a copy of the source blobs
     verts = chunk.cells.get(8001, 0)
     width = chunk_index_width(chunk)
@@ -1404,7 +1408,9 @@ def _patch_chunk(chunk, obj, state, decoded, base_blob, vblob, iblob):
     chunk.bounds = _rebounds(state["positions"], chunk.bounds)
 
 
-def _patch_tangents(chunk, obj, state, base_blob, vblob, reframed: set) -> None:
+def _patch_tangents(
+    chunk: Any, obj: Any, state: Any, base_blob: Any, vblob: Any, reframed: set
+) -> None:
     # refresh tangent/binormal rows whose frame moved, keep the rest
     if not reframed:
         return
@@ -1448,7 +1454,7 @@ def _modelled_usages() -> set:
     }
 
 
-def _unmodelled_usages(chunk) -> list:
+def _unmodelled_usages(chunk: Any) -> list:
     # Channels we would have to zero after a topology change. A rebuilt row
     # starts as zeros and only the modelled usages get written over them, so
     # anything else in the chunk (PSIZE, vertex colour, fog, depth) silently
@@ -1459,7 +1465,7 @@ def _unmodelled_usages(chunk) -> list:
     )
 
 
-def _rebuild_chunk(chunk, obj, bstate):
+def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
     # fresh vertex/index regions after a topology change (subdivide, quads)
 
     # a fresh vertex row starts zeroed, so anything we cannot re-encode has to
@@ -1549,7 +1555,7 @@ def _rebuild_chunk(chunk, obj, bstate):
     )
 
 
-def _encode_fresh(d, rec, tloops, ri, obj):
+def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any) -> Any:
     # live values for one fresh row; None keeps the zeroed bytes
     if d.usage == _USAGE_POSITION:
         return list(rec["pos"]) + [1.0]
@@ -1574,7 +1580,7 @@ def _encode_fresh(d, rec, tloops, ri, obj):
     return None
 
 
-def _encode_row(d, state, weights, vals, v, obj):
+def _encode_row(d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any) -> Any:
     if d.usage == _USAGE_POSITION:
         return list(state["positions"][v]) + list(vals[3:])
     if d.usage == _USAGE_NORMAL:
@@ -1606,14 +1612,14 @@ def _skin(vertex_weights: dict) -> list:
     return [(b, round(float(w / total), 3)) for b, w in pairs]
 
 
-def _pack(fmt: str, values, usage: int) -> bytes:
+def _pack(fmt: str, values: Any, usage: int) -> bytes:
     if "f" in fmt or "e" in fmt:
         return struct.pack(fmt, *(float(v) for v in values))
     scale = (255 if "B" in fmt else 32767) if usage == _USAGE_WEIGHT else 1
     return struct.pack(fmt, *(round(float(v) * scale) for v in values))
 
 
-def _rebounds(positions, bounds):
+def _rebounds(positions: Any, bounds: Any) -> Any:
     # AABB min/max (w kept) + bounding sphere: center of box, half diagonal
     if bounds is None or not positions:
         return bounds
@@ -1705,7 +1711,7 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     return writer.write() if (patched or renamed) else None
 
 
-def _live_bone(tag_maps: dict, resolver):
+def _live_bone(tag_maps: dict, resolver: Any) -> Any:
     # current (name, rest matrix) of an import-tagged bone; rename-proof
     arm_obj, tag = resolver
     key = id(arm_obj)
@@ -1725,7 +1731,7 @@ def _live_bone(tag_maps: dict, resolver):
     return bone.name, bone.matrix_local
 
 
-def _gff_paths(gff, struct_index: int, base: int, path=()):
+def _gff_paths(gff: Any, struct_index: int, base: int, path: Any = ()) -> Any:
     # parallel walk of the raw GFF: (path, struct index, instance base)
     yield path, struct_index, base
     i = 0
@@ -1737,21 +1743,21 @@ def _gff_paths(gff, struct_index: int, base: int, path=()):
         i += 1
 
 
-def _children(gff, struct_index: int, base: int) -> list:
+def _children(gff: Any, struct_index: int, base: int) -> list:
     # generic CHILDREN list of one instance; leaf structs have none
     if _field(gff, struct_index, 6999) is None:
         return []
     return gff.get_from_data_block(struct_index, base, 6999) or []
 
 
-def _field(gff, struct_index: int, label: int):
+def _field(gff: Any, struct_index: int, label: int) -> Any:
     for field in gff.struct_defs[struct_index].field_instances:
         if field.label_id == label:
             return field
     return None
 
 
-def _patch_msh_ref(gff, writer, item: Item, renames: dict) -> bool:
+def _patch_msh_ref(gff: Any, writer: Any, item: Item, renames: dict) -> bool:
     # repoint the hierarchy at its renamed .msh; False when nothing to do
     field = _field(gff, 0, 6005)
     if field is None or field.flags != 0 or field.type_id != 14:
@@ -1771,7 +1777,7 @@ def _patch_msh_ref(gff, writer, item: Item, renames: dict) -> bool:
     return True
 
 
-def _use_variation_tint(gff, writer) -> bool:
+def _use_variation_tint(gff: Any, writer: Any) -> bool:
     # clear 6340 USE_VARIATION_TINT on every mesh node
     fourcc = int.from_bytes(b"mshh", "little")
     changed = False
@@ -1787,7 +1793,7 @@ def _use_variation_tint(gff, writer) -> bool:
     return changed
 
 
-def _patch_node_name(gff, writer, base, new_name: str, label: str) -> None:
+def _patch_node_name(gff: Any, writer: Any, base: Any, new_name: str, label: str) -> None:
     struct_index, instance = base
     field = _field(gff, struct_index, 6000)
     if field is None or field.flags & 0xE000:
@@ -1796,7 +1802,7 @@ def _patch_node_name(gff, writer, base, new_name: str, label: str) -> None:
     struct.pack_into("<I", writer.data_block, instance + field.data_index, offset)
 
 
-def _patch_node_xf(gff, writer, base, node, local) -> None:
+def _patch_node_xf(gff: Any, writer: Any, base: Any, node: Any, local: Any) -> None:
     struct_index, instance = base
     entries = _children(gff, struct_index, instance)
     label = node.name or "?"
@@ -1826,7 +1832,7 @@ def _patch_node_xf(gff, writer, base, node, local) -> None:
         struct.pack_into("<4f", writer.data_block, entry["offset"] + field.data_index, *pack)
 
 
-def _inverse_compose(parent, world):
+def _inverse_compose(parent: Any, world: Any) -> tuple:
     # exact inverse of geometry.compose: local such that compose(parent, local) == world
     (ploc, prot), (wloc, wrot) = parent, world
     conj = (-prot[0], -prot[1], -prot[2], prot[3])
@@ -1834,13 +1840,13 @@ def _inverse_compose(parent, world):
     return quat_rotate(conj, delta), quat_mul(conj, wrot)
 
 
-def _mat_state(matrix) -> tuple:
+def _mat_state(matrix: Any) -> tuple:
     # blender matrix -> (xyz, xyzw quat) in geometry.py convention
     t, q = matrix.translation, matrix.to_quaternion()
     return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w)
 
 
-def _live_world(live, snap, base) -> tuple | None:
+def _live_world(live: Any, snap: Any, base: Any) -> tuple | None:
     # edited world (loc, xyzw quat), or None when the rest matrix is untouched
     live_loc, live_q = _mat_state(live)
     snap_loc, snap_q = _mat_state(snap)
