@@ -1,5 +1,6 @@
 import struct
 from pathlib import Path
+from typing import Any
 
 from ..gff40.description import (
     FIELD_SIZE,
@@ -111,7 +112,7 @@ DECLMETHOD = {
 
 
 class Declarator:
-    def __init__(self, row):
+    def __init__(self, row: dict) -> None:
         missing = []
         for l in _DECL_LABELS:
             if l == L_DECL_METHOD:
@@ -130,37 +131,37 @@ class Declarator:
         self.method = row.get(L_DECL_METHOD, 0)
 
     @property
-    def is_terminator(self):
+    def is_terminator(self) -> bool:
         # D3DDECL_END row. 8026 is typed INT in our schema and DWORD in others,
         # so the terminator arrives as either -1 or 0xFFFFFFFF; it is all ones
         # either way. Missing one folds a dead row into Chunk.stride.
         return self.stream == -1 or self.stream == 0xFFFFFFFF
 
     @property
-    def type_name(self):
+    def type_name(self) -> str:
         entry = DECLTYPE.get(self.dtype)
         if entry:
             return entry[0]
         return f"DECLTYPE_{self.dtype}"
 
     @property
-    def type_size(self):
+    def type_size(self) -> Any:
         entry = DECLTYPE.get(self.dtype)
         if entry:
             return entry[1]
         return None
 
     @property
-    def usage_name(self):
+    def usage_name(self) -> str:
         return DECLUSAGE.get(self.usage, f"DECLUSAGE_{self.usage}")
 
     @property
-    def method_name(self):
+    def method_name(self) -> str:
         return DECLMETHOD.get(self.method, f"DECLMETHOD_{self.method}")
 
 
 class Chunk:
-    def __init__(self, data):
+    def __init__(self, data: dict) -> None:
         self.name = data.get(L_NAME)
         self.cells = {}
         for label in L_CHUNK_CELLS:
@@ -175,7 +176,7 @@ class Chunk:
         self.additional_streams = data.get(L_CHUNK_STREAMS)
 
     @property
-    def stride(self):
+    def stride(self) -> int:
         ends = []
         for d in self.declarators:
             if d.is_terminator:
@@ -190,7 +191,7 @@ class Chunk:
 
 
 class Mesh:
-    def __init__(self, root):
+    def __init__(self, root: dict) -> None:
         self.name = root.get(L_NAME)
         self.chunks = []
         for c in root.get(L_CHUNKS) or []:
@@ -201,13 +202,13 @@ class Mesh:
         self.index_format = root.get(L_INDEX_FORMAT)
         self.instanced_stream = root.get(L_INSTANCED_STREAM)
 
-    def get_chunk(self, index):
+    def get_chunk(self, index: int) -> Any:
         if index < 0 or index >= len(self.chunks):
             raise ValueError(f"chunk index {index} out of range")
         return self.chunks[index]
 
 
-def load(path):
+def load(path: Any) -> Mesh:
     return MSHReader(Path(path).read_bytes()).mesh
 
 
@@ -282,15 +283,15 @@ _SCHEMA = (
 
 
 class MSHReader:
-    def __init__(self, data):
+    def __init__(self, data: Any) -> None:
         self.data = data
-        self.gff = None
-        self.root = {}
-        self.mesh = None
-        self.unknown_fourccs = []
+        self.gff: Any = None
+        self.root: dict = {}
+        self.mesh: Any = None
+        self.unknown_fourccs: list = []
         self._parse()
 
-    def _parse(self):
+    def _parse(self) -> None:
         gff = GFFReader(self.data)
         if gff.file_type != FILE_TYPE:
             raise ValueError(f"Invalid MSH file_type {gff.file_type!r}, expected {FILE_TYPE!r}")
@@ -312,11 +313,11 @@ class MSHReader:
         self.mesh = Mesh(self.root)
 
     @property
-    def name(self):
+    def name(self) -> Any:
         return self.root.get(L_NAME)  # type: ignore
 
     @property
-    def chunks(self):
+    def chunks(self) -> list:
         value = self.root.get(L_CHUNKS)  # type: ignore
         if value is None:
             return []
@@ -324,13 +325,13 @@ class MSHReader:
             raise TypeError(f"expected list for {label_name(L_CHUNKS)}")
         return value
 
-    def get_chunk(self, index):
+    def get_chunk(self, index: int) -> Any:
         chunks = self.chunks
         if index < 0 or index >= len(chunks):
             raise ValueError(f"chunk index {index} out of range")
         return chunks[index]
 
-    def get_declarators(self, index=0):
+    def get_declarators(self, index: int = 0) -> list:
         chunk = self.get_chunk(index)
         value = chunk.get(L_CHUNK_DECLARATORS)
         if value is None:
@@ -340,27 +341,27 @@ class MSHReader:
         return value
 
     @property
-    def decls(self):
+    def decls(self) -> list:
         return self.get_declarators(0)
 
     @property
-    def vertex_data(self):
+    def vertex_data(self) -> list:
         return self.root.get(L_VERTEX_DATA) or []  # type: ignore
 
     @property
-    def index_data(self):
+    def index_data(self) -> list:
         return self.root.get(L_INDEX_DATA) or []  # type: ignore
 
     @property
-    def bounds(self):
+    def bounds(self) -> Any:
         return self.root.get(L_INDEX_FORMAT)  # type: ignore
 
     @property
-    def streams(self):
+    def streams(self) -> Any:
         return self.root.get(L_INSTANCED_STREAM)  # type: ignore
 
 
-def _field_offsets(struct_def, labels):
+def _field_offsets(struct_def: Any, labels: Any) -> dict:
     # data_index of each label inside a struct instance, missing ones skipped
     wanted = set(labels)
     out = {}
@@ -370,7 +371,7 @@ def _field_offsets(struct_def, labels):
     return out
 
 
-def _chunk_unchanged(a, orig) -> bool:
+def _chunk_unchanged(a: Any, orig: Any) -> bool:
     if a.additional_streams is not None:
         return False
     decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method) for d in a.declarators]
@@ -380,7 +381,7 @@ def _chunk_unchanged(a, orig) -> bool:
     return all(a.cells.get(label) == cells.get(label) for label in L_CHUNK_CELLS)
 
 
-def _chunk_list(gff: GFFReader):
+def _chunk_list(gff: GFFReader) -> tuple:
     # (flag field, block offset, element struct size, row count) for 8021.
     # 8021 is a LIST_OF_REFS in the shipped files and a STRUCT_ARRAY in
     # hand-built ones; the two have different layouts and reading one as the
@@ -413,12 +414,12 @@ class MSHWriter:
     PLATFORM = b"PC  "
     VERSION = b"V0.1"
 
-    def __init__(self, mesh, reader=None):
+    def __init__(self, mesh: Any, reader: Any = None) -> None:
         if not isinstance(mesh, Mesh):
             raise TypeError(f"need a Mesh, got {type(mesh)}")
         self.mesh = mesh
         self._reader = reader
-        self._orig = None
+        self._orig: Any = None
         if reader is not None:
             src = reader.mesh
             self._orig = {
@@ -441,15 +442,15 @@ class MSHWriter:
             }
 
     @classmethod
-    def from_reader(cls, reader):
+    def from_reader(cls, reader: Any) -> Any:
         return cls(reader.mesh, reader)
 
     @classmethod
-    def from_bytes(cls, data):
+    def from_bytes(cls, data: Any) -> Any:
         reader = MSHReader(data)
         return cls(reader.mesh, reader)
 
-    def write(self):
+    def write(self) -> bytes:
         if self._reader is not None:
             return self._patched()
         return self._rebuilt()
@@ -461,7 +462,7 @@ class MSHWriter:
         w = GFFWriter.from_reader(gff)
         mesh = self.mesh
         orig = self._orig
-        at = _field_offsets(
+        at: dict = _field_offsets(
             gff.struct_defs[0],
             (L_NAME, L_CHUNKS, L_VERTEX_DATA, L_INDEX_DATA, L_INDEX_FORMAT, L_INSTANCED_STREAM),
         )
@@ -558,7 +559,7 @@ class MSHWriter:
         return w.write()
 
     @staticmethod
-    def _check_chunk(chunk):
+    def _check_chunk(chunk: Any) -> Any:
         if chunk.bounds is None:
             raise ValueError(
                 f"Chunk {chunk.name!r} has no bounds (chnk 8020 is inline, never NULL)"
@@ -574,7 +575,7 @@ class MSHWriter:
             raise ValueError(f"chunk {chunk.name!r} has bad bounds: {e}")
 
     @staticmethod
-    def _declarator_bytes(chunk) -> bytes:
+    def _declarator_bytes(chunk: Any) -> bytes:
         try:
             rows = []
             for d in chunk.declarators:
@@ -590,7 +591,7 @@ class MSHWriter:
         except struct.error as e:
             raise ValueError(f"Chunk {chunk.name!r} has an unencodable declarator: {e}")
 
-    def _chunk_bytes(self, w, chunk) -> bytes:
+    def _chunk_bytes(self, w: Any, chunk: Any) -> bytes:
         # a whole chunk instance, laid out from the schema offsets
         self._check_chunk(chunk)
         inst = bytearray(b"\xff" * CHNK_STRUCT_SIZE)
@@ -613,7 +614,7 @@ class MSHWriter:
         struct.pack_into("<I", inst, 100, chunk.cells.get(8034, 0))
         return bytes(inst)
 
-    def _fill_chunk(self, w, chunk, inst: bytearray, offsets: dict) -> None:
+    def _fill_chunk(self, w: Any, chunk: Any, inst: bytearray, offsets: dict) -> None:
         # patch only the fields the schema models, by label, so a file that
         # lays its chnk out differently still writes correctly
         self._check_chunk(chunk)
@@ -638,5 +639,5 @@ class MSHWriter:
             ref = w.alloc(self._declarator_bytes(chunk))
             struct.pack_into("<I", inst, offsets[L_CHUNK_DECLARATORS], ref)
 
-    def _write_chunk(self, w, chunk):
+    def _write_chunk(self, w: Any, chunk: Any) -> Any:
         return w.alloc(self._chunk_bytes(w, chunk))

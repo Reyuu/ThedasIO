@@ -133,3 +133,10 @@ module = [
     "thedas_io.gff40.description",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.mmh.description",
+    "thedas_io.msh.description",
+]
+disallow_untyped_defs = true

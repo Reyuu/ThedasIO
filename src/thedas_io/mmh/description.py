@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from ..gff40.description import GFFReader, GFFWriter, label_name
 
@@ -10,7 +11,7 @@ L_NAME = 6000
 L_CHILDREN = 6999
 
 
-def _kind_name(fourcc):
+def _kind_name(fourcc: Any) -> str:
     # "replace" so a fourcc with a high byte decodes to a name instead of
     # killing the read; this runs for every node and every orphan def. The msh
     # module's copy of this helper already does this.
@@ -18,57 +19,57 @@ def _kind_name(fourcc):
 
 
 class Node:
-    def __init__(self, kind, name, values, children):
+    def __init__(self, kind: Any, name: str, values: dict, children: list) -> None:
         self.kind = kind
         self.name = name
         self.values = values
         self.children = children
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Node({self.kind!r}, {self.name!r}, {len(self.children)} children)"
 
-    def walk(self):
+    def walk(self) -> Any:
         yield self
         for child in self.children:
             yield from child.walk()
 
-    def find(self, name):
+    def find(self, name: str) -> Any:
         for node in self.walk():
             if node.name == name:
                 return node
         raise KeyError(f"Node {name!r} not found")
 
 
-def load(path):
+def load(path: Any) -> "MMHReader":
     return MMHReader(Path(path).read_bytes()).tree
 
 
 class MMHReader:
-    def __init__(self, data):
+    def __init__(self, data: Any) -> None:
         self.data = data
-        self.gff = None
-        self.root = {}
-        self.tree = None
-        self.orphan_kinds = []
+        self.gff: Any = None
+        self.root: dict = {}
+        self.tree: Any = None
+        self.orphan_kinds: list = []
         self._parse()
 
-    def _parse(self):
+    def _parse(self) -> None:
         gff = GFFReader(self.data)
         if gff.file_type != FILE_TYPE:
             raise ValueError(f"Invalid MMH file_type {gff.file_type!r}, expected {FILE_TYPE!r}")
 
         self.gff = gff
         self.root = gff.get_from_data_block(0, 0)
-        visited = set()
+        visited: set = set()
         self.tree = self._node(0, self.root, visited)
 
-        orphans = []
+        orphans: list = []
         for i in range(gff.nstruct):
             if i not in visited:
                 orphans.append(_kind_name(gff.struct_defs[i].type_fourcc))
         self.orphan_kinds = orphans
 
-    def _struct_def(self, struct_index):
+    def _struct_def(self, struct_index: int) -> Any:
         # struct_index comes out of a generic list entry, so it is whatever the
         # file says. Index the table directly and it is a bare IndexError;
         # GFFReader already names this one.
@@ -77,7 +78,7 @@ class MMHReader:
             raise ValueError(f"struct index {struct_index} out of range")
         return defs[struct_index]
 
-    def _node(self, struct_index, values, visited):
+    def _node(self, struct_index: Any, values: dict, visited: Any) -> Any:
         kind = _kind_name(self._struct_def(struct_index).type_fourcc)
         values = dict(values)
         name = values.pop(L_NAME, None)
@@ -105,10 +106,10 @@ class MMHReader:
 
 
 class MMHWriter:
-    def __init__(self, reader):
+    def __init__(self, reader: Any) -> None:
         if not isinstance(reader, MMHReader):
             raise TypeError(f"need a MMHReader, got {type(reader)}")
         self._gff = GFFWriter.from_reader(reader.gff)
 
-    def write(self):
+    def write(self) -> bytes:
         return self._gff.write()
