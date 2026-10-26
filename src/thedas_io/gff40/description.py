@@ -1,5 +1,6 @@
 import bisect
 import struct
+from typing import Any
 
 from .labels import DATA as LABELS
 
@@ -68,13 +69,13 @@ FLAGS = {
 }
 
 
-def label_name(label_id):
+def label_name(label_id: int) -> str:
     if label_id in LABELS:
         return LABELS[label_id]
     return f"label_{label_id}"
 
 
-def _unpack_items(fmt, buf):
+def _unpack_items(fmt: str, buf: Any) -> list:
     out = []
     for v in struct.iter_unpack(fmt, buf):
         if len(v) == 1:
@@ -85,16 +86,16 @@ def _unpack_items(fmt, buf):
 
 
 class GFFStructDef:
-    def __init__(self, type_id, field_count, field_offset, struct_size):
+    def __init__(self, type_id: int, field_count: int, field_offset: int, struct_size: int) -> None:
         self.type_fourcc = type_id
         self.field_count = field_count
         self.field_offset = field_offset
         self.struct_size = struct_size
-        self.field_instances = []
+        self.field_instances: list = []
 
 
 class GFFField:
-    def __init__(self, label_id, type_id, flags, data_index):
+    def __init__(self, label_id: int, type_id: int, flags: int, data_index: int) -> None:
         self.label_id = label_id
         self.label_name = label_name(label_id)
         self.type_id = type_id
@@ -109,25 +110,25 @@ class GFFField:
         self.flags = flags
         self.data_index = data_index
 
-    def pack(self):
+    def pack(self) -> bytes:
         return struct.pack("<IHHI", self.label_id, self.type_id, self.flags, self.data_index)
 
 
 class GFFReader:
-    def __init__(self, data):
+    def __init__(self, data: Any) -> None:
         self.platform = b""
         self.file_type = b""
         self.version = b""
         self.data_offset = 0
         self.nstruct = 0
         self.data = data
-        self.struct_defs = []
+        self.struct_defs: list = []
         self.field_instances_offset = 0
         self.field_instances_offset_end = 0
         self.gap = 0
         self._parse()
 
-    def _parse(self):
+    def _parse(self) -> None:
         magic = self.data[0:8]
         if magic != MAGIC:
             raise ValueError("Invalid GFF file magic")
@@ -171,27 +172,33 @@ class GFFReader:
         )
         self.gap = self.data_offset - self.field_instances_offset_end
 
-    def get_struct(self, type_fourcc):
+    def get_struct(self, type_fourcc: Any) -> Any:
         for entry in self.struct_defs:
             if entry.type_fourcc == type_fourcc:
                 return entry
         raise ValueError(f"struct {type_fourcc} not found")
 
-    def get_from_data_block(self, struct_ref, instance_base=0, label_id=None, occurrence=0):
-        def struct_def(ref):
+    def get_from_data_block(
+        self,
+        struct_ref: Any,
+        instance_base: int = 0,
+        label_id: Any = None,
+        occurrence: int = 0,
+    ) -> Any:
+        def struct_def(ref: Any) -> Any:
             if isinstance(ref, GFFStructDef):
                 return ref
             if ref < 0 or ref >= self.nstruct:
                 raise ValueError(f"struct index {ref} out of range")
             return self.struct_defs[ref]
 
-        def raw(block_offset, length):
+        def raw(block_offset: int, length: int) -> Any:
             if block_offset < 0 or block_offset + length > len(self.data) - self.data_offset:
                 raise ValueError("data block read out of range")
             a = self.data_offset + block_offset
             return self.data[a : a + length]
 
-        def ecstring(block_offset):
+        def ecstring(block_offset: int) -> str | None:
             if block_offset == 0xFFFFFFFF:
                 return None
             count = struct.unpack("<I", raw(block_offset, 4))[0]
@@ -200,10 +207,10 @@ class GFFReader:
                 return text[:-1]
             return text
 
-        def instance(sd, base):
+        def instance(sd: Any, base: int) -> dict:
             if base < 0 or base + sd.struct_size > len(self.data) - self.data_offset:
                 raise ValueError("instance out of range")
-            output = {}
+            output: dict = {}
             for f in sd.field_instances:
                 value = field(sd, base, f)
                 if f.label_id in output:
@@ -216,7 +223,7 @@ class GFFReader:
                     output[f.label_id] = value
             return output
 
-        def cell_u32(instance_base, f):
+        def cell_u32(instance_base: int, f: Any) -> int:
             # every read out of an instance goes through here. a corrupt or
             # truncated file should raise a GFF error naming the label, not a
             # bare struct.error from four frames down with no context.
@@ -227,7 +234,7 @@ class GFFReader:
                 )
             return struct.unpack_from("<I", self.data, at)[0]
 
-        def field(sd, instance_base, f):
+        def field(sd: Any, instance_base: int, f: Any) -> Any:
             if f.flags == FLAGS["NONE"]:
                 if f.type_id == 14:
                     return ecstring(cell_u32(instance_base, f))
@@ -278,7 +285,7 @@ class GFFReader:
             if f.flags == FLAGS["LIST_OF_REFS"]:
                 sub_struct = struct_def(f.type_id)
                 (n,) = struct.unpack("<I", raw(ref, 4))
-                out = []
+                out: list = []
                 for (r,) in struct.iter_unpack("<I", raw(ref + 4, n * 4)):
                     if r == 0xFFFFFFFF:
                         out.append(None)
@@ -289,9 +296,9 @@ class GFFReader:
             if f.type_id == 0xFFFF:
                 if f.flags == FLAGS["GENERIC_LIST"]:
                     (n,) = struct.unpack("<I", raw(ref, 4))
-                    out = []
+                    generic_out: list = []
                     for s, fl, off in struct.iter_unpack("<HHI", raw(ref + 4, n * 8)):
-                        out.append(
+                        generic_out.append(
                             {
                                 "struct_index": s,
                                 "flags": fl,
@@ -301,7 +308,7 @@ class GFFReader:
                                 else instance(struct_def(s), off),
                             }
                         )
-                    return out
+                    return generic_out
                 if f.flags == FLAGS["REFERENCE"]:
                     # a single generic struct is written inline in the cell as
                     # two u32s: (flags << 16 | type) then the instance address.
@@ -341,7 +348,7 @@ class GFFReader:
             raise ValueError(f"field {label_id} not in struct")
         return field(sd, instance_base, cands[occurrence])
 
-    def decode_scalar(self, field, instance_base=0):
+    def decode_scalar(self, field: Any, instance_base: int = 0) -> Any:
         if field.flags != FLAGS["NONE"]:
             raise ValueError(f"decode_scalar needs a plain scalar, got flags {field.flags:#x}")
 
@@ -361,7 +368,7 @@ class GFFReader:
 
 
 class GFFWriter:
-    def __init__(self, platform, file_type, version, gap=b""):
+    def __init__(self, platform: Any, file_type: Any, version: Any, gap: Any = b"") -> None:
         for name, value in (("platform", platform), ("file_type", file_type), ("version", version)):
             if not isinstance(value, (bytes, bytearray)) or len(value) != 4:
                 raise ValueError(f"{name} must be 4 bytes, got {value!r}")
@@ -374,11 +381,11 @@ class GFFWriter:
         self.file_type = bytes(file_type)
         self.version = bytes(version)
         self.gap = gap
-        self.struct_defs = []
+        self.struct_defs: list = []
         self.data_block = bytearray()
 
     @classmethod
-    def from_reader(cls, reader):
+    def from_reader(cls, reader: Any) -> Any:
         w = cls(
             reader.platform,
             reader.file_type,
@@ -396,11 +403,11 @@ class GFFWriter:
         return w
 
     @classmethod
-    def from_bytes(cls, data):
+    def from_bytes(cls, data: Any) -> Any:
         return cls.from_reader(GFFReader(data))
 
     # append raw bytes, return block offset
-    def alloc(self, payload):
+    def alloc(self, payload: Any) -> int:
         if not isinstance(payload, (bytes, bytearray)):
             raise TypeError("payload must be bytes")
         offset = len(self.data_block)
@@ -408,14 +415,14 @@ class GFFWriter:
         return offset
 
     # ecstring is <I count incl NUL> + utf-16le
-    def alloc_ecstring(self, text):
+    def alloc_ecstring(self, text: str) -> int:
         if not isinstance(text, str):
             raise TypeError("ecstring must be str")
         chars = f"{text}\x00".encode("utf-16-le")
         return self.alloc(struct.pack("<I", len(chars) // 2) + chars)
 
     # scalar list is <I n> + packed elements
-    def alloc_scalar_list(self, type_id, values):
+    def alloc_scalar_list(self, type_id: int, values: Any) -> int:
         if type_id == 14:
             refs = []
             for v in values:
@@ -447,7 +454,9 @@ class GFFWriter:
         return self.alloc(struct.pack("<I", len(values)) + body)
 
     # keep label-ascending order
-    def add_field(self, struct_index, label_id, type_id, flags, data_index):
+    def add_field(
+        self, struct_index: int, label_id: int, type_id: int, flags: int, data_index: int
+    ) -> Any:
         if struct_index < 0 or struct_index >= len(self.struct_defs):
             raise ValueError(f"struct index {struct_index} out of range")
 
@@ -460,7 +469,7 @@ class GFFWriter:
 
         return field
 
-    def write(self):
+    def write(self) -> bytes:
         nstruct = len(self.struct_defs)
         defs_blob = bytearray()
         fields_blob = bytearray()

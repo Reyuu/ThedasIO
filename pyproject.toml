@@ -126,3 +126,10 @@ module = [
     "thedas_io.ani.scene",
 ]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "thedas_io.erf.description",
+    "thedas_io.gff40.description",
+]
+disallow_untyped_defs = true

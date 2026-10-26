@@ -2,6 +2,7 @@ import hashlib
 import struct
 import uuid
 import zlib
+from typing import Any
 
 from .passwords import DA2_PASSWORDS, DAO_PASSWORDS
 
@@ -46,21 +47,29 @@ LAYOUTS = {
 }
 
 
-def _layout(prefix):
+def _layout(prefix: bytes) -> tuple:
     try:
         return LAYOUTS[prefix]
     except KeyError:
         raise ValueError("Invalid ERF file magic") from None
 
 
-def geometry(prefix):
+def geometry(prefix: bytes) -> tuple[int, int]:
     # (header size, row size) for a 16-byte file prefix.
     header, row, _name_size, _encoding, _codec = _layout(prefix)
     return header, row
 
 
 class ERFEntry:
-    def __init__(self, name, offset, packed_size, size, name_hash=0, type_hash=0):
+    def __init__(
+        self,
+        name: str,
+        offset: int,
+        packed_size: int,
+        size: int,
+        name_hash: int = 0,
+        type_hash: int = 0,
+    ) -> None:
         self.name = name
         self.offset = offset
         # bytes on disk, which for an encrypted entry carries padding up to
@@ -73,21 +82,21 @@ class ERFEntry:
 
 
 class ERFReader:
-    def __init__(self, data):
+    def __init__(self, data: Any) -> None:
         self.data = data
-        self.entries = []
+        self.entries: list = []
         self.encryption = 0
         self.compression = 0
         self.module_id = 0
         self.pw_hash = b""
         self.codec = None
         self.string_table = b""
-        self._key = None
-        self._key_error = None
-        self._password = None
+        self._key: bytes | None = None
+        self._key_error: ValueError | None = None
+        self._password: str | None = None
         self._parse()
 
-    def _parse(self):
+    def _parse(self) -> None:
         prefix = self.data[:16]
         if prefix == MAGIC_V3:
             self._parse_v3()
@@ -132,7 +141,7 @@ class ERFReader:
             pass
 
     # nightmare, nightmare, nightmare
-    def _parse_v3(self):
+    def _parse_v3(self) -> None:
         if len(self.data) < 48:
             raise ValueError("Invalid ERF V3.0 header")
         string_table_size, file_count, flags = struct.unpack("<III", self.data[16:28])
@@ -165,7 +174,7 @@ class ERFReader:
                 ERFEntry(name, offset, packed_size, size, name_hash=name_hash, type_hash=type_hash)
             )
 
-    def _parse_v22_header(self):
+    def _parse_v22_header(self) -> None:
         # V2.2 spends the 56-byte header on a flags word, the module id and
         # the password digest where V2.0 has just a sentinel.
         _, _, _, _, flags, module_id = struct.unpack("<6I", self.data[16:40])
@@ -175,7 +184,7 @@ class ERFReader:
         self.compression = (flags >> 29) & 0x7
 
     @property
-    def key(self):
+    def key(self) -> bytes:
         # Resolved on first use, not at parse time: entry names are not
         # encrypted, so a scan still indexes an archive whose module we hold
         # no password for, and only the extraction is reported as failing.
@@ -242,7 +251,7 @@ class ERFReader:
                 return key
         return None
 
-    def _find_key(self):
+    def _find_key(self) -> bytes:
         # Blowfish keyed on the little-endian u64 of the module's numeric
         # password; the header only stores md5 of the decimal digits, so match
         # candidates against that rather than mapping module ids to passwords.
@@ -255,7 +264,7 @@ class ERFReader:
             return key
         raise ValueError(f"no known password for ERF module {self.module_id}")
 
-    def decode_payload(self, raw, entry):
+    def decode_payload(self, raw: bytes, entry: Any) -> bytes:
         # Turn an entry's on-disk bytes into its plaintext.
         if self.codec == "zlib":
             return zlib.decompress(raw)
@@ -284,11 +293,11 @@ class ERFReader:
             else:
                 raise ValueError(f"unsupported ERF compression {self.compression}")
 
-        if entry is not None and getattr(entry, "size", 0):
+        if entry is not None and entry.size:
             data = data[: entry.size]
         return data
 
-    def _xor_key(self):
+    def _xor_key(self) -> bytes:
         # 9-byte key derived from the module password
         password = self._matched_password()
         value = int(password) if password.isdigit() else 0
@@ -308,13 +317,13 @@ class ERFReader:
             )
         return self._password
 
-    def entry(self, entry_name):
+    def entry(self, entry_name: str) -> ERFEntry:
         for entry in self.entries:
             if entry.name == entry_name:
                 return entry
         raise KeyError(f"Entry '{entry_name}' not found")
 
-    def get_payload(self, entry_name):
+    def get_payload(self, entry_name: str) -> bytes:
         entry = self.entry(entry_name)
         return self.decode_payload(
             self.data[entry.offset : entry.offset + entry.packed_size], entry
@@ -322,16 +331,16 @@ class ERFReader:
 
 
 class ERFWriter:
-    def __init__(self):
-        self.entries = []
-        self.payloads = []
+    def __init__(self) -> None:
+        self.entries: list = []
+        self.payloads: list = []
 
-    def add_entry(self, name, payload):
+    def add_entry(self, name: str, payload: bytes) -> None:
         if len(name) > 31:
             raise ValueError("Entry name must be at most 31 characters")
         self.entries.append((name, payload))
 
-    def write(self):
+    def write(self) -> bytes:
         entry_count = len(self.entries)
         header = MAGIC + struct.pack("<IIII", entry_count, 0, 0, SENTINEL)
 
