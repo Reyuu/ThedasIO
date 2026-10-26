@@ -1146,7 +1146,7 @@ def test_mao_for_node_prefers_6001(tmp_path):
 
     from thedas_io.asset_db.scanner import scan
     from thedas_io.erf.description import ERFWriter
-    from thedas_io.ui import _mao_for_node
+    from thedas_io.importers import _mao_for_node
 
     (tmp_path / "x.mao").write_bytes(b"<MaterialObject/>")
     w = ERFWriter()
@@ -1355,18 +1355,22 @@ def test_finish_treats_missing_stats_as_a_failed_scan(tmp_path):
 def test_scene_db_follows_the_selected_game_when_the_override_is_blank():
     from types import SimpleNamespace
 
+    from thedas_io import asset_browser
+
     dao = SimpleNamespace(thedas_io_db_path="", thedas_io_game="DAO")
     da2 = SimpleNamespace(thedas_io_db_path="", thedas_io_game="DA2")
-    assert ui._scene_db(dao).name == "asset_db_dao.sqlite"
-    assert ui._scene_db(da2).name == "asset_db_da2.sqlite"
+    assert asset_browser._scene_db(dao).name == "asset_db_dao.sqlite"
+    assert asset_browser._scene_db(da2).name == "asset_db_da2.sqlite"
     override = SimpleNamespace(thedas_io_db_path="D:/x/mine.sqlite", thedas_io_game="DA2")
-    assert Path(ui._scene_db(override)).name == "mine.sqlite"
+    assert Path(asset_browser._scene_db(override)).name == "mine.sqlite"
 
 
 def test_import_row_resolves_a_blank_db_path_to_the_scene_game(monkeypatch):
     # a da2 mesh imported with the db override blank used to look every sibling
     # up in asset_db_dao.sqlite and report 'no MAO found'
     from types import SimpleNamespace
+
+    from thedas_io import importers
 
     seen = {}
 
@@ -1377,8 +1381,8 @@ def test_import_row_resolves_a_blank_db_path_to_the_scene_game(monkeypatch):
     def stop(row):
         raise RuntimeError("stop after the lookup")
 
-    monkeypatch.setattr(ui, "find_exact", fake_find)
-    monkeypatch.setattr(ui, "extract", stop)
+    monkeypatch.setattr(importers, "find_exact", fake_find)
+    monkeypatch.setattr(importers, "extract", stop)
     row = {
         "package": "artfp.erf",
         "filename": "cth_beta.mmh",
@@ -1388,5 +1392,5 @@ def test_import_row_resolves_a_blank_db_path_to_the_scene_game(monkeypatch):
     }
     context = SimpleNamespace(scene=SimpleNamespace(thedas_io_game="DA2"))
     with __import__("pytest").raises(RuntimeError):
-        ui._import_row(context, row, None, False, lambda *a: None)
+        importers._import_row(context, row, None, False, lambda *a: None)
     assert Path(seen["db"]).name == "asset_db_da2.sqlite"
