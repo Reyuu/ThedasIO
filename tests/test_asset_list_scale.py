@@ -74,11 +74,11 @@ def test_prefs_unlimited_is_cached_until_the_checkbox_changes():
         assert prefs.reads == 1
 
         prefs.value = True
-        ui._invalidate_asset_limit()  # what the property's update callback does
+        asset_browser._invalidate_asset_limit()  # what the property's update callback does
         assert asset_browser._prefs_unlimited(ctx) is True
         assert prefs.reads == 2
     finally:
-        ui._invalidate_asset_limit()
+        asset_browser._invalidate_asset_limit()
 
 
 def test_prefs_unlimited_toggles_limit(tmp_path):
@@ -104,8 +104,8 @@ def test_prefs_unlimited_toggles_limit(tmp_path):
     )
     assert asset_browser._prefs_unlimited(prefs_on) is True
     assert asset_browser._prefs_unlimited(prefs_off) is False
-    assert ui._asset_limit(prefs_on) is None
-    assert ui._asset_limit(prefs_off) == asset_browser.ASSET_LIMIT
+    assert asset_browser._asset_limit(prefs_on) is None
+    assert asset_browser._asset_limit(prefs_off) == asset_browser.ASSET_LIMIT
     rows, total = ui._fill_assets(scene, str(db), context=prefs_on)
     assert len(rows) == total == 101
 

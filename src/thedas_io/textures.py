@@ -13,8 +13,9 @@ import numpy as np
 from PIL import Image as PilImage
 
 from .assets import resolve
-from .datablocks import tag
+from .datablocks import sweep_orphans, tag
 from .export import _LOADED_ITEMS, remember
+from .export_registry import _store_registry
 from .fsio import write_bytes_atomic
 from .materials import pil_to_blender, role_of, thedas_io_normals_to_rgba
 from .tnt import parse
@@ -344,3 +345,43 @@ def _missing_image(res: str, images: dict) -> Any:
     except (AttributeError, TypeError):
         pass
     return image
+
+
+def _repack_textures(scene: Any = None, depsgraph: Any = None) -> None:
+    # keep packed pixels equal to screen before save
+    sweep_orphans()  # dropped imports must not ride along in the .blend
+    for image, _ in _texture_images():
+        try:
+            # pack() re-encodes every pixel; only a dirty image needs it, so an
+            # untouched scene saves without re-packing every texture on each save
+            if image.packed_file is not None and getattr(image, "is_dirty", True):
+                image.pack()
+        except (AttributeError, ReferenceError, RuntimeError):
+            continue
+
+    for one in bpy.data.scenes:
+        _store_registry(one)
+
+
+class THEDAS_IO_OT_reload_textures(bpy.types.Operator):
+    bl_idname = "thedas_io.reload_textures"
+    bl_label = "Reload textures from files"
+    bl_description = (
+        "Re-read the editable copies in thedas_io_textures/ (painted "
+        "externally, e.g. in GIMP) back into the live images"
+    )
+
+    def execute(self, context: Any) -> set:
+        done, missing, failed = reload_textures()
+        for note in failed:
+            self.report({"WARNING"}, note)
+
+        if not done and missing:
+            self.report({"WARNING"}, f"No cached files in {_cache_dir()} - import the asset again")
+
+        self.report(
+            {"INFO"},
+            f"Reloaded {len(done)} texture(s) from {_cache_dir()}"
+            + (f"; {len(missing)} had no file" if missing else ""),
+        )
+        return {"FINISHED"} if done else {"CANCELLED"}
