@@ -8,6 +8,7 @@ from typing import Any
 import bpy
 from mathutils import Matrix, Quaternion
 
+from .bone_map import BONE_GLOBAL, BONE_ORDER
 from .datablocks import tag
 from .export import remember
 from .geometry import (
@@ -149,6 +150,9 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
                 pose = None if pose_bones is None else pose_bones.get(obj.name)
                 if pose is not None:
                     pose["thedas_io_node"] = obj.name
+                    global_id = node.values.get(6254)
+                    if isinstance(global_id, int) and global_id >= 0:
+                        pose[BONE_GLOBAL] = global_id
                 stats["hosts"][path] = (kind, (arm_obj, obj.name), obj.matrix_local.copy())
         elif node.kind in ("crst", "usrp"):
             ref.matrix_world = (
@@ -206,9 +210,8 @@ def _bone_lengths(rows: list) -> dict:
 
 def _bind_skin(chunk: Any, names: dict, arm_obj: Any, node: Any = None) -> None:
     # rename bone groups to bone names, tag index map, add modifier
-    order = (node.values.get(6255) if node is not None else None) or []
-    if not isinstance(order, list):
-        order = []
+    raw_order = (node.values.get(6255) if node is not None else None) or []
+    order = [int(v) for v in raw_order if isinstance(v, int)]
 
     bone_map = {}
     for group in chunk.vertex_groups:
@@ -222,6 +225,14 @@ def _bind_skin(chunk: Any, names: dict, arm_obj: Any, node: Any = None) -> None:
             bone_map[group.name] = local
 
     chunk["thedas_io_bone_index"] = bone_map
+    if order:
+        chunk[BONE_ORDER] = order
+        existing = arm_obj.get(BONE_ORDER) or []
+        existing_order = [int(v) for v in existing if isinstance(v, int)]
+        if not existing_order:
+            arm_obj[BONE_ORDER] = order
+        elif existing_order != order:
+            arm_obj["thedas_io_bone_order_mixed"] = True
     if chunk.modifiers.get("Armature") is None:
         mod = chunk.modifiers.new("Armature", "ARMATURE")
         mod.object = arm_obj

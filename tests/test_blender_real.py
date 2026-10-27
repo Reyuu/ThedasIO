@@ -30,12 +30,14 @@ def test_register_under_real_blender():
                 pass
             ext.register()
             import bpy
-            ok = hasattr(bpy.types, "THEDAS_IO_PT_assets")
+            assets = hasattr(bpy.types, "THEDAS_IO_PT_assets")
+            bones = hasattr(bpy.types, "THEDAS_IO_PT_bone_map")
             ext.unregister()
-            return {"registered": ok,
+            return {"registered": assets,
+                    "bone_panel": bones,
                     "unregistered": not hasattr(bpy.types, "THEDAS_IO_PT_assets")}
         """)
-    ) == {"registered": True, "unregistered": True}
+    ) == {"registered": True, "bone_panel": True, "unregistered": True}
 
 
 def test_material_build():
@@ -3874,3 +3876,63 @@ def test_a_clip_that_matches_no_bones_leaves_the_old_action_alone():
                 ext.unregister()
         """),
     ) == {"action_kept": True, "still_named": "mine", "curves": -1}
+
+
+def test_bone_order_is_stored_and_custom_group_exports():
+    result = run(
+        _MMH_SETUP
+        + textwrap.dedent("""\
+        def main():
+            tmp, res = mmh_setup()
+            import bpy
+            from thedas_io.bone_map import (
+                BONE_INDEX, BONE_ORDER, bone_labels, current_index, index_for_group,
+            )
+            from thedas_io.export import ITEMS, export_bytes
+            from thedas_io.geometry import decode_chunk
+            from thedas_io.msh.description import MSHReader
+
+            item = ITEMS["c_corspidr_0.msh"]
+            src = MSHReader(item["raw"]).mesh
+            idx, obj = next((i, o) for i, (o, _) in enumerate(item["objects"])
+                            if o.get("thedas_io_bone_index"))
+            arm = next(m.object for m in obj.modifiers if m.type == "ARMATURE")
+            labels = bone_labels(obj)
+            group = next(g for g in obj.vertex_groups if g.name in labels)
+            bone = group.name
+            local = labels[bone]
+
+            group.add([v.index for v in obj.data.vertices[:3]], 0.123, "REPLACE")
+            mapping = dict(obj.get(BONE_INDEX) or {})
+            mapping.pop(bone, None)
+            obj[BONE_INDEX] = mapping
+            bpy.context.view_layer.update()
+            exported = MSHReader(export_bytes(item)).mesh
+            groups = decode_chunk(exported, exported.chunks[idx])["groups"]
+
+            other = next(b for b in labels if b != bone)
+            bpy.context.view_layer.objects.active = obj
+            obj.select_set(True)
+            picked = sorted(bpy.ops.thedas_io.pick_group_bone(group=group.name, bone=other))
+
+            out = {
+                "order": len(obj.get(BONE_ORDER) or []),
+                "globals": sum(pb.get("thedas_io_bone_global") is not None
+                               for pb in arm.pose.bones),
+                "resolved": index_for_group(obj, bone) == local,
+                "exported": local in groups,
+                "weights": len(groups.get(local, [])),
+                "picked": picked,
+                "picked_ok": current_index(obj, group.name) == labels[other],
+            }
+            mmh_cleanup()
+            return out
+        """)
+    )
+    assert result["order"] == 64
+    assert result["globals"] >= 60
+    assert result["resolved"] is True
+    assert result["exported"] is True
+    assert result["weights"] >= 3
+    assert result["picked"] == ["FINISHED"]
+    assert result["picked_ok"] is True

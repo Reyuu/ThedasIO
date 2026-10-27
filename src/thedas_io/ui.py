@@ -20,6 +20,11 @@ from .blender_materials import (
     apply_materials,  # noqa: F401 - public helper for tests and scripts
     build_material,  # noqa: F401 - public helper for tests and scripts
 )
+from .bone_map import (
+    THEDAS_IO_OT_auto_map_bones,
+    THEDAS_IO_OT_pick_group_bone,
+    THEDAS_IO_PT_bone_map,
+)
 from .builders import (  # noqa: F401 - public helpers for tests and scripts
     build_chunk_object,
     build_hierarchy,
@@ -73,6 +78,9 @@ from .textures import (
 
 _CLASSES: tuple = (
     THEDAS_IO_AssetItem,
+    THEDAS_IO_PT_bone_map,
+    THEDAS_IO_OT_pick_group_bone,
+    THEDAS_IO_OT_auto_map_bones,
     THEDAS_IO_ExportItem,
     THEDAS_IO_RenameItem,
     THEDAS_IO_UL_assets,

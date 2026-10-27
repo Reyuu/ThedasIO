@@ -120,6 +120,9 @@ def test_register_unregister():
     ext.register()
     assert fake_bpy.bpy.utils.registered == [
         ui.THEDAS_IO_AssetItem,
+        ui.THEDAS_IO_PT_bone_map,
+        ui.THEDAS_IO_OT_pick_group_bone,
+        ui.THEDAS_IO_OT_auto_map_bones,
         ui.THEDAS_IO_ExportItem,
         ui.THEDAS_IO_RenameItem,
         ui.THEDAS_IO_UL_assets,

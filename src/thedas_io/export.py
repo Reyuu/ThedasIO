@@ -17,6 +17,7 @@ from nvtt.surface import Surface
 from PIL import Image
 
 from . import tnt
+from .bone_map import bone_labels
 from .fsio import write_bytes_atomic
 from .geometry import (
     FORMATS,
@@ -1090,13 +1091,19 @@ def _blender_state(obj: Any) -> dict:
         normals = per_vertex(lambda i: tuple(corners[i].vector)[:3])
     bone_map = dict(obj.get("thedas_io_bone_index") or {})
     rename_map = _bone_rename_map(obj, bone_map)
+    fallback = bone_labels(obj)
     weights: list = [{} for _ in range(n)]
     for v in data.vertices:
         for g in v.groups:
             name = obj.vertex_groups[g.group].name
             bone = _bone_index(name, bone_map, rename_map)
             if bone is None:
-                raise ValueError(f"{obj.name}: vertex group {name!r} has no bone index")
+                bone = fallback.get(name)
+            if bone is None:
+                raise ValueError(
+                    f"{obj.name}: vertex group {name!r} has no bone; "
+                    "pick one in Object Properties > ThedasIO Bone Map"
+                )
             weights[v.index][bone] = g.weight
 
     return {
