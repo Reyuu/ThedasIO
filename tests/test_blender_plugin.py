@@ -957,6 +957,21 @@ def test_autoload_leaves_nonempty_list(tmp_path):
     assert [i.filename for i in scene.thedas_io_assets] == ["keep.msh"]
 
 
+def test_asset_path_helpers():
+    from thedas_io.panels import _path_tail, _wrap_path
+
+    long = (
+        r"F:\SteamLibrary\steamapps\common\Dragon Age II\addins"
+        r"\da2_mtx_mag\core\data\artfp.erf"
+    )
+    assert _path_tail("art/characters/playercharacter/humanfemale/arm_magd.mmh") == (
+        "humanfemale/arm_magd.mmh"
+    )
+    assert _wrap_path(long)
+    assert "\\".join(_wrap_path(long)) == long
+    assert all(len(line) <= 50 for line in _wrap_path(long) if "\\" not in line)
+
+
 def test_draw_item_columns():
     from types import SimpleNamespace
 
@@ -965,9 +980,19 @@ def test_draw_item_columns():
     ul = cast(Any, ui.THEDAS_IO_UL_assets())
     ul.layout_type = "DEFAULT"
     layout = FakeLayout()
-    item = SimpleNamespace(filename="hf_arm_hvya_0.mmh", ext=".mmh", package="modelhierarchies.erf")
+    item = SimpleNamespace(
+        filename="hf_arm_hvya_0.mmh",
+        ext=".mmh",
+        package="modelhierarchies.erf",
+        resource="art/characters/humanfemale/hf_arm_hvya_0.mmh",
+    )
     ul.draw_item(SimpleNamespace(), layout, None, item, 0, None, "", 0)
-    assert layout.labels == ["hf_arm_hvya_0", "mmh", "modelhierarchies.erf"]
+    assert layout.labels == [
+        "hf_arm_hvya_0",
+        "mmh",
+        "humanfemale/hf_arm_hvya_0.mmh",
+        "modelhierarchies.erf",
+    ]
     bare = FakeLayout()
     ul.draw_item(
         SimpleNamespace(),
@@ -979,7 +1004,7 @@ def test_draw_item_columns():
         "",
         0,
     )
-    assert bare.labels == ["x", "—", "—"]
+    assert bare.labels == ["x", "-", "-", "-"]
 
 
 def test_scan_assets(tmp_path):

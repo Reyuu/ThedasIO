@@ -173,6 +173,7 @@ def _fill_assets(
         item.filename = r["filename"]
         item.ext = r["ext"]
         item.path = r["path"]
+        item.resource = r.get("resource") or ""
         h = int(r.get("name_hash") or 0)
         item.name_hash = f"{h & 0xFFFFFFFFFFFFFFFF:016x}" if h else ""
     try:

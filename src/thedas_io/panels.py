@@ -33,11 +33,38 @@ def _on_use_toggled(self: Any, context: Any) -> None:
     _sync_rename_later()
 
 
+def _path_tail(value: str, keep: int = 2) -> str:
+    parts = [part for part in value.replace("\\", "/").split("/") if part]
+    return "/".join(parts[-keep:]) if len(parts) > 1 else ""
+
+
+def _wrap_path(value: str, width: int = 50) -> list:
+    # split only on separators, so every character of the path stays visible
+    parts = [part for part in value.replace("/", "\\").split("\\") if part]
+    lines: list = []
+    line = ""
+    for part in parts:
+        candidate = part if not line else f"{line}\\{part}"
+        if line and len(candidate) > width:
+            lines.append(line)
+            line = part
+        else:
+            line = candidate
+    return lines + [line] if line else lines
+
+
+def _path_label(layout: Any, label: str, value: str) -> None:
+    for i, line in enumerate(_wrap_path(value)):
+        prefix = f"{label}: " if i == 0 else " " * (len(label) + 2)
+        layout.label(text=prefix + line)
+
+
 class THEDAS_IO_AssetItem(bpy.types.PropertyGroup):
     package: bpy.props.StringProperty()  # type: ignore
     filename: bpy.props.StringProperty()  # type: ignore
     ext: bpy.props.StringProperty()  # type: ignore
     path: bpy.props.StringProperty()  # type: ignore
+    resource: bpy.props.StringProperty()  # type: ignore
     # DA2 entries are named by hash only, so extraction needs it back.
     # 64-bit values do not fit a bpy IntProperty, so keep it as hex text.
     name_hash: bpy.props.StringProperty()  # type: ignore
@@ -61,8 +88,8 @@ class THEDAS_IO_RenameItem(bpy.types.PropertyGroup):
 
 
 class THEDAS_IO_UL_assets(bpy.types.UIList):
-    # filename, extension, package columns, header drawn by panel
-    COLUMNS = (0.55, 0.15, 0.30)
+    # filename, extension, resource tail, archive
+    COLUMNS = (0.34, 0.10, 0.34, 0.22)
 
     def draw_item(
         self: Any,
@@ -79,7 +106,7 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
         if item is None:
             return
         if self.layout_type == "GRID":
-            layout.label(text=f"{item.filename}  ({item.package or '—'})")
+            layout.label(text=f"{item.filename}  ({item.package or '-'})")
             return
         name, ext = item.filename, item.ext or ""
         if ext and name.lower().endswith(ext.lower()):
@@ -88,8 +115,13 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
         split = layout.split(factor=self.COLUMNS[0], align=True)
         split.label(text=name)
         split = split.split(factor=self.COLUMNS[1] / (1.0 - self.COLUMNS[0]), align=True)
-        split.label(text=ext.lstrip(".") or "—")
-        split.label(text=item.package or "—")
+        split.label(text=ext.lstrip(".") or "-")
+        split = split.split(
+            factor=self.COLUMNS[2] / (1.0 - self.COLUMNS[0] - self.COLUMNS[1]),
+            align=True,
+        )
+        split.label(text=_path_tail(getattr(item, "resource", "")) or "-")
+        split.label(text=item.package or "-")
 
     @classmethod
     def draw_header(cls: Any, layout: Any) -> None:
@@ -97,7 +129,12 @@ class THEDAS_IO_UL_assets(bpy.types.UIList):
         split.label(text="File")
         split = split.split(factor=cls.COLUMNS[1] / (1.0 - cls.COLUMNS[0]), align=True)
         split.label(text="Type")
-        split.label(text="Package")
+        split = split.split(
+            factor=cls.COLUMNS[2] / (1.0 - cls.COLUMNS[0] - cls.COLUMNS[1]),
+            align=True,
+        )
+        split.label(text="Resource")
+        split.label(text="Archive")
 
 
 class THEDAS_IO_UL_export(bpy.types.UIList):
@@ -219,6 +256,16 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
                 "thedas_io_index",
                 rows=8,
             )
+            assets = getattr(scene, "thedas_io_assets", None)
+            if assets:
+                index = max(0, min(int(getattr(scene, "thedas_io_index", 0) or 0), len(assets) - 1))
+                selected = assets[index]
+                box = self.layout.box()
+                box.label(text=f"Selected: {getattr(selected, 'filename', '')}")
+                _path_label(box, "Archive", getattr(selected, "path", ""))
+                resource = getattr(selected, "resource", "")
+                if resource and resource != getattr(selected, "filename", ""):
+                    _path_label(box, "Resource", resource)
 
             limit = _asset_limit(context)
             total = getattr(scene, "thedas_io_assets_total", len(scene.thedas_io_assets))

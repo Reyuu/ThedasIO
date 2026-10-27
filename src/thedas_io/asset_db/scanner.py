@@ -11,7 +11,7 @@ from ..erf.description import MAGIC_V3, ERFReader, geometry
 SCAN_EXTS = {".rim", ".erf", ".crf", ".rimp"}
 LOOSE_EXTS = {".msh", ".mmh", ".mao", ".dds", ".tga"}
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path, prio, name_hash);"
+    "CREATE TABLE IF NOT EXISTS assets(package, filename, ext, path, prio, name_hash, resource);"
     "CREATE INDEX IF NOT EXISTS idx_assets_ext_name ON assets(ext, filename);"
 )
 
@@ -43,6 +43,18 @@ def fnv1(text: str) -> int:
 def _s64(h: int) -> int:
     # SQLite INTEGER is signed 64-bit; fold unsigned FNV hashes into range.
     return h - (1 << 64) if h >= (1 << 63) else h
+
+
+def _ensure_columns(con: sqlite3.Connection) -> None:
+    # databases written by older builds lack these; add them before any SELECT
+    cols = {row[1] for row in con.execute("PRAGMA table_info(assets)")}
+    for name, decl in (
+        ("prio", "INTEGER"),
+        ("name_hash", "INTEGER"),
+        ("resource", "TEXT"),
+    ):
+        if name not in cols:
+            con.execute(f"ALTER TABLE assets ADD COLUMN {name} {decl}")
 
 
 def _db_path(path: Any = None, game: str | None = None) -> Path:
@@ -214,6 +226,7 @@ def _archive_rows(path: Any, prio: int) -> list:
                     str(path),
                     prio,
                     _s64(getattr(e, "name_hash", 0)),
+                    name if ("\\" in name or "/" in name) else "",
                 )
             )
         return rows
@@ -236,6 +249,8 @@ def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None 
             con.execute("ALTER TABLE assets ADD COLUMN prio INTEGER")
         if "name_hash" not in cols:  # a database written before DA2 hash indexing
             con.execute("ALTER TABLE assets ADD COLUMN name_hash INTEGER")
+        if "resource" not in cols:  # full internal path, recovered from MMH 6005
+            con.execute("ALTER TABLE assets ADD COLUMN resource TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_assets_namehash ON assets(name_hash)")
         con.execute("DELETE FROM assets")
 
@@ -258,8 +273,9 @@ def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None 
             prio = _priority(path, root_i, index)
             if suffix not in SCAN_EXTS:
                 con.execute(
-                    "INSERT INTO assets VALUES (?,?,?,?,?,?)",
-                    (None, path.name, suffix, str(path), prio, 0),
+                    "INSERT INTO assets(package, filename, ext, path, prio, name_hash, resource) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (None, path.name, suffix, str(path), prio, 0, path.name),
                 )
             else:
                 files += 1
@@ -270,7 +286,11 @@ def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None 
                     skipped.append(str(path))
                     rows = []
                 entries += len(rows)
-                con.executemany("INSERT INTO assets VALUES (?,?,?,?,?,?)", rows)
+                con.executemany(
+                    "INSERT INTO assets(package, filename, ext, path, prio, name_hash, resource) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    rows,
+                )
             if progress is not None:
                 progress(i + 1, total)
         # DA2 archives store FNV-1 path hashes, not filenames. Name
@@ -278,7 +298,10 @@ def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None 
         # as 'art\\vfx\\models\\vfx_shield_uhm.msh'), map FNV-1(path) -> basename,
         # and rename the matching mesh (etc.) entries so the asset list shows
         # real names.
-        _recover_names(con, game)
+        needs_paths = con.execute(
+            "SELECT 1 FROM assets WHERE ext='.mmh' AND (resource IS NULL OR resource='') LIMIT 1"
+        ).fetchone()
+        _recover_names(con, game, force=needs_paths is not None)
         con.commit()
     finally:
         # an error mid-scan must not leave the connection (and its DELETE)
@@ -295,7 +318,7 @@ def scan(root: Any, db_path: Any = None, progress: Any = None, game: str | None 
     }
 
 
-def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
+def _recover_names(con: sqlite3.Connection, game: str | None = None, force: bool = False) -> None:
     # DA2 only, since DAO stores real filenames in its archives. Names come from
     # three places, in this order: the MMH label 6005 (the real mesh path), the
     # bundled wordlist, then names recovered offline. The last two are already
@@ -308,7 +331,7 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
         "SELECT DISTINCT name_hash FROM assets WHERE filename LIKE 'hash_%' "
         "AND name_hash IS NOT NULL AND name_hash != 0"
     ).fetchall()
-    if not unresolved:
+    if not unresolved and not force:
         return
 
     from ..mmh.description import MMHReader
@@ -322,6 +345,7 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
         by_archive.setdefault(path, []).append((rowid, filename, name_hash))
 
     name_map: dict = {}  # mesh name_hash -> real basename
+    path_map: dict = {}  # mesh name_hash -> full internal path
     # MMH label 6005 paths
     for path, rows in by_archive.items():
         try:
@@ -354,9 +378,10 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
                     # the wrong kind of row.
                     stem = v[:-4] if v.lower().endswith(".msh") else v.rsplit(".", 1)[0]
                     for cand in (v, stem + ".mmh", stem + ".phy", stem + ".mao"):
-                        name_map.setdefault(
-                            _s64(fnv1(cand)), cand.replace("\\", "/").rsplit("/", 1)[-1]
-                        )
+                        h = _s64(fnv1(cand))
+                        full = cand.replace("\\", "/")
+                        name_map.setdefault(h, full.rsplit("/", 1)[-1])
+                        path_map.setdefault(h, full)
         except (OSError, ValueError, struct.error, IndexError, KeyError):
             continue
 
@@ -368,6 +393,7 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
     # supplies the real extension, which the payload sniff could not always
     # derive (a .mor/.tnt/.cnv payload also parses as plain '.gff').
     hits = []
+    seen = set()
     for (h,) in unresolved:
         hit_leaf: Any = name_map.get(h)
         if hit_leaf is None:
@@ -375,18 +401,50 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None) -> None:
                 bundled = names()
             hit_leaf = bundled.get(h)
         if hit_leaf is not None:
-            hits.append((h, hit_leaf, Path(hit_leaf).suffix.lower()))
+            hits.append((h, hit_leaf, Path(hit_leaf).suffix.lower(), path_map.get(h, "")))
+            seen.add(h)
+    # already-named rows still need their full path on a backfill run
+    for h, full in path_map.items():
+        if h not in seen:
+            leaf = full.rsplit("/", 1)[-1]
+            hits.append((h, leaf, Path(leaf).suffix.lower(), full))
+    con.execute("DROP TABLE IF EXISTS _recovered")
     con.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _recovered(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT)"
+        "CREATE TEMP TABLE _recovered(h INTEGER PRIMARY KEY, leaf TEXT, ext TEXT, resource TEXT)"
     )
-    con.execute("DELETE FROM _recovered")
-    con.executemany("INSERT OR REPLACE INTO _recovered VALUES (?,?,?)", hits)
+    con.executemany("INSERT OR REPLACE INTO _recovered VALUES (?,?,?,?)", hits)
     con.execute(
         "UPDATE assets SET "
         "filename = (SELECT leaf FROM _recovered WHERE h = name_hash), "
         "ext = (SELECT ext FROM _recovered WHERE h = name_hash) "
         "WHERE name_hash IN (SELECT h FROM _recovered) AND filename LIKE 'hash_%'"
     )
+    con.execute(
+        "UPDATE assets SET resource = "
+        "(SELECT resource FROM _recovered WHERE h = name_hash) "
+        "WHERE name_hash IN (SELECT h FROM _recovered WHERE resource != '')"
+    )
+
+
+def backfill_resources(db_path: Any = None, game: str | None = None) -> int:
+    # recover full internal paths for an already-scanned DA2 database without
+    # deleting and rebuilding it; the next asset refresh shows the new column
+    if str(game or "").upper() != "DA2":
+        return 0
+    db = _db_path(db_path, game)
+    if not db.exists():
+        return 0
+    con = _connect(db)
+    try:
+        _ensure_columns(con)
+        _recover_names(con, game, force=True)
+        con.commit()
+        row = con.execute(
+            "SELECT COUNT(*) FROM assets WHERE resource IS NOT NULL AND resource != ''"
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        con.close()
 
 
 def payload(archive: Any, name: str, name_hash: Any = None) -> bytes:
@@ -474,7 +532,7 @@ def find(
     where, params = _where(_norm_ext(ext), name, package)
 
     # rowid order = scan insertion order, so pages are stable
-    sql = f"SELECT package, filename, ext, path, name_hash FROM assets{where} ORDER BY rowid"
+    sql = f"SELECT package, filename, ext, path, name_hash, resource FROM assets{where} ORDER BY rowid"
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params = [*params, limit, offset]
@@ -482,6 +540,7 @@ def find(
     con = _connect(db)
     con.row_factory = sqlite3.Row
     try:
+        _ensure_columns(con)
         out = [dict(r) for r in con.execute(sql, params)]
     finally:
         con.close()
@@ -500,8 +559,9 @@ def find_exact(name: str, db_path: Any = None, game: str | None = None) -> dict 
     con = _connect(db)
     con.row_factory = sqlite3.Row
     try:
+        _ensure_columns(con)
         row = con.execute(
-            "SELECT package, filename, ext, path, name_hash FROM assets "
+            "SELECT package, filename, ext, path, name_hash, resource FROM assets "
             "WHERE ext = ? AND filename = ? COLLATE NOCASE "
             "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
             (_norm_ext(Path(name).suffix), name),
@@ -513,7 +573,7 @@ def find_exact(name: str, db_path: Any = None, game: str | None = None) -> dict 
             # DAO rows all carry hash 0, so this never matches them
             wanted = _s64(fnv1(str(name).lower()))
             row = con.execute(
-                "SELECT package, filename, ext, path, name_hash FROM assets "
+                "SELECT package, filename, ext, path, name_hash, resource FROM assets "
                 "WHERE name_hash = ? "
                 "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
                 (wanted,),

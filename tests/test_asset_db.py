@@ -7,7 +7,16 @@ from typing import ClassVar
 import pytest
 
 from conftest import archive, encrypted_archive, zlib_archive
-from thedas_io.asset_db.scanner import _s64, find, find_exact, fnv1, load, payload, scan
+from thedas_io.asset_db.scanner import (
+    _s64,
+    backfill_resources,
+    find,
+    find_exact,
+    fnv1,
+    load,
+    payload,
+    scan,
+)
 from thedas_io.assets import extract
 from thedas_io.erf.description import MAGIC, MAGIC_V3, ERFReader, ERFWriter
 
@@ -258,6 +267,18 @@ def test_da2_recovers_hash_only_names(tmp_path, monkeypatch):
         payload(row["path"], row["filename"], f"{row['name_hash'] & 0xFFFFFFFFFFFFFFFF:016x}")
         == gff_mmh
     )
+    resources = {r["filename"]: r["resource"] for r in load(db)}
+    assert resources["thing.mmh"] == "art/models/thing.mmh"
+    assert resources["thing.msh"] == "art/models/thing.msh"
+    assert resources["thing.phy"] == "art/models/thing.phy"
+    assert resources["thing.mao"] == "art/models/thing.mao"
+    # a path already in the db can be recovered without a full rescan
+    writer = sqlite3.connect(db)
+    writer.execute("UPDATE assets SET resource = NULL")
+    writer.commit()
+    writer.close()
+    assert backfill_resources(db, game="DA2") == 4
+    assert {r["filename"]: r["resource"] for r in load(db)}["thing.mmh"] == "art/models/thing.mmh"
 
 
 def test_da2_extension_comes_from_the_entry_type_hash(tmp_path):
@@ -385,7 +406,10 @@ def test_find_reads_while_a_write_holds_the_database(tmp_path):
     scan(tmp_path, db)
     writer = sqlite3.connect(db)
     writer.execute("BEGIN EXCLUSIVE")
-    writer.execute("INSERT INTO assets VALUES (NULL, 'late.txt', '.txt', 'x', 0, 0)")
+    writer.execute(
+        "INSERT INTO assets(package, filename, ext, path, prio, name_hash, resource) "
+        "VALUES (NULL, 'late.txt', '.txt', 'x', 0, 0, '')"
+    )
     try:
         assert [r["filename"] for r in find(db_path=db)] == ["a.txt"]
     finally:
