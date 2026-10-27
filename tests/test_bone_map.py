@@ -84,6 +84,42 @@ def test_armature_order_is_the_fallback():
     assert bone_map.index_for_group(obj, "B") == 1
 
 
+def test_bone_entries_include_unindexed_bones():
+    arm = _arm()
+    obj = Obj([11, 33], arm)
+    assert bone_map.bone_entries(obj) == [("A", 0), ("B", None), ("C", 1)]
+
+
+def test_pick_menu_lists_every_bone_and_filters():
+    arm = _arm()
+    obj = Obj([11, 33], arm)
+    op = bone_map.THEDAS_IO_OT_pick_group_bone()
+    op.search = ""
+    context = SimpleNamespace(object=obj)
+    assert [item[0] for item in bone_map._bone_items(op, context)] == [
+        bone_map._UNMAPPED,
+        "A",
+        "B",
+        "C",
+    ]
+    op.search = "b"
+    assert [item[0] for item in bone_map._bone_items(op, context)] == [
+        bone_map._UNMAPPED,
+        "B",
+    ]
+
+
+def test_manual_index_override_writes_any_bone():
+    arm = _arm()
+    obj = Obj([11, 33], arm)
+    op = bone_map.THEDAS_IO_OT_pick_group_bone()
+    op.group = "custom"
+    op.bone = "B"
+    op.index = 7
+    assert op.execute(SimpleNamespace(object=obj)) == {"FINISHED"}
+    assert bone_map.current_index(obj, "custom") == 7
+
+
 def test_mapping_write_and_clear():
     obj = Obj([11], _arm())
     assert bone_map.current_index(obj, "A") is None

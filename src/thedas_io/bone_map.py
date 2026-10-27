@@ -111,6 +111,19 @@ def bone_labels(obj: Any) -> dict[str, int]:
     return out
 
 
+def bone_entries(obj: Any) -> list[tuple[str, int | None]]:
+    # every pose bone, with None when the mesh's order cannot address it
+    arm = armature_of(obj)
+    if arm is None:
+        return []
+    labels = bone_labels(obj)
+    try:
+        bones = list(arm.pose.bones)
+    except (AttributeError, ReferenceError):
+        return []
+    return [(str(bone.name), labels.get(str(bone.name))) for bone in bones]
+
+
 def current_index(obj: Any, group_name: str) -> int | None:
     try:
         mapping = dict(obj.get(BONE_INDEX) or {})
@@ -132,13 +145,26 @@ def set_bone_index(obj: Any, group_name: str, local: int | None) -> None:
     obj[BONE_INDEX] = mapping
 
 
+def _on_search(self: Any, context: Any) -> None:
+    # a filtered-out selection is invalid; reset before the enum is rebuilt
+    self.bone = _UNMAPPED
+    if getattr(context, "area", None) is not None:
+        context.area.tag_redraw()
+
+
 def _bone_items(_self: Any, context: Any) -> list:
     obj = getattr(context, "object", None)
     items = [(_UNMAPPED, "Unmapped", "Remove this group's bone mapping")]
     if obj is None or getattr(obj, "type", "") != "MESH":
         return items
-    for name, local in bone_labels(obj).items():
-        items.append((name, f"{name}  (#{local})", f"Bone index {local}"))
+    query = str(getattr(_self, "search", "") or "").strip().lower()
+    for name, local in bone_entries(obj):
+        if query and query not in name.lower():
+            continue
+        if local is None:
+            items.append((name, f"{name}  (no index)", "Not in this mesh's bone order"))
+        else:
+            items.append((name, f"{name}  (#{local})", f"Bone index {local}"))
     return items
 
 
@@ -148,9 +174,20 @@ class THEDAS_IO_OT_pick_group_bone(bpy.types.Operator):
     bl_description = "Save this vertex group as a bone index in the exported .msh"
     bl_options: ClassVar[set[str]] = {"REGISTER", "UNDO"}  # type: ignore
     group: bpy.props.StringProperty(name="Vertex group")  # type: ignore
+    search: bpy.props.StringProperty(  # type: ignore
+        name="Search",
+        description="Filter the bone list by name",
+        update=_on_search,
+    )
     bone: bpy.props.EnumProperty(  # type: ignore
         name="Bone",
         items=_bone_items,
+    )
+    index: bpy.props.IntProperty(  # type: ignore
+        name="Bone index",
+        description="Advanced: raw MSH bone index; -1 uses the picked bone",
+        default=-1,
+        min=-1,
     )
 
     @classmethod
@@ -168,18 +205,32 @@ class THEDAS_IO_OT_pick_group_bone(bpy.types.Operator):
         layout.label(text=f"Vertex group: {self.group}")
         if not bone_labels(context.object):
             layout.label(text="No armature bone order on this mesh")
+        layout.prop(self, "search")
         layout.prop(self, "bone")
+        layout.prop(self, "index")
+        if (
+            self.bone != _UNMAPPED
+            and self.index < 0
+            and self.bone not in bone_labels(context.object)
+        ):
+            layout.label(text="This bone has no stored MSH index; set one manually.")
 
     def execute(self, context: Any) -> set:
         obj = getattr(context, "object", None)
         if obj is None:
             return {"CANCELLED"}
+        if self.index >= 0:
+            set_bone_index(obj, self.group, self.index)
+            return {"FINISHED"}
         if self.bone == _UNMAPPED:
             set_bone_index(obj, self.group, None)
             return {"FINISHED"}
         local = index_for_bone(obj, armature_of(obj), self.bone)
         if local is None:
-            self.report({"ERROR"}, f"{self.bone!r} is not in this mesh's bone order")
+            self.report(
+                {"ERROR"},
+                f"{self.bone!r} has no MSH index; set Bone index manually",
+            )
             return {"CANCELLED"}
         set_bone_index(obj, self.group, local)
         return {"FINISHED"}
@@ -241,6 +292,10 @@ class THEDAS_IO_PT_bone_map(bpy.types.Panel):
             return
         if arm.get("thedas_io_bone_order_mixed"):
             layout.label(text="This rig mixes bone orders. Map groups on the imported mesh.")
+        labels = bone_labels(obj)
+        total = len(arm.pose.bones)
+        if len(labels) < total:
+            layout.label(text=f"{total - len(labels)} bone(s) are outside this mesh's bone order")
 
         layout.label(text="Each group is saved as a bone index in the .msh on export.")
         layout.label(text="Pick a bone per group. Auto-map matches groups with the same bone name.")
