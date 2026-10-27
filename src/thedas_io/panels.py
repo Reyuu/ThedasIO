@@ -38,25 +38,10 @@ def _path_tail(value: str, keep: int = 2) -> str:
     return "/".join(parts[-keep:]) if len(parts) > 1 else ""
 
 
-def _wrap_path(value: str, width: int = 50) -> list:
-    # split only on separators, so every character of the path stays visible
+def _short_path(value: str, keep: int = 3) -> str:
     parts = [part for part in value.replace("/", "\\").split("\\") if part]
-    lines: list = []
-    line = ""
-    for part in parts:
-        candidate = part if not line else f"{line}\\{part}"
-        if line and len(candidate) > width:
-            lines.append(line)
-            line = part
-        else:
-            line = candidate
-    return lines + [line] if line else lines
-
-
-def _path_label(layout: Any, label: str, value: str) -> None:
-    for i, line in enumerate(_wrap_path(value)):
-        prefix = f"{label}: " if i == 0 else " " * (len(label) + 2)
-        layout.label(text=prefix + line)
+    tail = "\\".join(parts[-keep:])
+    return tail if len(parts) <= keep else f"...\\{tail}"
 
 
 class THEDAS_IO_AssetItem(bpy.types.PropertyGroup):
@@ -260,12 +245,17 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
             if assets:
                 index = max(0, min(int(getattr(scene, "thedas_io_index", 0) or 0), len(assets) - 1))
                 selected = assets[index]
-                box = self.layout.box()
-                box.label(text=f"Selected: {getattr(selected, 'filename', '')}")
-                _path_label(box, "Archive", getattr(selected, "path", ""))
+                path = getattr(selected, "path", "")
                 resource = getattr(selected, "resource", "")
+                lines = []
+                if path:
+                    lines.append(f"Archive: {_short_path(path, 4)}")
                 if resource and resource != getattr(selected, "filename", ""):
-                    _path_label(box, "Resource", resource)
+                    lines.append(f"Resource: {_short_path(resource, 3)}")
+                if lines:
+                    box = self.layout.box()
+                    for line in lines:
+                        box.label(text=line)
 
             limit = _asset_limit(context)
             total = getattr(scene, "thedas_io_assets_total", len(scene.thedas_io_assets))

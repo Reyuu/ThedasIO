@@ -961,18 +961,17 @@ def test_autoload_leaves_nonempty_list(tmp_path):
 
 
 def test_asset_path_helpers():
-    from thedas_io.panels import _path_tail, _wrap_path
+    from thedas_io.panels import _path_tail, _short_path
 
-    long = (
-        r"F:\SteamLibrary\steamapps\common\Dragon Age II\addins"
-        r"\da2_mtx_mag\core\data\artfp.erf"
-    )
     assert _path_tail("art/characters/playercharacter/humanfemale/arm_magd.mmh") == (
         "humanfemale/arm_magd.mmh"
     )
-    assert _wrap_path(long)
-    assert "\\".join(_wrap_path(long)) == long
-    assert all(len(line) <= 50 for line in _wrap_path(long) if "\\" not in line)
+    long = (
+        r"F:\SteamLibrary\steamapps\common\Dragon Age II\packages"
+        r"\core\data\artfp.erf"
+    )
+    assert _short_path(long, 4) == r"...\packages\core\data\artfp.erf"
+    assert _short_path("art/models/thing.mmh") == r"art\models\thing.mmh"
 
 
 def test_draw_item_columns():
