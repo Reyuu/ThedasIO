@@ -95,7 +95,14 @@ def test_pick_menu_lists_every_bone_and_filters():
     obj = Obj([11, 33], arm)
     op = bone_map.THEDAS_IO_OT_pick_group_bone()
     op.search = ""
-    context = SimpleNamespace(object=obj)
+    scene = SimpleNamespace(thedas_io_allow_unindexed_bones=False)
+    context = SimpleNamespace(object=obj, scene=scene)
+    assert [item[0] for item in bone_map._bone_items(op, context)] == [
+        bone_map._UNMAPPED,
+        "A",
+        "C",
+    ]
+    scene.thedas_io_allow_unindexed_bones = True
     assert [item[0] for item in bone_map._bone_items(op, context)] == [
         bone_map._UNMAPPED,
         "A",
@@ -116,7 +123,8 @@ def test_manual_index_override_writes_any_bone():
     op.group = "custom"
     op.bone = "B"
     op.index = 7
-    assert op.execute(SimpleNamespace(object=obj)) == {"FINISHED"}
+    scene = SimpleNamespace(thedas_io_allow_unindexed_bones=True)
+    assert op.execute(SimpleNamespace(object=obj, scene=scene)) == {"FINISHED"}
     assert bone_map.current_index(obj, "custom") == 7
 
 

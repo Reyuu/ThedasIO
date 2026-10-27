@@ -184,6 +184,7 @@ _SCENE_PROPS = (
     "thedas_io_disk_file",
     "thedas_io_disk_local",
     "thedas_io_weld",
+    "thedas_io_allow_unindexed_bones",
     "thedas_io_collision_bone",
     "thedas_io_sp_split_packed",
     "thedas_io_sp_keep_resolution",
@@ -300,6 +301,12 @@ def register() -> None:
         "vertex, so editing the surface does not crack the seams. "
         "Off keeps every MSH row separate, which is what you "
         "want when re-UVing or when the original split matters",
+    )
+    bpy.types.Scene.thedas_io_allow_unindexed_bones = bpy.props.BoolProperty(  # type: ignore
+        default=False,
+        description="Show armature bones that are not in this mesh's bone "
+        "order and allow entering a raw MSH bone index. A wrong index "
+        "weights the mesh to a different bone",
     )
     # which bone an added collision hangs off. Empty means "whatever is
     # selected", which is what the operator already did; setting it pins the

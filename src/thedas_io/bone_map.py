@@ -145,6 +145,11 @@ def set_bone_index(obj: Any, group_name: str, local: int | None) -> None:
     obj[BONE_INDEX] = mapping
 
 
+def _allow_unindexed(context: Any) -> bool:
+    scene = getattr(context, "scene", None)
+    return bool(getattr(scene, "thedas_io_allow_unindexed_bones", False))
+
+
 def _on_search(self: Any, context: Any) -> None:
     # a filtered-out selection is invalid; reset before the enum is rebuilt
     self.bone = _UNMAPPED
@@ -158,13 +163,15 @@ def _bone_items(_self: Any, context: Any) -> list:
     if obj is None or getattr(obj, "type", "") != "MESH":
         return items
     query = str(getattr(_self, "search", "") or "").strip().lower()
+    allow = _allow_unindexed(context)
     for name, local in bone_entries(obj):
         if query and query not in name.lower():
             continue
         if local is None:
-            items.append((name, f"{name}  (no index)", "Not in this mesh's bone order"))
-        else:
-            items.append((name, f"{name}  (#{local})", f"Bone index {local}"))
+            if allow:
+                items.append((name, f"{name}  (no index)", "Not in this mesh's bone order"))
+            continue
+        items.append((name, f"{name}  (#{local})", f"Bone index {local}"))
     return items
 
 
@@ -205,21 +212,24 @@ class THEDAS_IO_OT_pick_group_bone(bpy.types.Operator):
         layout.label(text=f"Vertex group: {self.group}")
         if not bone_labels(context.object):
             layout.label(text="No armature bone order on this mesh")
+        allow = _allow_unindexed(context)
         layout.prop(self, "search")
         layout.prop(self, "bone")
-        layout.prop(self, "index")
-        if (
-            self.bone != _UNMAPPED
-            and self.index < 0
-            and self.bone not in bone_labels(context.object)
-        ):
-            layout.label(text="This bone has no stored MSH index; set one manually.")
+        if allow:
+            layout.prop(self, "index")
+            if (
+                self.bone != _UNMAPPED
+                and self.index < 0
+                and self.bone not in bone_labels(context.object)
+            ):
+                layout.label(text="This bone has no stored MSH index; set one manually.")
 
     def execute(self, context: Any) -> set:
         obj = getattr(context, "object", None)
         if obj is None:
             return {"CANCELLED"}
-        if self.index >= 0:
+        allow = _allow_unindexed(context)
+        if allow and self.index >= 0:
             set_bone_index(obj, self.group, self.index)
             return {"FINISHED"}
         if self.bone == _UNMAPPED:
@@ -227,10 +237,12 @@ class THEDAS_IO_OT_pick_group_bone(bpy.types.Operator):
             return {"FINISHED"}
         local = index_for_bone(obj, armature_of(obj), self.bone)
         if local is None:
-            self.report(
-                {"ERROR"},
-                f"{self.bone!r} has no MSH index; set Bone index manually",
+            message = (
+                f"{self.bone!r} has no MSH index; set Bone index manually"
+                if allow
+                else f"{self.bone!r} is not in this mesh's bone order"
             )
+            self.report({"ERROR"}, message)
             return {"CANCELLED"}
         set_bone_index(obj, self.group, local)
         return {"FINISHED"}
@@ -292,10 +304,20 @@ class THEDAS_IO_PT_bone_map(bpy.types.Panel):
             return
         if arm.get("thedas_io_bone_order_mixed"):
             layout.label(text="This rig mixes bone orders. Map groups on the imported mesh.")
+        layout.prop(
+            context.scene,
+            "thedas_io_allow_unindexed_bones",
+            text="Allow bone index assignment for unindexed bones",
+        )
         labels = bone_labels(obj)
         total = len(arm.pose.bones)
         if len(labels) < total:
-            layout.label(text=f"{total - len(labels)} bone(s) are outside this mesh's bone order")
+            if _allow_unindexed(context):
+                layout.label(text=f"{total - len(labels)} bone(s) need a manual MSH index")
+            else:
+                layout.label(
+                    text=f"{total - len(labels)} bone(s) are hidden; enable the checkbox above"
+                )
 
         layout.label(text="Each group is saved as a bone index in the .msh on export.")
         layout.label(text="Pick a bone per group. Auto-map matches groups with the same bone name.")
