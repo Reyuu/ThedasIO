@@ -193,6 +193,25 @@ def test_topology_changed_stays_value_error():
     assert issubclass(_TopologyChanged, ValueError)
 
 
+def test_pack_quantises_unit_channels_by_usage_not_dtype():
+    from thedas_io.export import _pack
+    from thedas_io.geometry import _norm8_rows
+
+    # UBYTE4N normal: -1..1 with the 128 bias, and the decoder reads it back
+    blob = _pack("<4B", [-1.0, 0.0, 1.0, 1.0], 3, 8)
+    assert struct.unpack("<4B", blob) == (1, 128, 255, 255)
+    assert _norm8_rows([struct.unpack("<4B", blob)])[0] == (-1.0, 0.0, 1.0)
+
+    # dtype 7 is a raw BLENDINDICES cell as well as a normalised normal, so the
+    # usage has to decide: scaling an index by 32767 put every vertex on one bone
+    blob = _pack("<4h", [0, 1, 63, 0], 2, 7)
+    assert struct.unpack("<4h", blob) == (0, 1, 63, 0)
+
+    # weights stay 0..1 into 0..255
+    blob = _pack("<4B", [0.0, 0.5, 1.0, 0.0], 1, 8)
+    assert struct.unpack("<4B", blob) == (0, 128, 255, 0)
+
+
 # --- end to end: subdivide one tri of a real sample through _msh_bytes ---
 
 from conftest import DATA_DIR

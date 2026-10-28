@@ -21,6 +21,12 @@ from .asset_db.scanner import leaf_name
 from .bone_map import bone_labels
 from .fsio import write_bytes_atomic
 from .geometry import (
+    COLOR_ATTRIBUTE as _COLOR_ATTRIBUTE,
+)
+from .geometry import (
+    COLOR_DTYPES as _COLOR_DTYPES,
+)
+from .geometry import (
     FORMATS,
     IDENTITY_QUAT,
     INDEX_FORMAT_U32,
@@ -44,6 +50,9 @@ from .geometry import (
 )
 from .geometry import (
     USAGE_BLENDWEIGHT as _USAGE_WEIGHT,
+)
+from .geometry import (
+    USAGE_COLOR as _USAGE_COLOR,
 )
 from .geometry import (
     USAGE_NORMAL as _USAGE_NORMAL,
@@ -1118,7 +1127,23 @@ def _blender_state(obj: Any) -> dict:
         ],
         "normals": normals,
         "weights": weights,
+        "colors": _live_colors(data, per_vertex),
     }
+
+
+def _live_colors(data: Any, per_vertex: Any) -> Any:
+    attrs = getattr(data, "color_attributes", None)
+    if attrs is None:
+        return None
+    layer = attrs.get(_COLOR_ATTRIBUTE)
+    if layer is None:
+        return None
+    try:
+        if layer.domain == "POINT":
+            return [tuple(c.color) for c in layer.data]
+        return per_vertex(lambda i, layer=layer: tuple(layer.data[i].color))
+    except (AttributeError, ReferenceError, IndexError, TypeError):
+        return None
 
 
 def _row_map(obj: Any, n_rows: int, n_verts: int) -> Any:
@@ -1219,6 +1244,7 @@ def _expand_rows(decoded: dict, obj: Any, bstate: dict) -> dict:
         "uvs": expanded_uvs,
         "normals": normals,
         "weights": [bstate["weights"][m[r]] for r in range(n)],
+        "colors": ([bstate["colors"][m[r]] for r in range(n)] if bstate.get("colors") else None),
         "tangent_loops": _loop_tangents(data, row_loop),
     }
 
@@ -1341,6 +1367,12 @@ def _chunk_edited(decoded: dict, state: dict, obj: Any) -> bool:
         and any(_normal_drift(a, b) for a, b in zip(state["normals"], decoded["normals"]))
     ):
         return True
+    if (
+        decoded.get("colors")
+        and state.get("colors")
+        and any(_drift(a, b, 1.5 / 255) for a, b in zip(state["colors"], decoded["colors"]))
+    ):
+        return True
 
     return _weights_edited(decoded, state)
 
@@ -1404,7 +1436,7 @@ def _patch_chunk(
             new = _encode_row(d, state, weights, vals, v, obj)
             if new is None:
                 continue
-            blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage)
+            blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage, d.dtype)
             vblob[start : start + len(blob)] = blob
             if d.usage == _USAGE_NORMAL or (
                 d.usage == _USAGE_POSITION and _drift(state["positions"][v], vals[:3])
@@ -1448,7 +1480,7 @@ def _patch_tangents(
             new = [t[0], t[1], t[2], 1.0] if d.usage == _USAGE_TANGENT else [b[0], b[1], b[2], 1.0]
             start = vbase + v * chunk.stride + d.offset
             vals, _ = _decode_row(d.dtype, base_blob, start)
-            blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage)
+            blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage, d.dtype)
             vblob[start : start + len(blob)] = blob
 
 
@@ -1462,18 +1494,26 @@ def _modelled_usages() -> set:
         _USAGE_INDICES,
         _USAGE_TANGENT,
         _USAGE_BINORMAL,
+        _USAGE_COLOR,
     }
 
 
 def _unmodelled_usages(chunk: Any) -> list:
     # Channels we would have to zero after a topology change. A rebuilt row
     # starts as zeros and only the modelled usages get written over them, so
-    # anything else in the chunk (PSIZE, vertex colour, fog, depth) silently
-    # became 0. Say so instead.
+    # anything else in the chunk (PSIZE, fog, depth) silently became 0. Say so
+    # instead. A colour channel counts as modelled only in a type we can encode.
     modelled = _modelled_usages()
-    return sorted(
-        {d.usage for d in chunk.declarators if not d.is_terminator and d.usage not in modelled}
-    )
+    bad = set()
+    for d in chunk.declarators:
+        if d.is_terminator:
+            continue
+        if d.usage == _USAGE_COLOR:
+            if d.dtype not in _COLOR_DTYPES:
+                bad.add(d.usage)
+        elif d.usage not in modelled:
+            bad.add(d.usage)
+    return sorted(bad)
 
 
 def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
@@ -1487,6 +1527,12 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
             f"{obj.name}: cannot rebuild this chunk, it stores vertex channels "
             f"this exporter does not model (usage {unmodelled}); make the edit "
             f"without changing the mesh topology"
+        )
+    has_color = any(d.usage == _USAGE_COLOR and not d.is_terminator for d in chunk.declarators)
+    if has_color and not bstate.get("colors"):
+        raise ValueError(
+            f"{obj.name}: vertex colour layer {_COLOR_ATTRIBUTE!r} is missing; "
+            "re-import the mesh so its stored mask comes back"
         )
 
     data = _evaluated_mesh(obj)
@@ -1536,19 +1582,21 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
             raise ValueError(f"{obj.name}: no encoder for declarator type {d.dtype}")
         enc.append((d, fmt, len(struct.unpack(fmt, bytes(struct.calcsize(fmt))))))
     vreg = bytearray()
+    colors = bstate.get("colors")
     for ri, (v, li) in enumerate(rows):
         rec = {
             "pos": positions[v],
             "weights": weights[v],
             "uvs": [tuple(data.uv_layers[i].data[li].uv) for i in range(ndecl_uv)],
             "normal": (tuple(corners[li].vector)[:3] if corners is not None else None),
+            "color": (colors[v] if colors else None),
         }
         row = bytearray(chunk.stride)
         for d, fmt, ncomp in enc:
             vals = _encode_fresh(d, rec, tloops, ri, obj)
             if vals is None:
                 continue
-            blob = _pack(fmt, (vals + [0.0] * ncomp)[:ncomp], d.usage)
+            blob = _pack(fmt, (vals + [0.0] * ncomp)[:ncomp], d.usage, d.dtype)
             row[d.offset : d.offset + len(blob)] = blob
         vreg += row
 
@@ -1588,6 +1636,10 @@ def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any) -> Any:
             return None
         v3 = entry[0] if d.usage == _USAGE_TANGENT else entry[1]
         return [v3[0], v3[1], v3[2], 1.0]
+    if d.usage == _USAGE_COLOR:
+        if rec["color"] is None:
+            return None
+        return _color_bytes(rec["color"])
     return None
 
 
@@ -1611,7 +1663,23 @@ def _encode_row(d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any) -
         return [w for _, w in _skin(weights[v])] + [0.0, 0.0, 0.0, 0.0]
     if d.usage == _USAGE_INDICES:
         return [b for b, _ in _skin(weights[v])] + [0, 0, 0, 0]
+    if d.usage == _USAGE_COLOR:
+        colors = state.get("colors")
+        if colors is None or d.dtype not in _COLOR_DTYPES:
+            return None
+        new = _color_bytes(colors[v])
+        # a byte of slack: the attribute holds the stored value exactly, so this
+        # only fires on a real repaint and keeps untouched rows byte-identical
+        if not any(abs(x - y) > 1 for x, y in zip(new, vals[: len(new)])):
+            return None
+        return new
     return None
+
+
+def _color_bytes(rgba: Any) -> list:
+    # Blender RGBA 0..1 -> the file's BGRA byte order
+    r, g, b, a = (min(max(float(c), 0.0), 1.0) for c in rgba[:4])
+    return [round(b * 255), round(g * 255), round(r * 255), round(a * 255)]
 
 
 def _skin(vertex_weights: dict) -> list:
@@ -1623,11 +1691,22 @@ def _skin(vertex_weights: dict) -> list:
     return [(b, round(float(w / total), 3)) for b, w in pairs]
 
 
-def _pack(fmt: str, values: Any, usage: int) -> bytes:
+def _pack(fmt: str, values: Any, usage: int, dtype: int = 0) -> bytes:
     if "f" in fmt or "e" in fmt:
         return struct.pack(fmt, *(float(v) for v in values))
-    scale = (255 if "B" in fmt else 32767) if usage == _USAGE_WEIGHT else 1
-    return struct.pack(fmt, *(round(float(v) * scale) for v in values))
+    unit = usage in (_USAGE_NORMAL, _USAGE_TANGENT, _USAGE_BINORMAL, _USAGE_WEIGHT)
+    if not unit:
+        low, high = (-32768, 32767) if dtype in (6, 7) else (0, 255)
+        return struct.pack(fmt, *(_clamp(round(float(v)), low, high) for v in values))
+    if dtype == 8:
+        if usage == _USAGE_WEIGHT:
+            return struct.pack(fmt, *(_clamp(round(float(v) * 255), 0, 255) for v in values))
+        return struct.pack(fmt, *(_clamp(round(float(v) * 127 + 128), 0, 255) for v in values))
+    return struct.pack(fmt, *(_clamp(round(float(v) * 32767), -32768, 32767) for v in values))
+
+
+def _clamp(value: Any, low: int, high: int) -> int:
+    return max(low, min(high, int(value)))
 
 
 def _rebounds(positions: Any, bounds: Any) -> Any:

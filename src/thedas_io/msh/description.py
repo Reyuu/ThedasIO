@@ -201,6 +201,7 @@ class Mesh:
         self.index_data = root.get(L_INDEX_DATA) or []
         self.index_format = root.get(L_INDEX_FORMAT)
         self.instanced_stream = root.get(L_INSTANCED_STREAM)
+        self.decl_size = DECL_STRUCT_SIZE
 
     def get_chunk(self, index: int) -> Any:
         if index < 0 or index >= len(self.chunks):
@@ -311,6 +312,7 @@ class MSHReader:
         # root lives at data offset 0
         self.root = gff.get_from_data_block(0, 0)
         self.mesh = Mesh(self.root)
+        self.mesh.decl_size = _decl_struct_size(gff)
 
     @property
     def name(self) -> Any:
@@ -381,6 +383,18 @@ def _chunk_unchanged(a: Any, orig: Any) -> bool:
     return all(a.cells.get(label) == cells.get(label) for label in L_CHUNK_CELLS)
 
 
+def _decl_struct_size(gff: GFFReader) -> int:
+    # decl rows are not a fixed size: DA2 ships 5 cells (no 8031 method), 20B
+    try:
+        chnk = gff.get_struct(FOURCC_CHNK)
+    except ValueError:
+        return DECL_STRUCT_SIZE
+    field = next((f for f in chnk.field_instances if f.label_id == L_CHUNK_DECLARATORS), None)
+    if field is None or field.type_id >= len(gff.struct_defs):
+        return DECL_STRUCT_SIZE
+    return gff.struct_defs[field.type_id].struct_size
+
+
 def _chunk_list(gff: GFFReader) -> tuple:
     # (flag field, block offset, element struct size, row count) for 8021.
     # 8021 is a LIST_OF_REFS in the shipped files and a STRUCT_ARRAY in
@@ -419,6 +433,7 @@ class MSHWriter:
             raise TypeError(f"need a Mesh, got {type(mesh)}")
         self.mesh = mesh
         self._reader = reader
+        self.decl_size = getattr(mesh, "decl_size", DECL_STRUCT_SIZE)
         self._orig: Any = None
         if reader is not None:
             src = reader.mesh
@@ -575,18 +590,21 @@ class MSHWriter:
             raise ValueError(f"chunk {chunk.name!r} has bad bounds: {e}")
 
     @staticmethod
-    def _declarator_bytes(chunk: Any) -> bytes:
+    def _declarator_bytes(chunk: Any, size: int = DECL_STRUCT_SIZE) -> bytes:
+        if size == 20:
+            row_fmt, cells = "<iiIII", 5
+        elif size == 24:
+            row_fmt, cells = "<iiIIII", 6
+        else:
+            raise ValueError(f"declarator rows of {size}B are not modelled")
         try:
             rows = []
             for d in chunk.declarators:
                 # the terminator is all ones; write it as -1 so it fits the
                 # signed int the schema declares, whatever the source spelled it
                 stream = -1 if d.is_terminator else d.stream
-                rows.append(
-                    struct.pack(
-                        "<iiIIII", stream, d.offset, d.dtype, d.usage, d.usage_index, d.method
-                    )
-                )
+                row = [stream, d.offset, d.dtype, d.usage, d.usage_index, d.method]
+                rows.append(struct.pack(row_fmt, *row[:cells]))
             return struct.pack("<I", len(rows)) + b"".join(rows)
         except struct.error as e:
             raise ValueError(f"Chunk {chunk.name!r} has an unencodable declarator: {e}")
@@ -602,7 +620,7 @@ class MSHWriter:
         if len(inst) >= BNDS_STRUCT_SIZE:
             inst[0:BNDS_STRUCT_SIZE] = bounds
 
-        decl_ref = w.alloc(self._declarator_bytes(chunk))
+        decl_ref = w.alloc(self._declarator_bytes(chunk, DECL_STRUCT_SIZE))
         name_ref = NULL_REF
         if chunk.name is not None:
             name_ref = w.alloc_ecstring(chunk.name)
@@ -636,7 +654,7 @@ class MSHWriter:
             # bytes here would keep a garbage count the reader then chokes on
             struct.pack_into("<I", inst, offsets[L_CHUNK_STREAMS], NULL_REF)
         if L_CHUNK_DECLARATORS in offsets:
-            ref = w.alloc(self._declarator_bytes(chunk))
+            ref = w.alloc(self._declarator_bytes(chunk, self.decl_size))
             struct.pack_into("<I", inst, offsets[L_CHUNK_DECLARATORS], ref)
 
     def _write_chunk(self, w: Any, chunk: Any) -> Any:

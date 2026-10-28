@@ -45,6 +45,11 @@ USAGE_NORMAL = 3
 USAGE_TEXCOORD = 5
 USAGE_TANGENT = 6
 USAGE_BINORMAL = 7
+USAGE_COLOR = 10
+
+# declarator types a colour channel is read from and written back as
+COLOR_DTYPES = (4, 5)
+COLOR_ATTRIBUTE = "thedas_io_color"
 
 
 INDEX_FORMAT_U32 = 1
@@ -116,6 +121,13 @@ def _norm8_rows(rows: list, start: int = 0) -> list:
             (int(r[start + 2]) - 128) / 127,
         )
         for r in rows
+    ]
+
+
+def _color_rows(rows: list, start: int, dtype: int) -> list:
+    # D3DCOLOR/UBYTE4 store BGRA; Blender wants RGBA 0..1
+    return [
+        (r[start + 2] / 255, r[start + 1] / 255, r[start] / 255, r[start + 3] / 255) for r in rows
     ]
 
 
@@ -215,6 +227,7 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
     normals: list = []
     uvs: dict = {}
     tangents: dict = {}
+    colors: list = []
     weights_rows = None
     bones_rows = None
 
@@ -243,6 +256,8 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
                     if d.dtype == 8
                     else [r[start : start + comps] for r in rows]
                 )
+            elif d.usage == USAGE_COLOR:
+                colors = _color_rows(rows, start, d.dtype)
             elif d.usage == USAGE_BLENDWEIGHT:
                 weights_rows = [r[start : start + comps] for r in rows]
             elif d.usage == USAGE_BLENDINDICES:
@@ -277,6 +292,8 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
                 tangents.setdefault(d.usage, []).extend(
                     _norm8_rows(rows) if d.dtype == 8 else [tuple(r) for r in rows]
                 )
+            elif d.usage == USAGE_COLOR:
+                colors = _color_rows(rows, 0, d.dtype)
             elif d.usage == USAGE_BLENDWEIGHT:
                 weights_rows = [r[:4] for r in rows]
             elif d.usage == USAGE_BLENDINDICES:
@@ -290,6 +307,7 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
         "normals": normals,
         "uvs": uvs,
         "tangents": tangents,
+        "colors": colors,
         "triangles": tris,
         "groups": groups,
         "vert_count": verts,

@@ -58,6 +58,27 @@ def test_write_self_roundtrips():
     assert GFFWriter.from_bytes(out).write() == out
 
 
+def test_declarator_rows_match_the_file_row_size():
+    # DA2's decl struct drops the 8031 method cell (20B). Writing 24B rows into
+    # it shifts every row after the first, so the exported chunk reads back with
+    # garbage streams/usages.
+    mesh = load(MSH_PATH)
+    chunk = mesh.chunks[0]
+    rows = len(chunk.declarators)
+
+    assert mesh.decl_size == 24  # DAO fixture keeps the method cell
+    assert len(MSHWriter._declarator_bytes(chunk, 24)) == 4 + rows * 24
+    assert len(MSHWriter._declarator_bytes(chunk, 20)) == 4 + rows * 20
+
+    with pytest.raises(ValueError, match="not modelled"):
+        MSHWriter._declarator_bytes(chunk, 28)
+
+
+def test_reader_reports_the_decl_row_size_it_parsed():
+    # the writer uses this to lay rows out like the file it came from
+    assert MSHReader(MSH_PATH.read_bytes()).mesh.decl_size == 24
+
+
 def test_rename_only_touches_name():
     writer = MSHWriter.from_bytes(MSH_PATH.read_bytes())
     mesh = load(MSH_PATH)

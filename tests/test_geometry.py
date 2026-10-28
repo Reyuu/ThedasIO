@@ -215,7 +215,7 @@ def test_weld_sample_matches_measured():
 
 def test_unmodelled_vertex_channels_are_reported_not_zeroed():
     # a rebuilt row starts as zeros and only modelled usages get written over
-    # them, so PSIZE / colour / fog / depth used to become 0 without a word
+    # them, so PSIZE / fog / depth used to become 0 without a word
     from types import SimpleNamespace
 
     from thedas_io.export import _unmodelled_usages
@@ -225,7 +225,12 @@ def test_unmodelled_vertex_channels_are_reported_not_zeroed():
     assert _unmodelled_usages(chunk) == []  # the shipped mesh only uses ones we model
 
     chunk.declarators.append(SimpleNamespace(usage=4, is_terminator=False))
-    chunk.declarators.append(SimpleNamespace(usage=10, is_terminator=False))
+    assert _unmodelled_usages(chunk) == [4]
+
+    # colour is rebuilt from the imported attribute, but only from a byte type
+    chunk.declarators.append(SimpleNamespace(usage=10, dtype=4, is_terminator=False))
+    assert _unmodelled_usages(chunk) == [4]
+    chunk.declarators[-1].dtype = 3
     assert _unmodelled_usages(chunk) == [4, 10]
 
     # a terminator is not a channel and must not be reported

@@ -12,6 +12,7 @@ from .bone_map import BONE_GLOBAL, BONE_ORDER
 from .datablocks import tag
 from .export import remember
 from .geometry import (
+    COLOR_ATTRIBUTE,
     bone_frame,
     bone_names,
     decode_chunk,
@@ -287,6 +288,23 @@ def build_chunk_object(
         if layer is None:
             continue
         layer.data.foreach_set("uv", [c for tri in corners for v in tri for c in coords[v]])
+
+    # DA2 character meshes carry a baked per-vertex mask here. Keep it on the
+    # object so a topology change can rebuild the channel from Blender instead
+    # of zeroing it; a FLOAT_COLOR layer stores the source values untouched.
+    if build["colors"]:
+        attr = data.color_attributes.new(name=COLOR_ATTRIBUTE, type="FLOAT_COLOR", domain="POINT")
+        cells = getattr(attr, "data", None)
+        if cells is not None:
+            per_vert: list = [None] * len(positions)
+            for row, rgba in enumerate(build["colors"]):
+                v = row_to_vert[row] if row_to_vert else row
+                if v < len(per_vert) and per_vert[v] is None:
+                    per_vert[v] = rgba
+            cells.foreach_set(
+                "color", [c for rgba in per_vert for c in (rgba or (1.0, 1.0, 1.0, 1.0))]
+            )
+
     data.update()
     obj = bpy.data.objects.new(data.name, data)
     context.collection.objects.link(obj)

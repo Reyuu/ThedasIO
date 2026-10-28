@@ -46,6 +46,20 @@ for a DA2 binary MAO, with:
 
 Disable Export tint when exporting DA2 MAOs.
 
+## Vertex colour
+
+Some Dragon Age II character meshes store a grayscale mask in their vertex
+colours. Import puts it on the object as a colour attribute named
+`thedas_io_color`, so you can look at it, paint it and keep it through edits.
+
+Export writes it back. Leave it alone and the original bytes come out
+unchanged; subdivide or repaint and the new values go into the file.
+
+If you delete the attribute, export stops and says so instead of writing black
+over the mask. Re-import the mesh to get it back. A mask stored in a format the
+exporter cannot write still has to be edited without adding or removing
+geometry.
+
 ## Rename and archive behaviour
 
 Rename on export shows per-file rename fields; set names apply on export.
