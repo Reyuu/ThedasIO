@@ -17,6 +17,7 @@ from nvtt.surface import Surface
 from PIL import Image
 
 from . import tnt
+from .asset_db.scanner import leaf_name
 from .bone_map import bone_labels
 from .fsio import write_bytes_atomic
 from .geometry import (
@@ -308,11 +309,13 @@ def roots() -> list:
         model = item.get("model")
         msh = getattr(model, "values", {}).get(6005) if model is not None else None
         if msh:
-            referenced.add(str(msh).lower())
+            # DA2 references a full internal path; the imported item is its leaf
+            referenced.add(leaf_name(msh).lower())
     return [
         k
         for k, item in ITEMS.items()
-        if item.get("kind") == "mmh" or (item.get("kind") == "msh" and k.lower() not in referenced)
+        if item.get("kind") == "mmh"
+        or (item.get("kind") == "msh" and leaf_name(k).lower() not in referenced)
     ]
 
 
@@ -525,7 +528,8 @@ def _check_texture_item(item: Item) -> list:
 
 def connected(seeds: Any) -> set:
     # ITEMS keys in the same hierarchy as any seed
-    by_key = {k.lower(): k for k in ITEMS}
+    # leaves here too: a DA2 mmh names its msh by internal path, the item by leaf
+    by_key = {leaf_name(k).lower(): k for k in ITEMS}
     mao_by_material = {}
     mmh_by_msh = {}
 
@@ -538,7 +542,7 @@ def connected(seeds: Any) -> set:
             model = item.get("model")
             msh = getattr(model, "values", {}).get(6005) if model is not None else None
             if msh:
-                mmh_by_msh[str(msh).lower()] = k
+                mmh_by_msh[leaf_name(msh).lower()] = k
 
     out: set = set()
     stack = [s for s in seeds if s in ITEMS]
@@ -554,7 +558,7 @@ def connected(seeds: Any) -> set:
             model = item.get("model")
             msh = getattr(model, "values", {}).get(6005) if model is not None else None
             if msh:
-                hit = by_key.get(str(msh).lower())
+                hit = by_key.get(leaf_name(msh).lower())
                 if hit is not None and hit not in out:
                     stack.append(hit)
             for obj in item.get("meshes") or []:
@@ -563,7 +567,7 @@ def connected(seeds: Any) -> set:
                     if hit is not None and hit not in out:
                         stack.append(hit)
         elif kind == "msh":
-            hit = mmh_by_msh.get(key.lower())
+            hit = mmh_by_msh.get(leaf_name(key).lower())
             if hit is not None and hit not in out:
                 stack.append(hit)
             for entry in item.get("objects") or []:
@@ -577,7 +581,7 @@ def connected(seeds: Any) -> set:
             if isinstance(model, dict):
                 for res in (model.get("textures") or {}).values():
                     if res:
-                        hit = by_key.get(str(res).lower())
+                        hit = by_key.get(leaf_name(res).lower())
                         if hit is not None and hit not in out:
                             stack.append(hit)
     return out
@@ -1775,11 +1779,19 @@ def _patch_msh_ref(gff: Any, writer: Any, item: Item, renames: dict) -> bool:
         return False
     if not current:
         return False
-    target = renames.get(str(current).lower())
-    if not target or target == current:
+    target = renames.get(leaf_name(current).lower())
+    if not target:
+        return False
+    if "/" in target or "\\" in target:
+        renamed = target  # an explicit path in the rename field wins
+    else:
+        # DA2 stores a full internal path here; keep the directory it shipped in
+        cut = max(current.rfind("/"), current.rfind("\\")) + 1
+        renamed = current[:cut] + target
+    if renamed == current:
         return False
 
-    offset = writer.alloc_ecstring(target)
+    offset = writer.alloc_ecstring(renamed)
     struct.pack_into("<I", writer.data_block, 0 + field.data_index, offset)
     return True
 

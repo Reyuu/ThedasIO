@@ -9,7 +9,7 @@ import bpy
 
 from .ani.operators import _play_animation
 from .asset_browser import _scene_db
-from .asset_db.scanner import _db_path, find_exact
+from .asset_db.scanner import _db_path, find_exact, leaf_name
 from .assets import extract, importer_for, resolve
 from .blender_materials import apply_materials
 from .builders import build_chunk_object, build_hierarchy
@@ -68,19 +68,26 @@ def _import_row(
 
         chunks = {}
         msh_name = str(tree.values.get(6005) or "")  # type: ignore
+        notes = []
+        # register the msh under its leaf: a DA2 reference is a full internal
+        # path ('art\characters\..\x.msh') and the export writes item keys
+        source = leaf_name(msh_name) if msh_name else ""
         sibling = resolve(msh_name, row, db, local_only, game=game)
         if sibling is not None and sibling.is_file():
             sraw = sibling.read_bytes()
             smesh = MSHReader(sraw).mesh
             for chunk in smesh.chunks:  # type: ignore
-                chunks[chunk.name] = build_chunk_object(context, smesh, chunk, sraw, msh_name, weld)
+                chunks[chunk.name] = build_chunk_object(context, smesh, chunk, sraw, source, weld)
+        elif msh_name:
+            notes.append(
+                f"{row['filename']}: sibling mesh {msh_name} not found, imported the skeleton only"
+            )
 
         reg = remember(row["filename"], "mmh", tree, raw)
         stats = build_hierarchy(context, tree, chunks)
         reg["hosts"] = stats["hosts"]
         reg["armature"] = stats["armature"]
         reg["meshes"] = list(chunks.values())  # tint export reads their materials
-        notes = []
         stem = Path(row["filename"]).stem
         for name in stats["linked"]:
             node = tree.find(name)  # type: ignore

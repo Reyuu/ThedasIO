@@ -135,6 +135,11 @@ def _norm_ext(ext: Any) -> str | None:
     return f".{ext}"
 
 
+def leaf_name(name: Any) -> str:
+    # DA2 stores a full internal path in mmh 6005; the file on disk is the leaf
+    return str(name).replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def _priority(path: Any, root: Any, index: int) -> int:
     # higher wins when two archives hold the same file name. roots come in load
     # order, so a later root (AddIns, which the engine loads after the base
@@ -369,7 +374,7 @@ def _recover_names(con: sqlite3.Connection, game: str | None = None, force: bool
                     v = tree.values.get(6005)
                     if not isinstance(v, str) or not v:
                         continue
-                    leaf = v.replace("\\", "/").rsplit("/", 1)[-1]
+                    leaf = leaf_name(v)
                     if not leaf or "." not in leaf:
                         continue
                     # label 6005 is the mesh path, but mmh/phy/mao siblings share

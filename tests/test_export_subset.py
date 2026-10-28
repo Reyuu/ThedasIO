@@ -7,6 +7,7 @@ an LOD copy must repoint the hierarchy at its renamed mesh.
 
 from __future__ import annotations
 
+import struct
 from types import SimpleNamespace
 
 import pytest
@@ -14,11 +15,12 @@ import pytest
 from conftest import DATA_DIR
 from thedas_io.export import (
     ITEMS,
+    _field,
     connected,
     export_all,
     roots,
 )
-from thedas_io.gff40.description import GFFReader
+from thedas_io.gff40.description import GFFReader, GFFWriter
 from thedas_io.materials import parse_mao, write_mao
 from thedas_io.mmh.description import MMHReader
 
@@ -149,6 +151,54 @@ def test_rename_writes_the_new_name_and_repoints_the_msh(only_item, tmp_path):
     assert sorted(written) == ["x_l2.mmh", "x_l2.msh"]
     gff = GFFReader((tmp_path / "x_l2.mmh").read_bytes())
     assert gff.get_from_data_block(0, 0, 6005) == "x_l2.msh"
+
+
+def _da2_mmh(msh="art\\characters\\c_corspidr_0.msh"):
+    # a DA2 hierarchy stores the mesh's internal path, not its file name
+    raw = STOCK_MMH.read_bytes()
+    gff = GFFReader(raw)
+    writer = GFFWriter.from_reader(gff)
+    field = _field(gff, 0, 6005)
+    offset = writer.alloc_ecstring(msh)
+    struct.pack_into("<I", writer.data_block, field.data_index, offset)
+    out = writer.write()
+    return out, MMHReader(out).tree
+
+
+def test_da2_path_reference_folds_into_its_hierarchy(only_item):
+    # DA2 names its mesh by internal path; the imported msh item is a leaf, so a
+    # separately imported msh must not become a second export row
+    mmh, msh, _mao, _tex, _obj = _hierarchy("art\\characters\\a.msh")
+    only_item.update({"d.mmh": mmh, "a.msh": msh})
+    assert roots() == ["d.mmh"]
+    assert connected({"d.mmh"}) == {"d.mmh", "a.msh"}
+    assert connected({"a.msh"}) == {"d.mmh", "a.msh"}
+
+
+def test_rename_keeps_a_da2_directory_in_the_reference(only_item, tmp_path):
+    mmh_raw, tree = _da2_mmh()
+    only_item["c_corspidra_0.mmh"] = {
+        "file": "c_corspidra_0.mmh",
+        "kind": "mmh",
+        "model": tree,
+        "raw": mmh_raw,
+        "meshes": [],
+        "hosts": {},
+        "as": "x_l2.mmh",
+    }
+    only_item["c_corspidr_0.msh"] = {
+        "file": "c_corspidr_0.msh",
+        "kind": "msh",
+        "model": None,
+        "raw": STOCK_MSH.read_bytes(),
+        "objects": [],
+        "as": "x_l2.msh",
+    }
+    written, _errors = export_all(tmp_path)
+    assert sorted(written) == ["x_l2.mmh", "x_l2.msh"]
+    assert (tmp_path / "x_l2.msh").is_file()  # top level, no art\characters subtree
+    gff = GFFReader((tmp_path / "x_l2.mmh").read_bytes())
+    assert gff.get_from_data_block(0, 0, 6005) == "art\\characters\\x_l2.msh"
 
 
 def test_an_unrenamed_msh_keeps_the_stock_reference(only_item, tmp_path):

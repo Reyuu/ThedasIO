@@ -68,6 +68,31 @@ def test_resolve_case_insensitive(tmp_path):
     assert hit2 is not None and hit2.read_bytes() == b"dds-archived"
 
 
+def test_resolve_takes_the_leaf_of_a_da2_path(tmp_path):
+    # DA2 puts a full internal path in mmh 6005; the sibling sits beside it as a leaf
+    from thedas_io.assets import resolve
+
+    (tmp_path / "y.msh").write_bytes(b"mesh")
+    row = {"package": None, "filename": "x.mmh", "ext": ".mmh", "path": str(tmp_path / "x.mmh")}
+    for ref in ("art/characters/y.msh", "art\\characters\\y.msh"):
+        assert resolve(ref, row, local_only=True) == tmp_path / "y.msh"
+        assert resolve(ref, row) == tmp_path / "y.msh"
+
+
+def test_resolve_takes_the_leaf_from_the_db(tmp_path):
+    from thedas_io.asset_db.scanner import scan
+    from thedas_io.assets import resolve
+
+    archive(tmp_path / "p.erf", {"y.msh": b"archived"})
+    db = tmp_path / "t.sqlite"
+    scan(tmp_path, db)
+    row = {"package": None, "filename": "x.mmh", "ext": ".mmh", "path": str(tmp_path / "x.mmh")}
+    hit = resolve("art\\characters\\y.msh", row, str(db))
+    assert hit is not None and hit.read_bytes() == b"archived"
+    # local-only still means local or nothing, even when the DB has the leaf
+    assert resolve("art\\characters\\y.msh", row, str(db), local_only=True) is None
+
+
 def test_resolve_local_only_never_touches_the_game(tmp_path):
     # Disk imports with local resolve: siblings or nothing, never the DB.
     from thedas_io.asset_db.scanner import scan

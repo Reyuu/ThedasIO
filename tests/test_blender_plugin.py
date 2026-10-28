@@ -1425,3 +1425,89 @@ def test_import_row_resolves_a_blank_db_path_to_the_scene_game(monkeypatch):
     with __import__("pytest").raises(RuntimeError):
         importers._import_row(context, row, None, False, lambda *a: None)
     assert Path(seen["db"]).name == "asset_db_da2.sqlite"
+
+
+def _fake_mmh_branch(monkeypatch, tmp_path, msh_exists):
+    # one DA2 mmh import, with everything below the import loop stubbed out
+    from types import SimpleNamespace
+
+    from thedas_io import importers
+
+    mmh = tmp_path / "rob_appp.mmh"
+    mmh.write_bytes(b"mmh")
+    tree = SimpleNamespace(
+        name="rob_appp.mmh", values={6005: "art\\characters\\rob_appp.msh"}, walk=list
+    )
+    monkeypatch.setattr(importers, "extract", lambda row: mmh)
+    monkeypatch.setattr(importers, "find_exact", lambda *a, **k: None)
+    monkeypatch.setattr(importers, "MMHReader", lambda raw: SimpleNamespace(tree=tree))
+    monkeypatch.setattr(
+        importers, "resolve", lambda *a, **k: (tmp_path / "rob_appp.msh") if msh_exists else None
+    )
+    monkeypatch.setattr(
+        importers,
+        "build_hierarchy",
+        lambda ctx, t, chunks: {
+            "bones": 222,
+            "empties": 25,
+            "linked": [],
+            "missing": ["robem1"],
+            "hosts": {},
+            "armature": None,
+        },
+    )
+    monkeypatch.setattr(importers, "_load_collision", lambda *a, **k: [])
+    return importers, mmh
+
+
+def test_mmh_import_warns_when_the_sibling_mesh_is_missing(monkeypatch, tmp_path):
+    # the DA2 path reference used to fail silently: bones arrived, mesh did not
+    from types import SimpleNamespace
+
+    from thedas_io.export import ITEMS
+
+    importers, mmh = _fake_mmh_branch(monkeypatch, tmp_path, msh_exists=False)
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    reports: list = []
+    try:
+        row = {"package": None, "filename": "rob_appp.mmh", "ext": ".mmh", "path": str(mmh)}
+        context = SimpleNamespace(scene=SimpleNamespace(thedas_io_game="DA2"))
+        importers._import_row(context, row, None, True, lambda *r: reports.append(r))
+        assert any(level == {"WARNING"} and "rob_appp.msh" in text for level, text in reports)
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+
+
+def test_mmh_import_registers_the_msh_by_its_leaf(monkeypatch, tmp_path):
+    # a DA2 6005 is a full internal path; the export writes item keys as file names
+    from types import SimpleNamespace
+
+    from thedas_io.export import ITEMS
+
+    importers, mmh = _fake_mmh_branch(monkeypatch, tmp_path, msh_exists=True)
+    (tmp_path / "rob_appp.msh").write_bytes(b"msh")
+    (tmp_path / "rob_appp.mao").write_bytes(b"mao")  # only the msh is read here
+    chunk = SimpleNamespace(name="robem1")
+    mesh = SimpleNamespace(chunks=[chunk])
+    seen: dict = {}
+    monkeypatch.setattr(importers, "MSHReader", lambda raw: SimpleNamespace(mesh=mesh))
+
+    def fake_chunk_object(ctx, m, c, raw, source, weld=True):
+        seen["source"] = source
+        return SimpleNamespace(name="robem1")
+
+    monkeypatch.setattr(importers, "build_chunk_object", fake_chunk_object)
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    try:
+        row = {"package": None, "filename": "rob_appp.mmh", "ext": ".mmh", "path": str(mmh)}
+        context = SimpleNamespace(scene=SimpleNamespace(thedas_io_game="DA2"))
+        reports: list = []
+        importers._import_row(context, row, None, True, lambda *r: reports.append(r))
+        assert seen["source"] == "rob_appp.msh"
+        assert not any(level == {"WARNING"} for level, _ in reports)
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)

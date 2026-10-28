@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .asset_db.scanner import find_exact, payload
+from .asset_db.scanner import find_exact, leaf_name, payload
 
 IMPORTERS = {"msh": "msh", "mmh": "mmh"}
 _SESSION_DIR = None
@@ -63,22 +63,36 @@ def extract(row: dict, dest_dir: Any = None) -> Path:
     return out
 
 
+def _candidates(name: Any) -> list[str]:
+    # the leaf first, because DA2 references a full internal path ('art\..\x.msh')
+    # while the sibling sits next to the mmh as 'x.msh'
+    raw = str(name)
+    leaf = leaf_name(raw)
+    if leaf.lower() == raw.lower():
+        return [leaf]
+    return [leaf, raw]
+
+
 def resolve(
     name: str, row: dict, db_path: Any = None, local_only: bool = False, game: str | None = None
 ) -> Path | None:
-    # same dir first, then db, unless local_only
+    # leaf then as-given, same dir first, then db, unless local_only
     if not name:
         return None
+    candidates = _candidates(name)
     if not row["package"]:
-        local = Path(row["path"]).parent / name
-        if local.is_file():
-            return local
+        parent = Path(row["path"]).parent
+        for candidate in candidates:
+            local = parent / candidate
+            if local.is_file():
+                return local
         if local_only:
             return None
     elif local_only:
         return None
 
-    hit = find_exact(name, db_path=db_path, game=game)
-    if hit is None:
-        return None
-    return extract(hit) if hit["package"] else Path(hit["path"])
+    for candidate in candidates:
+        hit = find_exact(candidate, db_path=db_path, game=game)
+        if hit is not None:
+            return extract(hit) if hit["package"] else Path(hit["path"])
+    return None
