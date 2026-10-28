@@ -48,6 +48,9 @@ panel.
 Pose bones, vertex weights and UVs work normally in the viewport. To map new or
 renamed vertex groups to bones, see [Bone map](bone-map.md).
 
+A mesh that stores two texture coordinate sets in one cell (some Dragon Age II
+meshes do) imports both, as `UVMap` and `UVMap.001`.
+
 **Weld** is on by default: rows sitting at the same position are merged into one
 vertex so editing the surface does not crack the seams. Turn it off to keep every
 row from the source file as its own vertex, which is what you want when re-UVing

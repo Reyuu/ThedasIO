@@ -66,6 +66,12 @@ from .geometry import (
 from .geometry import (
     USAGE_TEXCOORD as _USAGE_TEXCOORD,
 )
+from .geometry import (
+    decl_components as _decl_components,
+)
+from .geometry import (
+    uv_pairs as _uv_pairs,
+)
 from .gff40.description import GFFReader, GFFWriter
 from .materials import (
     blender_to_pil,
@@ -1420,6 +1426,7 @@ def _patch_chunk(
     ibase = chunk.cells.get(8009, 0) * width
     weights = state["weights"]  # live mesh weights: the decoded ones would undo a repaint
     skin_untouched = not _weights_edited(decoded, state)
+    uv_slots = _uv_slots(chunk)
     reframed = set()
 
     for d in chunk.declarators:
@@ -1433,7 +1440,7 @@ def _patch_chunk(
         for v in range(verts):
             start = vbase + v * chunk.stride + d.offset
             vals, _ = _decode_row(d.dtype, base_blob, start)
-            new = _encode_row(d, state, weights, vals, v, obj)
+            new = _encode_row(d, state, weights, vals, v, obj, uv_slots)
             if new is None:
                 continue
             blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage, d.dtype)
@@ -1516,6 +1523,15 @@ def _unmodelled_usages(chunk: Any) -> list:
     return sorted(bad)
 
 
+def _uv_slots(chunk: Any) -> dict:
+    # id(declarator) -> [(component offset, UV layer)] so a 4-value texcoord
+    # writes both of its texture coordinate sets back
+    slots: dict = {}
+    for layer, d, offset in _uv_pairs(chunk):
+        slots.setdefault(id(d), []).append((offset, layer))
+    return slots
+
+
 def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
     # fresh vertex/index regions after a topology change (subdivide, quads)
 
@@ -1534,13 +1550,23 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
             f"{obj.name}: vertex colour layer {_COLOR_ATTRIBUTE!r} is missing; "
             "re-import the mesh so its stored mask comes back"
         )
+    odd_uv = [
+        d
+        for d in chunk.declarators
+        if not d.is_terminator and d.usage == _USAGE_TEXCOORD and _decl_components(d.dtype) % 2
+    ]
+    if odd_uv:
+        raise ValueError(
+            f"{obj.name}: a UV channel stores {_decl_components(odd_uv[0].dtype)} values per "
+            "vertex, so a rebuilt row cannot fill the extra one; make the edit without "
+            "changing the mesh topology"
+        )
 
     data = _evaluated_mesh(obj)
     if data is None:
         raise ValueError(f"{obj.name}: in Edit Mode — leave Edit Mode, then export")
-    ndecl_uv = sum(
-        1 for d in chunk.declarators if not d.is_terminator and d.usage == _USAGE_TEXCOORD
-    )
+    uv_slots = _uv_slots(chunk)
+    ndecl_uv = len(_uv_pairs(chunk))
     try:
         have_layers = len(data.uv_layers)
     except (AttributeError, ReferenceError):
@@ -1593,7 +1619,7 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
         }
         row = bytearray(chunk.stride)
         for d, fmt, ncomp in enc:
-            vals = _encode_fresh(d, rec, tloops, ri, obj)
+            vals = _encode_fresh(d, rec, tloops, ri, obj, uv_slots)
             if vals is None:
                 continue
             blob = _pack(fmt, (vals + [0.0] * ncomp)[:ncomp], d.usage, d.dtype)
@@ -1614,7 +1640,7 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
     )
 
 
-def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any) -> Any:
+def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any, uv_slots: Any = None) -> Any:
     # live values for one fresh row; None keeps the zeroed bytes
     if d.usage == _USAGE_POSITION:
         return list(rec["pos"]) + [1.0]
@@ -1622,10 +1648,8 @@ def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any) -> Any:
         base = list(rec["normal"]) if rec["normal"] is not None else [0.0, 0.0, 0.0]
         return base + [1.0]
     if d.usage == _USAGE_TEXCOORD:
-        if d.usage_index >= len(rec["uvs"]):
-            raise ValueError(f"{obj.name}: UV layer {d.usage_index} removed")
-        u, w = rec["uvs"][d.usage_index]
-        return [u, 1.0 - w]  # import flips V
+        read = _pair_reader(rec["uvs"])
+        return _uv_row(d, (uv_slots or {}).get(id(d), []), read, obj)
     if d.usage == _USAGE_WEIGHT:
         return [w for _, w in _skin(rec["weights"])]
     if d.usage == _USAGE_INDICES:
@@ -1639,11 +1663,34 @@ def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any) -> Any:
     if d.usage == _USAGE_COLOR:
         if rec["color"] is None:
             return None
-        return _color_bytes(rec["color"])
+        return _color_values(rec["color"], d.dtype)
     return None
 
 
-def _encode_row(d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any) -> Any:
+def _uv_row(d: Any, slots: Any, read: Any, obj: Any, base: Any = None) -> list:
+    # one texcoord row: every pair the declarator carries. base is the stored
+    # row, so cells that are not part of a pair survive a patch untouched.
+    out = list(base) if base is not None else [0.0] * _decl_components(d.dtype)
+    for offset, layer in slots:
+        u, w = read(layer, obj)
+        out[offset] = u
+        out[offset + 1] = 1.0 - w  # import flips V
+    return out
+
+
+def _pair_reader(layers: Any, index: Any = None) -> Any:
+    # (u, v) lookup for a UV layer, either per row or for one live row index
+    def read(layer: int, obj: Any) -> Any:
+        if layer >= len(layers):
+            raise ValueError(f"{obj.name}: UV layer {layer} removed")
+        return layers[layer] if index is None else layers[layer][index]
+
+    return read
+
+
+def _encode_row(
+    d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any, uv_slots: Any = None
+) -> Any:
     if d.usage == _USAGE_POSITION:
         return list(state["positions"][v]) + list(vals[3:])
     if d.usage == _USAGE_NORMAL:
@@ -1655,10 +1702,9 @@ def _encode_row(d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any) -
             return None
         return list(state["normals"][v]) + list(vals[3:])
     if d.usage == _USAGE_TEXCOORD:
-        if d.usage_index >= len(state["uvs"]):
-            raise ValueError(f"{obj.name}: UV layer {d.usage_index} removed")
-        u, w = state["uvs"][d.usage_index][v]
-        return [u, 1.0 - w]  # import flips V
+        # start from the stored row so a 3-value texcoord keeps its extra cell
+        read = _pair_reader(state["uvs"], v)
+        return _uv_row(d, (uv_slots or {}).get(id(d), []), read, obj, base=vals)
     if d.usage == _USAGE_WEIGHT:
         return [w for _, w in _skin(weights[v])] + [0.0, 0.0, 0.0, 0.0]
     if d.usage == _USAGE_INDICES:
@@ -1667,17 +1713,22 @@ def _encode_row(d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any) -
         colors = state.get("colors")
         if colors is None or d.dtype not in _COLOR_DTYPES:
             return None
-        new = _color_bytes(colors[v])
-        # a byte of slack: the attribute holds the stored value exactly, so this
-        # only fires on a real repaint and keeps untouched rows byte-identical
-        if not any(abs(x - y) > 1 for x, y in zip(new, vals[: len(new)])):
+        new = _color_values(colors[v], d.dtype)
+        # one unit of slack: the attribute holds the stored value exactly, so
+        # this only fires on a real edit and keeps untouched rows byte-identical
+        unit = 1.0 if d.dtype in (4, 5) else 1e-4
+        if not any(abs(x - y) > unit for x, y in zip(new, vals[: len(new)])):
             return None
         return new
     return None
 
 
-def _color_bytes(rgba: Any) -> list:
-    # Blender RGBA 0..1 -> the file's BGRA byte order
+def _color_values(rgba: Any, dtype: int) -> list:
+    # Blender RGBA -> the file's own column order: BGRA bytes, or raw floats that
+    # DAO uses as shader data (a water plane's 4th column is not alpha)
+    if dtype not in (4, 5):
+        values = [float(c) for c in rgba[:4]]
+        return values[:3] if dtype == 2 else values
     r, g, b, a = (min(max(float(c), 0.0), 1.0) for c in rgba[:4])
     return [round(b * 255), round(g * 255), round(r * 255), round(a * 255)]
 

@@ -47,8 +47,10 @@ USAGE_TANGENT = 6
 USAGE_BINORMAL = 7
 USAGE_COLOR = 10
 
-# declarator types a colour channel is read from and written back as
-COLOR_DTYPES = (4, 5)
+# declarator types the colour channel is read from and written back as. Bytes
+# are D3DCOLOR/UBYTE4 (BGRA); the float types are RGB(A), or the half4 DAO uses
+# for water/lava vertex data.
+COLOR_DTYPES = (2, 3, 4, 5, 16)
 COLOR_ATTRIBUTE = "thedas_io_color"
 
 
@@ -125,10 +127,65 @@ def _norm8_rows(rows: list, start: int = 0) -> list:
 
 
 def _color_rows(rows: list, start: int, dtype: int) -> list:
-    # D3DCOLOR/UBYTE4 store BGRA; Blender wants RGBA 0..1
+    # D3DCOLOR/UBYTE4 store BGRA; Blender wants RGBA 0..1. The float types are
+    # RGBA already, and hold shader values (a water plane's 4th column is not
+    # alpha), so they pass through untouched and unclamped.
+    if dtype in (2, 3, 16):
+        if dtype == 2:
+            return [(r[start], r[start + 1], r[start + 2], 1.0) for r in rows]
+        return [tuple(r[start : start + 4]) for r in rows]
     return [
         (r[start + 2] / 255, r[start + 1] / 255, r[start] / 255, r[start + 3] / 255) for r in rows
     ]
+
+
+def decl_components(dtype: int) -> int:
+    # how many values one declarator writes per vertex
+    spec = _NUMPY.get(dtype)
+    return spec[1] if spec else 0
+
+
+def uv_pairs(chunk: Any) -> list:
+    """(layer index, declarator, component offset) for every UV pair, in order.
+
+    A 4-value texcoord declarator holds two texture coordinate sets, not one:
+    DA2 packs the second set there, and reading only the first dropped it.
+    """
+    out = []
+    layer = 0
+    for d in chunk.declarators:
+        if d.is_terminator or d.usage != USAGE_TEXCOORD:
+            continue
+        comps = decl_components(d.dtype)
+        for offset in range(0, comps - comps % 2, 2):
+            out.append((layer, d, offset))
+            layer += 1
+    return out
+
+
+def _decode_uvs(blob: bytes, verts: int, stride: int, slots: list) -> dict:
+    uvs: dict = {}
+    for layer, d, offset in slots:
+        fmt = _pair_format(d.dtype)
+        if fmt is None:
+            raise ValueError(f"no decoder for a texcoord pair of type {d.dtype}")
+        # offset counts components, the blob is addressed in bytes
+        start = d.offset + (offset // 2) * struct.calcsize(fmt)
+        uvs[layer] = [
+            (values[0], 1.0 - values[1])
+            for values in (struct.unpack_from(fmt, blob, v * stride + start) for v in range(verts))
+        ]
+    return uvs
+
+
+def _pair_format(dtype: int) -> str | None:
+    # two components of one declarator, in the declarator's own element type
+    fmt = FORMATS.get(dtype)
+    if fmt is None:
+        return None
+    element = fmt[-1]
+    count = int(fmt[1:-1] or 1)
+    return f"<2{element}" if count >= 2 else None
 
 
 def _pad4(rows: list | None, verts: int, fill: Any) -> list:
@@ -247,9 +304,7 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
                     else [(r[start], r[start + 1], r[start + 2]) for r in rows]
                 )
             elif d.usage == USAGE_TEXCOORD:
-                uvs.setdefault(d.usage_index, []).extend(
-                    [(r[start], 1.0 - r[start + 1]) for r in rows]
-                )
+                pass  # decoded below, in declarator order (see uv_pairs)
             elif d.usage in (USAGE_TANGENT, USAGE_BINORMAL):
                 tangents.setdefault(d.usage, []).extend(
                     _norm8_rows(rows, start)
@@ -287,7 +342,7 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
             elif d.usage == USAGE_NORMAL:
                 normals = _norm8_rows(rows) if d.dtype == 8 else [(r[0], r[1], r[2]) for r in rows]
             elif d.usage == USAGE_TEXCOORD:
-                uvs.setdefault(d.usage_index, []).extend([(r[0], 1.0 - r[1]) for r in rows])
+                pass  # decoded below, in declarator order (see uv_pairs)
             elif d.usage in (USAGE_TANGENT, USAGE_BINORMAL):
                 tangents.setdefault(d.usage, []).extend(
                     _norm8_rows(rows) if d.dtype == 8 else [tuple(r) for r in rows]
@@ -298,6 +353,12 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
                 weights_rows = [r[:4] for r in rows]
             elif d.usage == USAGE_BLENDINDICES:
                 bones_rows = [r[:4] for r in rows]
+
+    # UVs last, in declarator order: a pair-per-declarator assumption drops the
+    # second set a 4-value texcoord carries
+    slots = uv_pairs(chunk)
+    if slots:
+        uvs = _decode_uvs(blob, verts, stride, slots)
 
     groups = _groups(_pad4(weights_rows, verts, 0.0), _pad4(bones_rows, verts, 0), verts)
     tris = list(zip(indices[0::3], indices[1::3], indices[2::3]))

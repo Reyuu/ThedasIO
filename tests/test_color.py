@@ -12,7 +12,7 @@ import struct
 from thedas_io.export import (
     ITEMS,  # noqa: F401 - imported for the registry fixture's sake
     _chunk_edited,
-    _color_bytes,
+    _color_values,
     _encode_fresh,
     _encode_row,
     _modelled_usages,
@@ -59,12 +59,13 @@ def test_bgra_bytes_decode_to_rgba_floats():
     assert len(build["colors"]) == build["vert_count"]
 
 
-def test_colour_counts_as_modelled_only_in_a_byte_type():
+def test_colour_counts_as_modelled_for_the_types_we_can_round_trip():
     assert _modelled_usages() >= {10}
     assert _unmodelled_usages(_two_rows().chunks[0]) == []
 
-    wide = {**COLOR, 8028: 3, 8027: 0}  # FLOAT4 colour: decoded, never encoded
-    assert _unmodelled_usages(_mesh([wide], 16, b"\x00" * 32, 2).chunks[0]) == [10]
+    # a half2 cell is not a colour layout the exporter writes
+    odd = {**COLOR, 8028: 15, 8027: 0}
+    assert _unmodelled_usages(_mesh([odd], 16, b"\x00" * 32, 2).chunks[0]) == [10]
 
 
 def test_encode_row_leaves_an_untouched_mask_byte_identical():
@@ -98,13 +99,16 @@ def test_encode_fresh_writes_bgra_from_the_live_attribute():
     assert _encode_fresh(declarator, dict(rec, color=None), None, 0, obj) is None
 
 
-def test_color_bytes_clamps_and_orders_bgra():
-    assert _color_bytes((1.0, 0.5, 0.25, 1.0)) == [64, 128, 255, 255]
-    assert _color_bytes((2.0, -1.0, 0.0, 1.0)) == [0, 0, 255, 255]
+def test_color_values_write_the_files_own_layout():
+    assert _color_values((1.0, 0.5, 0.25, 1.0), 4) == [64, 128, 255, 255]
+    assert _color_values((2.0, -1.0, 0.0, 1.0), 4) == [0, 0, 255, 255]
+    # float colour columns are shader data: no clamp, no channel swap, 3-comps
+    assert _color_values((0.25, -72.5, 2.0, 0.5), 16) == [0.25, -72.5, 2.0, 0.5]
+    assert _color_values((0.25, 0.5, 0.75, 1.0), 2) == [0.25, 0.5, 0.75]
     # 8-bit source values survive the float round trip exactly
     for byte in range(256):
         rgba = (byte / 255, byte / 255, byte / 255, 1.0)
-        assert _color_bytes(rgba)[2] == byte
+        assert _color_values(rgba, 4)[2] == byte
 
 
 def test_a_repainted_mask_marks_the_chunk_edited():

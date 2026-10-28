@@ -60,6 +60,10 @@ over the mask. Re-import the mesh to get it back. A mask stored in a format the
 exporter cannot write still has to be edited without adding or removing
 geometry.
 
+On Origins, some water and lava meshes use the colour channel for plain shader
+values rather than a mask. Those pass through exactly, including columns outside
+0–1, so do not "fix" them by clamping.
+
 ## Rename and archive behaviour
 
 Rename on export shows per-file rename fields; set names apply on export.

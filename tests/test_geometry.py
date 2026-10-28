@@ -227,10 +227,11 @@ def test_unmodelled_vertex_channels_are_reported_not_zeroed():
     chunk.declarators.append(SimpleNamespace(usage=4, is_terminator=False))
     assert _unmodelled_usages(chunk) == [4]
 
-    # colour is rebuilt from the imported attribute, but only from a byte type
+    # colour is rebuilt from the imported attribute, but only from a type we
+    # can read and write back
     chunk.declarators.append(SimpleNamespace(usage=10, dtype=4, is_terminator=False))
     assert _unmodelled_usages(chunk) == [4]
-    chunk.declarators[-1].dtype = 3
+    chunk.declarators[-1].dtype = 15
     assert _unmodelled_usages(chunk) == [4, 10]
 
     # a terminator is not a channel and must not be reported
