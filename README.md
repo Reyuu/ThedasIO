@@ -4,18 +4,19 @@
 
 # Overview
 
-**ThedasIO** is a Blender 5.2 extension that imports Dragon Age: Origins models (`.msh` meshes, `.mmh` hierarchies) with their textures, materials, armature and skin weights, and exports every loaded resource back out as standalone files. It provides an easy to use interface to easily unpack the supported files directly from the installation files.
+**ThedasIO** is a Blender 5.2 extension that imports Dragon Age: Origins and Dragon Age II models (`.msh` meshes, `.mmh` hierarchies) with their textures, materials, armature and skin weights, and exports every loaded resource back out as standalone files. It provides an interface for unpacking supported files directly from the installation.
 
 ![blender screenshot](assets/screenshot_blender.png)
 
 ## What it does
 
-- **Import** from the game's asset database (scans `.rim`/`.erf` packages, including encrypted DLC archives and the AddIns folder for DLC/mods) or from a file on disk. Pulls in the sibling `.msh`, `.mao` and textures automatically (this functionality works only for `.mmh` files). Large result lists are paged (1000 per page).
+- **Import** from either game's asset database (scans `.rim`/`.erf` packages, including encrypted DLC archives and the AddIns folder) or from a file on disk. Pulls in the sibling `.msh`, `.mao` and textures automatically (this functionality works only for `.mmh` files). Large result lists are paged (1000 per page).
 - **Materials** are rebuilt from the MAO's channel packing into a Specular BSDF, with a "DAO Tint" node
   group per side driven by `.tnt` values.
 - **Collision** (`.phy`, experimental, opt-in): proxy shapes on their bones for moving/resizing, plus adding capsules.
 - **Animation** (`.ani`): play a clip on the imported armature, edit keys, export back; untouched channels stay byte-identical.
 - **Editing** works normally in the viewport: pose bones, vertex weights, UVs, textures. Textures are unpacked to a `thedas_io_textures/` folder beside the `.blend`, so they can be edited in an external program and reloaded.
+- **Bone Map** (Object Properties) maps new or renamed vertex groups to bones, with search and optional raw bone-index assignment for custom meshes.
 - **Export** writes each loaded resource to a folder you pick. Untouched files come out byte-identical to the source; edited ones are re-encoded.
 
 ## How do I do anything
