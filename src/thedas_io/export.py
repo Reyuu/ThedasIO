@@ -67,7 +67,16 @@ from .geometry import (
     USAGE_TEXCOORD as _USAGE_TEXCOORD,
 )
 from .geometry import (
+    chunk_blob as _chunk_blob,
+)
+from .geometry import (
     decl_components as _decl_components,
+)
+from .geometry import (
+    frame_name as _frame_name,
+)
+from .geometry import (
+    split_texcoords as _split_texcoords,
 )
 from .geometry import (
     uv_pairs as _uv_pairs,
@@ -519,9 +528,10 @@ def _check_mao_item(item: Item) -> list:
     model = item.get("model")
     if not isinstance(model, dict):
         return notes
-    have = {k.lower() for k in ITEMS if ITEMS[k].get("kind") == "texture"}
+    # a MAO names its textures by internal path; the registry keys are file names
+    have = {leaf_name(k).lower() for k in ITEMS if ITEMS[k].get("kind") == "texture"}
     for res in (model.get("textures") or {}).values():
-        if res and str(res).lower() not in have:
+        if res and leaf_name(res).lower() not in have:
             notes.append(f"{name}: texture {res} not imported")
     return notes
 
@@ -941,34 +951,25 @@ def _msh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
             continue
         live_objects.append((obj, chunk) if chunk is not None else obj)
     item["objects"] = live_objects
-    states = []
-    for obj, chunk in live_objects:
-        if chunk is None:
-            continue
-        try:
-            decoded = decode_chunk(mesh, chunk)
-            bstate = _blender_state(obj)
-        except ReferenceError:
-            continue
-        states.append((obj, chunk, decoded, bstate))
-    planned = []
-    for obj, chunk, decoded, bstate in states:
-        try:
-            state = _expand_rows(decoded, obj, bstate)
-            planned.append(
-                (
-                    obj,
-                    chunk,
-                    decoded,
-                    "patch" if _chunk_edited(decoded, state, obj) else "raw",
-                    state,
-                )
-            )
-        except _TopologyChanged:
-            planned.append((obj, chunk, decoded, "rebuild", bstate))
+    states = _read_states(mesh, live_objects)
+    fill = frame_vectors_enabled()
+    planned = _plan_chunks(states)
 
     if not any(mode != "raw" for _, _, _, mode, _ in planned):
         return None
+
+    # a rewritten chunk that lost its colour mask or its frame attributes gets
+    # them back before the state is read, so nothing is exported empty
+    ensured = False
+    for obj, chunk, decoded, mode, _state in planned:
+        if mode == "raw":
+            continue
+        ensured = _ensure_colours(obj, decoded) or ensured
+        ensured = _ensure_frames(obj, chunk, mesh) or ensured
+    if ensured:
+        planned = _plan_chunks(_read_states(mesh, live_objects))
+        if not any(mode != "raw" for _, _, _, mode, _ in planned):
+            return None
 
     reader = MSHReader(item["raw"])  # pristine copy: untouched bytes stay verbatim
     base = reader.mesh
@@ -982,7 +983,8 @@ def _msh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
 
     for bc, obj, decoded, mode, state in targeted:
         if mode == "patch":
-            _patch_chunk(bc, obj, state, decoded, base_blob, vblob, iblob)
+            blob = _chunk_blob(base, bc)
+            _patch_chunk(bc, obj, state, decoded, base_blob, vblob, iblob, blob, fill)
 
     # 8009 is a mesh-wide *element* offset into one shared index blob, so every
     # chunk in a file has to agree on the width -- widening one chunk in place
@@ -991,7 +993,8 @@ def _msh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     rebuilt = []
     for bc, obj, decoded, mode, state in targeted:
         if mode == "rebuild":
-            rebuilt.append((bc, obj, _rebuild_chunk(bc, obj, state)))
+            blob = _chunk_blob(base, bc)
+            rebuilt.append((bc, obj, _rebuild_chunk(bc, obj, state, blob, fill)))
 
     widened = _widen_indices(base, rebuilt, iblob)
 
@@ -1134,7 +1137,143 @@ def _blender_state(obj: Any) -> dict:
         "normals": normals,
         "weights": weights,
         "colors": _live_colors(data, per_vertex),
+        "frames": _live_frames(obj, data),
     }
+
+
+def _live_frame_channels(obj: Any) -> list:
+    # usage indices this mesh stores a tangent frame in (set at import)
+    try:
+        channels = obj.get("thedas_io_frame_channels") or []
+        return [int(c) for c in channels]
+    except (AttributeError, ReferenceError, TypeError, ValueError):
+        return []
+
+
+def _live_frames(obj: Any, data: Any) -> Any:
+    # {usage index: per-vertex (x, y, z, w)} from the Frame * attributes
+    channels = _live_frame_channels(obj)
+    attrs = getattr(data, "color_attributes", None)
+    if not channels or attrs is None:
+        return None
+    out: dict = {}
+    for index in channels:
+        layer = attrs.get(_frame_name(index))
+        if layer is None or getattr(layer, "domain", "POINT") != "POINT":
+            continue
+        try:
+            out[index] = [tuple(c.color) for c in layer.data]
+        except (AttributeError, ReferenceError, IndexError, TypeError):
+            continue
+    return out or None
+
+
+def _regenerated_frames(data: Any) -> dict:
+    # what the live mesh implies for each frame channel, per vertex
+    loops = [loop.vertex_index for loop in data.loops]
+    first_loop: dict = {}
+    for i, v in enumerate(loops):
+        first_loop.setdefault(v, i)
+    corner_data = getattr(data, "corner_normals", None)
+    normals: list = [None] * len(data.vertices)
+    if corner_data is not None and len(corner_data) == len(loops):
+        for v, i in first_loop.items():
+            normals[v] = tuple(corner_data[i].vector)[:3]
+    basis = _loop_tangents(data, first_loop) or {}
+    out: dict = {0: [], 1: [], 3: []}
+    for v in range(len(normals)):
+        normal = normals[v]
+        entry = basis.get(v)
+        tangent, binormal = entry if entry is not None else (None, None)
+        out[0].append(tuple(normal) + (1.0,) if normal is not None else None)
+        if normal is not None and tangent is not None and binormal is not None:
+            sign = 1.0 if _side(normal, tangent, binormal) > 0 else -1.0
+            out[1].append((tangent[0], tangent[1], tangent[2], sign))
+            out[3].append((binormal[0], binormal[1], binormal[2], 1.0))
+        else:
+            out[1].append(None)
+            out[3].append(None)
+    return out
+
+
+def _ensure_frames(obj: Any, chunk: Any, mesh: Any) -> bool:
+    # recreate the frame attributes a rewritten chunk needs, from the live mesh,
+    # so a lost attribute never becomes zeros
+    try:
+        blob = _chunk_blob(mesh, chunk)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+    _real, frame_decls = _split_texcoords(chunk, blob)
+    if not frame_decls:
+        return False
+    data = _evaluated_mesh(obj)
+    target = getattr(obj, "data", None)
+    if data is None or target is None:
+        return False
+    attrs = getattr(data, "color_attributes", None)
+    have = {a.name for a in attrs} if attrs is not None else set()
+    missing = [d for d in frame_decls if _frame_name(d.usage_index) not in have]
+    if not missing:
+        return False
+    if len(target.vertices) != len(data.vertices):
+        return False  # a modifier changed the vertex set: nothing to persist
+    values = _regenerated_frames(data)
+    created = False
+    for d in missing:
+        vectors = values.get(d.usage_index)
+        if not vectors or any(v is None for v in vectors):
+            continue
+        layer = target.color_attributes.new(
+            name=_frame_name(d.usage_index), type="FLOAT_COLOR", domain="POINT"
+        )
+        cells = getattr(layer, "data", None)
+        if cells is None:
+            continue
+        cells.foreach_set("color", [c for vec in vectors for c in vec])
+        created = True
+    if created:
+        try:
+            channels = set(_live_frame_channels(obj))
+            channels.update(d.usage_index for d in frame_decls)
+            obj["thedas_io_frame_channels"] = sorted(channels)
+        except (AttributeError, ReferenceError, TypeError):
+            pass
+    return created
+
+
+def _ensure_colours(obj: Any, decoded: Any) -> bool:
+    # recreate a lost colour mask from the source rows the row map still points
+    # at; vertices with no source row get white rather than black
+    source = decoded.get("colors")
+    if not source:
+        return False
+    data = _evaluated_mesh(obj)
+    target = getattr(obj, "data", None)
+    if data is None or target is None:
+        return False
+    attrs = getattr(data, "color_attributes", None)
+    if attrs is not None and attrs.get(_COLOR_ATTRIBUTE) is not None:
+        return False
+    if len(target.vertices) != len(data.vertices):
+        return False
+    count = len(data.vertices)
+    values: list = [(1.0, 1.0, 1.0, 1.0)] * count
+    try:
+        row_map = [int(v) for v in (obj.get("thedas_io_row_to_vert") or [])]
+    except (AttributeError, ReferenceError, TypeError, ValueError):
+        row_map = []
+    if len(row_map) == len(source):
+        seen: set = set()
+        for row, vert in enumerate(row_map):
+            if 0 <= vert < count and vert not in seen:
+                seen.add(vert)
+                values[vert] = tuple(source[row])
+    layer = target.color_attributes.new(name=_COLOR_ATTRIBUTE, type="FLOAT_COLOR", domain="POINT")
+    cells = getattr(layer, "data", None)
+    if cells is None:
+        return False
+    cells.foreach_set("color", [c for rgba in values for c in rgba])
+    return True
 
 
 def _live_colors(data: Any, per_vertex: Any) -> Any:
@@ -1150,6 +1289,33 @@ def _live_colors(data: Any, per_vertex: Any) -> Any:
         return per_vertex(lambda i, layer=layer: tuple(layer.data[i].color))
     except (AttributeError, ReferenceError, IndexError, TypeError):
         return None
+
+
+def _read_states(mesh: Any, live_objects: Any) -> list:
+    # decoded chunk + live Blender state for every object that still exists
+    states = []
+    for obj, chunk in live_objects:
+        if chunk is None:
+            continue
+        try:
+            states.append((obj, chunk, decode_chunk(mesh, chunk), _blender_state(obj)))
+        except ReferenceError:
+            continue
+    return states
+
+
+def _plan_chunks(states: list) -> list:
+    # one row per chunk: patch when the live mesh diverged, rebuild when the
+    # topology changed, raw when nothing did
+    planned = []
+    for obj, chunk, decoded, bstate in states:
+        try:
+            state = _expand_rows(decoded, obj, bstate)
+            mode = "patch" if _chunk_edited(decoded, state, obj) else "raw"
+            planned.append((obj, chunk, decoded, mode, state))
+        except _TopologyChanged:
+            planned.append((obj, chunk, decoded, "rebuild", bstate))
+    return planned
 
 
 def _row_map(obj: Any, n_rows: int, n_verts: int) -> Any:
@@ -1232,7 +1398,9 @@ def _expand_rows(decoded: dict, obj: Any, bstate: dict) -> dict:
 
     corners = getattr(data, "corner_normals", None)
     normals = None
-    if corners is not None and len(corners) == len(loops) and decoded["normals"]:
+    # the live normals are needed even without a NORMAL declarator: a chunk can
+    # keep its frame in texcoord channels and still want a tangent handedness
+    if corners is not None and len(corners) == len(loops):
         dnorms = decoded["normals"]
         collapsed = _collapsed_rows(m, dtris)
         out = []
@@ -1251,6 +1419,11 @@ def _expand_rows(decoded: dict, obj: Any, bstate: dict) -> dict:
         "normals": normals,
         "weights": [bstate["weights"][m[r]] for r in range(n)],
         "colors": ([bstate["colors"][m[r]] for r in range(n)] if bstate.get("colors") else None),
+        "frames": (
+            {usage: [values[m[r]] for r in range(n)] for usage, values in bstate["frames"].items()}
+            if bstate.get("frames")
+            else None
+        ),
         "tangent_loops": _loop_tangents(data, row_loop),
     }
 
@@ -1379,6 +1552,13 @@ def _chunk_edited(decoded: dict, state: dict, obj: Any) -> bool:
         and any(_drift(a, b, 1.5 / 255) for a, b in zip(state["colors"], decoded["colors"]))
     ):
         return True
+    # a frame channel is derived while the fill switch is on, so a hand edit of
+    # it is not what marks the chunk, and a stale attribute is not an edit either
+    if not frame_vectors_enabled() and decoded.get("frames") and state.get("frames"):
+        for usage, values in decoded["frames"]:
+            live = state["frames"].get(usage)
+            if live and any(_drift(a, b, 1.5 / 127) for a, b in zip(live, values)):
+                return True
 
     return _weights_edited(decoded, state)
 
@@ -1417,7 +1597,15 @@ def _drift(a: Any, b: Any, tol: float = 1e-6) -> bool:
 
 
 def _patch_chunk(
-    chunk: Any, obj: Any, state: Any, decoded: Any, base_blob: Any, vblob: Any, iblob: Any
+    chunk: Any,
+    obj: Any,
+    state: Any,
+    decoded: Any,
+    base_blob: Any,
+    vblob: Any,
+    iblob: Any,
+    blob: bytes,
+    fill: bool,
 ) -> Any:
     # overwrite editable fields, indices and bounds in a copy of the source blobs
     verts = chunk.cells.get(8001, 0)
@@ -1426,7 +1614,8 @@ def _patch_chunk(
     ibase = chunk.cells.get(8009, 0) * width
     weights = state["weights"]  # live mesh weights: the decoded ones would undo a repaint
     skin_untouched = not _weights_edited(decoded, state)
-    uv_slots = _uv_slots(chunk)
+    uv_slots = _uv_slots(chunk, blob)
+    frame_of = _frame_indices(chunk, blob)
     reframed = set()
 
     for d in chunk.declarators:
@@ -1440,7 +1629,7 @@ def _patch_chunk(
         for v in range(verts):
             start = vbase + v * chunk.stride + d.offset
             vals, _ = _decode_row(d.dtype, base_blob, start)
-            new = _encode_row(d, state, weights, vals, v, obj, uv_slots)
+            new = _encode_row(d, state, weights, vals, v, obj, uv_slots, frame_of.get(id(d)), fill)
             if new is None:
                 continue
             blob = _pack(fmt, (new + list(vals))[: len(vals)], d.usage, d.dtype)
@@ -1523,16 +1712,21 @@ def _unmodelled_usages(chunk: Any) -> list:
     return sorted(bad)
 
 
-def _uv_slots(chunk: Any) -> dict:
+def _uv_slots(chunk: Any, blob: bytes = b"") -> dict:
     # id(declarator) -> [(component offset, UV layer)] so a 4-value texcoord
     # writes both of its texture coordinate sets back
     slots: dict = {}
-    for layer, d, offset in _uv_pairs(chunk):
+    for layer, d, offset in _uv_pairs(chunk, blob):
         slots.setdefault(id(d), []).append((offset, layer))
     return slots
 
 
-def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
+def _frame_indices(chunk: Any, blob: bytes = b"") -> dict:
+    # id(declarator) -> the frame channel it holds (0 normal, 1 tangent, 3 binormal)
+    return {id(d): d.usage_index for d in _split_texcoords(chunk, blob)[1]}
+
+
+def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any, blob: bytes = b"", fill: bool = True) -> Any:
     # fresh vertex/index regions after a topology change (subdivide, quads)
 
     # a fresh vertex row starts zeroed, so anything we cannot re-encode has to
@@ -1543,12 +1737,6 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
             f"{obj.name}: cannot rebuild this chunk, it stores vertex channels "
             f"this exporter does not model (usage {unmodelled}); make the edit "
             f"without changing the mesh topology"
-        )
-    has_color = any(d.usage == _USAGE_COLOR and not d.is_terminator for d in chunk.declarators)
-    if has_color and not bstate.get("colors"):
-        raise ValueError(
-            f"{obj.name}: vertex colour layer {_COLOR_ATTRIBUTE!r} is missing; "
-            "re-import the mesh so its stored mask comes back"
         )
     odd_uv = [
         d
@@ -1565,8 +1753,9 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
     data = _evaluated_mesh(obj)
     if data is None:
         raise ValueError(f"{obj.name}: in Edit Mode — leave Edit Mode, then export")
-    uv_slots = _uv_slots(chunk)
-    ndecl_uv = len(_uv_pairs(chunk))
+    uv_slots = _uv_slots(chunk, blob)
+    frame_of = _frame_indices(chunk, blob)
+    ndecl_uv = len(_uv_pairs(chunk, blob))
     try:
         have_layers = len(data.uv_layers)
     except (AttributeError, ReferenceError):
@@ -1609,6 +1798,7 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
         enc.append((d, fmt, len(struct.unpack(fmt, bytes(struct.calcsize(fmt))))))
     vreg = bytearray()
     colors = bstate.get("colors")
+    frames = bstate.get("frames")
     for ri, (v, li) in enumerate(rows):
         rec = {
             "pos": positions[v],
@@ -1616,10 +1806,12 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
             "uvs": [tuple(data.uv_layers[i].data[li].uv) for i in range(ndecl_uv)],
             "normal": (tuple(corners[li].vector)[:3] if corners is not None else None),
             "color": (colors[v] if colors else None),
+            "frames": frames,
+            "vert": v,
         }
         row = bytearray(chunk.stride)
         for d, fmt, ncomp in enc:
-            vals = _encode_fresh(d, rec, tloops, ri, obj, uv_slots)
+            vals = _encode_fresh(d, rec, tloops, ri, obj, uv_slots, frame_of.get(id(d)), fill)
             if vals is None:
                 continue
             blob = _pack(fmt, (vals + [0.0] * ncomp)[:ncomp], d.usage, d.dtype)
@@ -1640,8 +1832,26 @@ def _rebuild_chunk(chunk: Any, obj: Any, bstate: Any) -> Any:
     )
 
 
-def _encode_fresh(d: Any, rec: Any, tloops: Any, ri: Any, obj: Any, uv_slots: Any = None) -> Any:
+def _encode_fresh(
+    d: Any,
+    rec: Any,
+    tloops: Any,
+    ri: Any,
+    obj: Any,
+    uv_slots: Any = None,
+    frame: Any = None,
+    fill: bool = True,
+) -> Any:
     # live values for one fresh row; None keeps the zeroed bytes
+    if frame is not None:
+        stored = (rec.get("frames") or {}).get(frame)
+        return _frame_row(
+            frame,
+            rec.get("normal"),
+            (tloops or {}).get(ri),
+            stored[rec["vert"]] if stored else None,
+            fill,
+        )
     if d.usage == _USAGE_POSITION:
         return list(rec["pos"]) + [1.0]
     if d.usage == _USAGE_NORMAL:
@@ -1689,8 +1899,25 @@ def _pair_reader(layers: Any, index: Any = None) -> Any:
 
 
 def _encode_row(
-    d: Any, state: Any, weights: Any, vals: Any, v: Any, obj: Any, uv_slots: Any = None
+    d: Any,
+    state: Any,
+    weights: Any,
+    vals: Any,
+    v: Any,
+    obj: Any,
+    uv_slots: Any = None,
+    frame: Any = None,
+    fill: bool = True,
 ) -> Any:
+    if frame is not None:
+        stored = (state.get("frames") or {}).get(frame)
+        return _frame_row(
+            frame,
+            state["normals"][v] if state.get("normals") else None,
+            (state.get("tangent_loops") or {}).get(v),
+            stored[v] if stored else None,
+            fill,
+        )
     if d.usage == _USAGE_POSITION:
         return list(state["positions"][v]) + list(vals[3:])
     if d.usage == _USAGE_NORMAL:
@@ -1731,6 +1958,56 @@ def _color_values(rgba: Any, dtype: int) -> list:
         return values[:3] if dtype == 2 else values
     r, g, b, a = (min(max(float(c), 0.0), 1.0) for c in rgba[:4])
     return [round(b * 255), round(g * 255), round(r * 255), round(a * 255)]
+
+
+def frame_vectors_enabled(context: Any = None) -> bool:
+    # "Fill frame vectors" in the Export panel
+    if context is None:
+        try:
+            context = bpy.context
+        except AttributeError:
+            return True
+    scene = getattr(context, "scene", None)
+    return bool(getattr(scene, "thedas_io_frame_vectors", True))
+
+
+def _frame_bytes(vec: Any) -> list:
+    # biased float -> the channel's normalized bytes. w is the direction sign the
+    # shipped files use (0 or 255), not the bias the xyz components carry
+    out = []
+    for i, c in enumerate(list(vec)[:4]):
+        value = float(c)
+        if i == 3:
+            out.append(0 if value < 0 else 255)
+        else:
+            out.append(_clamp(round(value * 127 + 128), 0, 255))
+    return out
+
+
+def _side(normal: Any, tangent: Any, binormal: Any) -> float:
+    if normal is None:
+        return 1.0
+    cx = normal[1] * tangent[2] - normal[2] * tangent[1]
+    cy = normal[2] * tangent[0] - normal[0] * tangent[2]
+    cz = normal[0] * tangent[1] - normal[1] * tangent[0]
+    return cx * binormal[0] + cy * binormal[1] + cz * binormal[2]
+
+
+def _frame_row(index: Any, normal: Any, tangent: Any, stored: Any, fill: bool) -> Any:
+    # one frame channel's bytes: rebuilt from the live mesh when the switch is
+    # on, otherwise whatever the imported attribute holds
+    if fill:
+        if index == 0 and normal is not None:
+            return _frame_bytes(list(normal)[:3] + [1.0])
+        if index == 1 and tangent is not None:
+            t, b = tangent
+            return _frame_bytes(list(t)[:3] + [1.0 if _side(normal, t, b) > 0 else -1.0])
+        if index == 3 and tangent is not None:
+            b = tangent[1]
+            return _frame_bytes(list(b)[:3] + [1.0])
+    if stored is not None:
+        return _frame_bytes(stored)
+    return None
 
 
 def _skin(vertex_weights: dict) -> list:

@@ -9,6 +9,7 @@ from typing import Any
 import bpy
 from PIL import Image as PilImage
 
+from .asset_db.scanner import leaf_name
 from .export import ITEMS, check_model, connected, export_all
 from .export_registry import _push_renames
 from .fsio import save_image_atomic, write_text_atomic
@@ -227,7 +228,8 @@ class THEDAS_IO_OT_export_substance(bpy.types.Operator):
                     (
                         ITEMS[k2]
                         for k2 in wanted
-                        if k2.lower() == str(res).lower() and ITEMS[k2].get("kind") == "texture"
+                        if leaf_name(k2).lower() == leaf_name(res).lower()
+                        and ITEMS[k2].get("kind") == "texture"
                     ),
                     None,
                 )
@@ -355,7 +357,8 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
                     (
                         ITEMS[k2]
                         for k2 in ITEMS
-                        if k2.lower() == str(res).lower() and ITEMS[k2].get("kind") == "texture"
+                        if leaf_name(k2).lower() == leaf_name(res).lower()
+                        and ITEMS[k2].get("kind") == "texture"
                     ),
                     None,
                 )
@@ -390,8 +393,8 @@ class THEDAS_IO_OT_import_substance(bpy.types.Operator):
                     continue
                 # dao-layout pixels into cache, reload path re-packs into blend
                 try:
-                    (folder / Path(res).name).parent.mkdir(parents=True, exist_ok=True)
-                    save_image_atomic(pil, folder / Path(res).name, "PNG")
+                    (folder / leaf_name(res)).parent.mkdir(parents=True, exist_ok=True)
+                    save_image_atomic(pil, folder / leaf_name(res), "PNG")
                 except OSError as e:
                     failed.append(f"{mat_name}: {res}: {e}")
                     continue

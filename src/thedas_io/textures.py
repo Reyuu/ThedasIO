@@ -12,6 +12,7 @@ import bpy
 import numpy as np
 from PIL import Image as PilImage
 
+from .asset_db.scanner import leaf_name
 from .assets import resolve
 from .datablocks import sweep_orphans, tag
 from .export import _LOADED_ITEMS, remember
@@ -29,6 +30,7 @@ def _existing_tint(
     row: dict | None,
     db_path: str | Path | None = None,
     local_only: bool = False,
+    game: str | None = None,
 ) -> dict | None:
     # tint values from stem.tnt next to mao or in db
 
@@ -36,7 +38,7 @@ def _existing_tint(
         return None
 
     try:
-        path = resolve(f"{stem}.tnt", row, db_path, local_only)
+        path = resolve(f"{stem}.tnt", row, db_path, local_only, game)
         return parse(path.read_bytes()) if path is not None and path.is_file() else None
     except (OSError, ValueError):
         return None
@@ -48,6 +50,7 @@ def _resolve_texture(
     row: dict | None = None,
     db_path: str | Path | None = None,
     local_only: bool = False,
+    game: str | None = None,
 ) -> Any:
     # one resname to blender image via sibling, db or loaded bytes
 
@@ -70,7 +73,7 @@ def _resolve_texture(
         }
     )
     try:
-        hit = resolve(res, anchor, db_path, local_only)
+        hit = resolve(res, anchor, db_path, local_only, game)
     except (OSError, ValueError, KeyError, sqlite3.Error):
         hit = None
     if hit is not None and Path(hit).is_file():
@@ -79,7 +82,7 @@ def _resolve_texture(
     # texture in archive, pull from loaded db items
 
     tex_bytes = None
-    want = Path(res).name.lower()
+    want = leaf_name(res).lower()
     for item in _LOADED_ITEMS:
         if item["file"].lower() == want:
             tex_bytes = item["raw"]
@@ -88,7 +91,7 @@ def _resolve_texture(
         return None
     pil = PilImage.open(io.BytesIO(tex_bytes))
     pil.load()
-    return _new_image(Path(res).name, pil, tex_bytes)
+    return _new_image(leaf_name(res), pil, tex_bytes)
 
 
 def _cache_dir() -> Path:
@@ -244,7 +247,7 @@ def _scale_live_images(model: dict, repacked: dict, failed: list) -> set:
         res = textures.get(slot)
         if not res:
             continue
-        live: Any = by_name.get(Path(res).name)
+        live: Any = by_name.get(leaf_name(res))
         if live is None:
             continue
         try:
@@ -321,7 +324,7 @@ def _missing_image(res: str, images: dict) -> Any:
             continue
 
     w, h = max(sizes, key=lambda s: s[0] * s[1]) if sizes else (64, 64)
-    name = Path(res).name
+    name = leaf_name(res)
     image: Any = bpy.data.images.new(name, w, h, alpha=True)
     tag(image, "image")
     image.alpha_mode = "CHANNEL_PACKED"

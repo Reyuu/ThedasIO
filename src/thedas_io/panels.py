@@ -299,6 +299,7 @@ class THEDAS_IO_PT_export(bpy.types.Panel):
         if scene.thedas_io_export_tint:
             self.layout.prop(scene, "thedas_io_tint_name", text="Tint resource")
         self.layout.prop(scene, "thedas_io_rename_export", text="Rename on export")
+        self.layout.prop(scene, "thedas_io_frame_vectors", text="Fill frame vectors")
 
         THEDAS_IO_UL_export.draw_header(self.layout)
         self.layout.template_list(

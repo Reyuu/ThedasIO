@@ -56,7 +56,9 @@ def _import_row(
                 "import its .mmh for textures)"
             )
         else:
-            apply_materials(mao, objs, row=row, db_path=db, notes=notes, local_only=local_only)
+            apply_materials(
+                mao, objs, row=row, db_path=db, notes=notes, local_only=local_only, game=game
+            )
 
         for note in dict.fromkeys(notes):
             emit({"WARNING"}, note)
@@ -105,6 +107,7 @@ def _import_row(
                         db_path=db,
                         notes=notes,
                         local_only=local_only,
+                        game=game,
                     )
         note = f", missing chunks: {stats['missing']}" if stats["missing"] else ""
         collisions = _load_collision(

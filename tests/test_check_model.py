@@ -147,6 +147,16 @@ def test_missing_mao_and_texture_flagged():
     assert any("ghost.dds" in n for n in check_model())
 
 
+def test_a_texture_stored_by_internal_path_counts_as_imported():
+    # DA2 MAOs name textures as 'art\characters\...\x.dds'; the registry key is
+    # the file name, so comparing the raw path reported every texture as missing
+    reset()
+    _remember_msh(_mesh(TRI, [(0, 1, 2)]))
+    _remember_tex("x.dds")
+    _remember_mao({"a": "art\\characters\\playercharacter\\humanfemale\\textures\\x.dds"})
+    assert not any("not imported" in n for n in check_model())
+
+
 def test_chunk_pairing_follows_the_chunk_not_its_position():
     # Two chunks, only the second has a live object. Pairing by list position
     # would report its problems under the first chunk and miss it entirely.

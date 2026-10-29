@@ -179,6 +179,7 @@ _SCENE_PROPS = (
     "thedas_io_export_tint",
     "thedas_io_tint_name",
     "thedas_io_rename_export",
+    "thedas_io_frame_vectors",
     "thedas_io_import_source",
     "thedas_io_registry",
     "thedas_io_disk_file",
@@ -236,6 +237,13 @@ def register() -> None:
     )
     bpy.types.Scene.thedas_io_rename_export = bpy.props.BoolProperty(  # type: ignore
         default=False, description="Show per-file rename fields; set names apply on export"
+    )
+    bpy.types.Scene.thedas_io_frame_vectors = bpy.props.BoolProperty(  # type: ignore
+        default=True,
+        description="DA2 meshes can keep normal/tangent/binormal in texcoord "
+        "channels. Any mesh this export rewrites gets those rebuilt from "
+        "Blender's normals and tangents. Off writes the stored values back "
+        "instead, so you can author them yourself",
     )
 
     bpy.types.Scene.thedas_io_sp_split_packed = bpy.props.BoolProperty(  # type: ignore

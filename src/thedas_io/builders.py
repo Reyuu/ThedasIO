@@ -17,6 +17,7 @@ from .geometry import (
     bone_names,
     decode_chunk,
     flatten,
+    frame_name,
     node_local,
     node_paths,
     weld_positions,
@@ -308,6 +309,27 @@ def build_chunk_object(
     data.update()
     obj = bpy.data.objects.new(data.name, data)
     context.collection.objects.link(obj)
+
+    # DA2 environment meshes keep a tangent frame in channels labelled TEXCOORD.
+    # Save it in per-vertex attributes (never UV layers) so it survives a
+    # rebuild and can be regenerated on export.
+    frame_channels = []
+    for usage_index, values in build.get("frames") or []:
+        attr = data.color_attributes.new(
+            name=frame_name(usage_index), type="FLOAT_COLOR", domain="POINT"
+        )
+        cells = getattr(attr, "data", None)
+        if cells is None:
+            continue
+        frame_rows: list = [None] * len(positions)
+        for row, vec in enumerate(values):
+            v = row_to_vert[row] if row_to_vert else row
+            if v < len(frame_rows) and frame_rows[v] is None:
+                frame_rows[v] = vec
+        cells.foreach_set("color", [c for vec in frame_rows for c in (vec or (0.0, 0.0, 0.0, 0.0))])
+        frame_channels.append(usage_index)
+    if frame_channels:
+        obj["thedas_io_frame_channels"] = frame_channels
 
     if len(positions) != len(build["positions"]):
         obj["thedas_io_row_to_vert"] = row_to_vert

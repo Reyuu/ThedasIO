@@ -145,22 +145,69 @@ def decl_components(dtype: int) -> int:
     return spec[1] if spec else 0
 
 
-def uv_pairs(chunk: Any) -> list:
-    """(layer index, declarator, component offset) for every UV pair, in order.
+# DA2 environment meshes store a tangent frame in texcoord slots; the channels
+# are 4 normalized bytes with the direction in xyz and a sign in w
+FRAME_DTYPE = 8
+FRAME_NAMES = {0: "Frame Normal", 1: "Frame Tangent", 3: "Frame Binormal"}
+
+
+def frame_name(usage_index: Any) -> str:
+    return FRAME_NAMES.get(usage_index, f"Frame {usage_index}")
+
+
+def chunk_blob(mesh: Any, chunk: Any) -> bytes:
+    # the chunk's own vertex region, byte-addressed from v0
+    stride = chunk.stride
+    verts = chunk.cells.get(8001, 0)
+    v0 = chunk.cells.get(8006, 0)
+    return bytes(mesh.vertex_data[v0 : v0 + verts * stride])
+
+
+def _looks_like_direction(blob: bytes, verts: int, stride: int, d: Any) -> bool:
+    # a UV channel would not decode to unit vectors as (byte - 128) / 127
+    if d.dtype != FRAME_DTYPE or decl_components(d.dtype) < 3 or not verts:
+        return False
+    step = max(1, verts // 128)
+    hits = total = 0
+    for v in range(0, verts, step):
+        vals, _ = _decode_row(d.dtype, blob, v * stride + d.offset)
+        x, y, z = ((vals[i] - 128) / 127 for i in range(3))
+        total += 1
+        if 0.9 < (x * x + y * y + z * z) ** 0.5 < 1.1:
+            hits += 1
+    return total > 0 and hits / total >= 0.9
+
+
+def split_texcoords(chunk: Any, blob: bytes = b"") -> tuple[list, list]:
+    """(real UV pairs, frame channels) for one chunk, in declarator order.
 
     A 4-value texcoord declarator holds two texture coordinate sets, not one:
-    DA2 packs the second set there, and reading only the first dropped it.
+    DA2 packs the second set there. Byte channels that decode to unit vectors
+    are not UVs at all but the mesh's normal/tangent/binormal, and per chunk
+    they all are: an unused binormal sits at zero beside its siblings.
     """
-    out = []
+    stride = chunk.stride
+    verts = chunk.cells.get(8001, 0)
+    tex = [d for d in chunk.declarators if not d.is_terminator and d.usage == USAGE_TEXCOORD]
+    frames: list = []
+    if blob and any(_looks_like_direction(blob, verts, stride, d) for d in tex):
+        frames = [d for d in tex if d.dtype == FRAME_DTYPE]
+    frame_ids = {id(d) for d in frames}
+    real: list = []
     layer = 0
-    for d in chunk.declarators:
-        if d.is_terminator or d.usage != USAGE_TEXCOORD:
+    for d in tex:
+        if id(d) in frame_ids:
             continue
         comps = decl_components(d.dtype)
         for offset in range(0, comps - comps % 2, 2):
-            out.append((layer, d, offset))
+            real.append((layer, d, offset))
             layer += 1
-    return out
+    return real, frames
+
+
+def uv_pairs(chunk: Any, blob: bytes = b"") -> list:
+    # (layer, declarator, component offset) for every real UV pair
+    return split_texcoords(chunk, blob)[0]
 
 
 def _decode_uvs(blob: bytes, verts: int, stride: int, slots: list) -> dict:
@@ -176,6 +223,26 @@ def _decode_uvs(blob: bytes, verts: int, stride: int, slots: list) -> dict:
             for values in (struct.unpack_from(fmt, blob, v * stride + start) for v in range(verts))
         ]
     return uvs
+
+
+def _decode_frames(blob: bytes, verts: int, stride: int, frames: list) -> list:
+    # biased floats, the same space the colour mask and the attribute use
+    return [
+        (
+            d.usage_index,
+            [
+                values
+                for values in (
+                    tuple(
+                        (v - 128) / 127
+                        for v in _decode_row(d.dtype, blob, v * stride + d.offset)[0]
+                    )
+                    for v in range(verts)
+                )
+            ],
+        )
+        for d in frames
+    ]
 
 
 def _pair_format(dtype: int) -> str | None:
@@ -355,10 +422,12 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
                 bones_rows = [r[:4] for r in rows]
 
     # UVs last, in declarator order: a pair-per-declarator assumption drops the
-    # second set a 4-value texcoord carries
-    slots = uv_pairs(chunk)
+    # second set a 4-value texcoord carries. Byte channels holding a tangent
+    # frame are split out here, so they never surface as texture coordinates.
+    slots, frame_decls = split_texcoords(chunk, blob)
     if slots:
         uvs = _decode_uvs(blob, verts, stride, slots)
+    frames = _decode_frames(blob, verts, stride, frame_decls) if frame_decls else []
 
     groups = _groups(_pad4(weights_rows, verts, 0.0), _pad4(bones_rows, verts, 0), verts)
     tris = list(zip(indices[0::3], indices[1::3], indices[2::3]))
@@ -368,6 +437,7 @@ def decode_chunk(mesh: Any, chunk: Any) -> dict:
         "normals": normals,
         "uvs": uvs,
         "tangents": tangents,
+        "frames": frames,
         "colors": colors,
         "triangles": tris,
         "groups": groups,

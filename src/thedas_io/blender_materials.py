@@ -24,6 +24,7 @@ def apply_materials(
     db_path: Any = None,
     notes: list | None = None,
     local_only: bool = False,
+    game: str | None = None,
 ) -> Any:
     # parsed mao onto chunk objects, silent when absent
 
@@ -56,7 +57,7 @@ def apply_materials(
     for semantic, res in (parsed.get("textures") or {}).items():
         if not res:
             continue
-        image = _resolve_texture(res, mao_path, row, db_path, local_only)
+        image = _resolve_texture(res, mao_path, row, db_path, local_only, game)
         if image is not None:
             images[semantic] = image
     missing = [
@@ -71,16 +72,7 @@ def apply_materials(
         if res and semantic not in images:
             images[semantic] = _missing_image(res, images)
 
-    tint = _existing_tint(mao_path.stem, row, db_path, local_only)
-    if (
-        tint is None
-        and notes is not None
-        and any(role == "tint" for role in slot_roles(parsed.get("textures")).values())
-    ):
-        notes.append(
-            f"{mao_path.name}: tint mask present but no {mao_path.stem}.tnt "
-            f"found; preview is untinted while the game tints via the item variation"
-        )
+    tint = _existing_tint(mao_path.stem, row, db_path, local_only, game)
 
     mat = build_material(parsed.get("name") or mao_path.stem, parsed, images, color, tint)
     item["objects"].append(mat)  # live material for mao edit-back

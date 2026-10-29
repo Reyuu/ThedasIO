@@ -55,14 +55,28 @@ colours. Import puts it on the object as a colour attribute named
 Export writes it back. Leave it alone and the original bytes come out
 unchanged; subdivide or repaint and the new values go into the file.
 
-If you delete the attribute, export stops and says so instead of writing black
-over the mask. Re-import the mesh to get it back. A mask stored in a format the
-exporter cannot write still has to be edited without adding or removing
-geometry.
+If you delete the attribute it is restored on export: the source rows the mesh
+still maps to come back, and any vertex added since is filled white. A mask
+stored in a format the exporter cannot write still has to be edited without
+adding or removing geometry.
 
 On Origins, some water and lava meshes use the colour channel for plain shader
 values rather than a mask. Those pass through exactly, including columns outside
 0–1, so do not "fix" them by clamping.
+
+## Frame vectors
+
+Some Dragon Age II meshes keep their normal, tangent and binormal in channels
+the file labels as texture coordinates. Import parks them in the
+`Frame Normal`, `Frame Tangent` and `Frame Binormal` attributes.
+
+**Fill frame vectors** is on by default: any mesh this export rewrites gets those
+channels rebuilt from Blender's normals and tangents, so a subdivided mesh does
+not come out with a dead normal map. Untouched meshes are not rewritten at all.
+
+Turn it off to write the stored attribute values back instead, which is what you
+want if you author the frame yourself. If a `Frame *` attribute is deleted it is
+recreated from the mesh on export rather than exported empty.
 
 ## Rename and archive behaviour
 

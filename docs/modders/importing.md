@@ -51,6 +51,17 @@ renamed vertex groups to bones, see [Bone map](bone-map.md).
 A mesh that stores two texture coordinate sets in one cell (some Dragon Age II
 meshes do) imports both, as `UVMap` and `UVMap.001`.
 
+Some Dragon Age II environment meshes keep their normal, tangent and binormal in
+channels labelled `TEXCOORD`. Those are not texture coordinates, so they import
+as colour attributes named `Frame Normal`, `Frame Tangent` and `Frame Binormal`
+instead of as UV layers. The real UVs are unaffected.
+
+Tints are not applied unless a `<model>.tnt` sits next to the MAO or inside the
+scanned game database: both games name their tints after the item variation
+(`T3_CTH_CM1.tnt` in `tints.rim`), not after the model, so there is nothing to
+match a mesh against. An untinted preview is expected, and the game still tints
+the item through its variation.
+
 **Weld** is on by default: rows sitting at the same position are merged into one
 vertex so editing the surface does not crack the seams. Turn it off to keep every
 row from the source file as its own vertex, which is what you want when re-UVing

@@ -1312,13 +1312,8 @@ def test_import_material_diagnostics():
         "mat2": "B",
         "notes2": ["bad.mao: textures not found: nope.dds"],
         "mat3": "T",
-        "notes3": [
-            (
-                "tint.mao: tint mask present but no tint.tnt found; "
-                "preview is untinted while the game tints "
-                "via the item variation"
-            )
-        ],
+        # a missing <model>.tnt is normal: tints are named by item variation
+        "notes3": [],
         "props": [1, 2, 3, 4],
         "placeholder": {"tag": "nope.dds", "px": [1.0, 0.0, 1.0, 1.0]},
     }
