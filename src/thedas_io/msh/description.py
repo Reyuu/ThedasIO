@@ -12,6 +12,7 @@ from ..gff40.description import (
     GFFStructDef,
     GFFWriter,
     label_name,
+    _SCALAR_FORMATS,
 )
 
 # msh layout: [header 28B][defs n*16B][fields m*12B][gap FF*][data]
@@ -491,12 +492,70 @@ class MSHWriter:
             struct.pack_into("<I", w.data_block, at[L_INDEX_FORMAT], mesh.index_format or 0)
         if L_INSTANCED_STREAM in at:
             w.data_block[at[L_INSTANCED_STREAM]] = mesh.instanced_stream or 0
-        if L_VERTEX_DATA in at and list(mesh.vertex_data) != orig["vertex"]:
-            ref = w.alloc_scalar_list(0, list(mesh.vertex_data))
-            struct.pack_into("<I", w.data_block, at[L_VERTEX_DATA], ref)
-        if L_INDEX_DATA in at and list(mesh.index_data) != orig["index"]:
-            ref = w.alloc_scalar_list(0, list(mesh.index_data))
-            struct.pack_into("<I", w.data_block, at[L_INDEX_DATA], ref)
+        
+        # helper to overwrite existing scalar list in place if same size, else alloc new
+        def _overwrite_scalar_list(label: int, new_values: list) -> bool:
+            if label not in at:
+                return False
+            ref = struct.unpack_from("<I", w.data_block, at[label])[0]
+            if ref == NULL_REF:
+                return False
+            # find the existing scalar list in data_block
+            # format: <I count> + elements
+            # we need to find it in the data_block by ref offset
+            list_offset = ref
+            if list_offset + 4 > len(w.data_block):
+                return False
+            old_count = struct.unpack_from("<I", w.data_block, list_offset)[0]
+            new_count = len(new_values)
+            if old_count != new_count:
+                return False  # size changed, must allocate new
+            # overwrite in place
+            suffix = _SCALAR_FORMATS.get(gff.struct_defs[0].field_instances[
+                next(i for i, f in enumerate(gff.struct_defs[0].field_instances) if f.label_id == label)
+            ].type_id)
+            if suffix is None:
+                return False
+            fmt = f"<{suffix}"
+            # pack all values
+            parts = []
+            try:
+                for v in new_values:
+                    if isinstance(v, tuple):
+                        parts.append(struct.pack(fmt, *v))
+                    else:
+                        parts.append(struct.pack(fmt, v))
+            except struct.error:
+                return False
+            body = b"".join(parts)
+            # overwrite count and data in place
+            struct.pack_into("<I", w.data_block, list_offset, new_count)
+            w.data_block[list_offset + 4 : list_offset + 4 + len(body)] = body
+            return True
+
+        # vertex data
+        vertex_changed = L_VERTEX_DATA in at and list(mesh.vertex_data) != orig["vertex"]
+        index_changed = L_INDEX_DATA in at and list(mesh.index_data) != orig["index"]
+        
+        # if vertex or index count changed, fall back to rebuilt for proper compaction
+        vertex_count_changed = vertex_changed and len(mesh.vertex_data) != len(orig["vertex"])
+        index_count_changed = index_changed and len(mesh.index_data) != len(orig["index"])
+        
+        if vertex_count_changed or index_count_changed:
+            return self._rebuilt()
+        
+        # same-count edits: try in-place overwrite
+        if vertex_changed:
+            new_v = list(mesh.vertex_data)
+            if not _overwrite_scalar_list(L_VERTEX_DATA, new_v):
+                ref = w.alloc_scalar_list(0, new_v)
+                struct.pack_into("<I", w.data_block, at[L_VERTEX_DATA], ref)
+        
+        if index_changed:
+            new_i = list(mesh.index_data)
+            if not _overwrite_scalar_list(L_INDEX_DATA, new_i):
+                ref = w.alloc_scalar_list(0, new_i)
+                struct.pack_into("<I", w.data_block, at[L_INDEX_DATA], ref)
 
         chnk_def = None
         if L_CHUNKS in at:
