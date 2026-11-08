@@ -102,7 +102,7 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
     # stamp the export names before the anim importer arrives: each bone's
     # "xprt" children carry the animation channel names (.chest_rotation etc.)
     # the game drives that bone with
-    for node, _, _, _ in rows:
+    for node, _, _, _, _ in rows:
         if node.kind != "node":
             continue
         recipe_bone = arm_obj.data.bones.get(node.name)
@@ -140,7 +140,7 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
             _bind_skin(ref, names, arm_obj, node)
 
     stats["hosts"] = {}
-    for node, _, loc, quat in rows:
+    for node, _, loc, quat, _ in rows:
         entry = hosts.get(id(node))
         path = paths.get(id(node))
         if entry is None or path is None:
@@ -200,9 +200,9 @@ def _attach_object(
 
 
 def _bone_lengths(rows: list) -> dict:
-    heads = {id(n): loc for n, _, loc, _ in rows}
+    heads = {id(n): loc for n, _, loc, _, _ in rows}
     out: dict = {}
-    for node, _, loc, _ in rows:
+    for node, _, loc, _, _ in rows:
         child = next((c for c in node.children if c.kind == "node"), None)
         if child is None:
             continue

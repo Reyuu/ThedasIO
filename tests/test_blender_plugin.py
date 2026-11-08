@@ -219,6 +219,7 @@ def test_addon_preferences():
         (prefs, "thedas_io_game_dir", ""),
         (prefs, "thedas_io_da2_game_dir", ""),
         (prefs, "thedas_io_enable_phy", ""),
+        (prefs, "thedas_io_export_node_scale", ""),
         (prefs, "thedas_io_unlimited_assets", ""),
     ]
     # experimental collider work stays off until the user turns it on
@@ -1272,9 +1273,9 @@ def test_bone_length_is_the_distance_to_the_first_child_bone():
     chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
     spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
     rows = [
-        (spine, None, (0.0, 0.0, 0.0), None),
-        (chest, spine, (0.0, 0.0, 1.2), None),
-        (neck, chest, (0.0, 0.0, 1.4), None),
+        (spine, None, (0.0, 0.0, 0.0), None, (1.0, 1.0, 1.0)),
+        (chest, spine, (0.0, 0.0, 1.2), None, (1.0, 1.0, 1.0)),
+        (neck, chest, (0.0, 0.0, 1.4), None, (1.0, 1.0, 1.0)),
     ]
 
     out = _bone_lengths(rows)
@@ -1290,7 +1291,7 @@ def test_bone_length_skips_non_bone_children():
     hand = _node("hand", "node", (0.0, 0.0, 1.0))
     hook = _node("hook", "crst", (0.0, 0.0, 0.5))
     arm = _node("arm", "node", (0.0, 0.0, 0.0), [hook, hand])
-    rows = [(arm, None, (0.0, 0.0, 0.0), None), (hand, arm, (0.0, 0.0, 1.0), None)]
+    rows = [(arm, None, (0.0, 0.0, 0.0), None, (1.0, 1.0, 1.0)), (hand, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0))]
 
     assert abs(_bone_lengths(rows)[id(arm)] - 1.0) < 1e-9
 
@@ -1302,7 +1303,7 @@ def test_a_child_sitting_on_its_parent_does_not_make_a_zero_length_bone():
     # zero-length bone is degenerate in Blender
     stub = _node("stub", "node", (0.0, 0.0, 1.0))
     arm = _node("arm", "node", (0.0, 0.0, 1.0), [stub])
-    rows = [(arm, None, (0.0, 0.0, 1.0), None), (stub, arm, (0.0, 0.0, 1.0), None)]
+    rows = [(arm, None, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0)), (stub, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0))]
 
     assert id(arm) not in _bone_lengths(rows)  # falls back to the stub
     assert _LEAF_BONE_LEN > 0.0
@@ -1318,9 +1319,9 @@ def test_rig_does_not_depend_on_the_mesh_it_is_bound_to():
     chest = _node("chest", "node", (0.0, 0.0, 1.20), [neck])
     spine = _node("spine", "node", (0.0, 0.0, 0.0), [chest])
     rows = [
-        (spine, None, (0.0, 0.0, 0.0), None),
-        (chest, spine, (0.0, 0.0, 1.2), None),
-        (neck, chest, (0.0, 0.0, 1.4), None),
+        (spine, None, (0.0, 0.0, 0.0), None, (1.0, 1.0, 1.0)),
+        (chest, spine, (0.0, 0.0, 1.2), None, (1.0, 1.0, 1.0)),
+        (neck, chest, (0.0, 0.0, 1.4), None, (1.0, 1.0, 1.0)),
     ]
 
     import inspect

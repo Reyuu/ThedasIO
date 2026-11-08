@@ -198,15 +198,20 @@ def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     
-    # register undo handlers
-    if _LOAD_HANDLER is None:
-        _LOAD_HANDLER = bpy.app.handlers.undo_pre
-    if _LOAD_HANDLER not in bpy.app.handlers.undo_pre:
-        bpy.app.handlers.undo_pre.append(_LOAD_HANDLER)
-    if _PRUNE_HANDLER is None:
-        _PRUNE_HANDLER = bpy.app.handlers.undo_post
-    if _PRUNE_HANDLER not in bpy.app.handlers.undo_post:
-        bpy.app.handlers.undo_post.append(_PRUNE_HANDLER)
+    # register undo handlers (persistent) - may not exist in all Blender versions
+    try:
+        if _LOAD_HANDLER is None:
+            _LOAD_HANDLER = bpy.app.handlers.persistent(_on_undo_pre)
+        if _LOAD_HANDLER not in bpy.app.handlers.undo_pre:
+            bpy.app.handlers.undo_pre.append(_LOAD_HANDLER)
+        if _PRUNE_HANDLER is None:
+            _PRUNE_HANDLER = bpy.app.handlers.persistent(_on_undo_post)
+        if _PRUNE_HANDLER not in bpy.app.handlers.undo_post:
+            bpy.app.handlers.undo_post.append(_PRUNE_HANDLER)
+    except AttributeError:
+        # undo handlers not available in this Blender version
+        pass
+    
     bpy.types.Scene.thedas_io_assets = bpy.props.CollectionProperty(type=THEDAS_IO_AssetItem)  # type: ignore
     bpy.types.Scene.thedas_io_index = bpy.props.IntProperty()  # type: ignore
     bpy.types.Scene.thedas_io_page = bpy.props.IntProperty(  # type: ignore
@@ -458,10 +463,14 @@ def unregister() -> None:
         bpy.app.handlers.save_pre.remove(_repack_textures)
     except ValueError:
         pass
+    # Remove undo handlers
+    try:
+        bpy.app.handlers.undo_pre.remove(_LOAD_HANDLER)
+    except (ValueError, AttributeError):
+        pass
+    try:
+        bpy.app.handlers.undo_post.remove(_PRUNE_HANDLER)
+    except (ValueError, AttributeError):
+        pass
     _PRUNE_HANDLER = None
-    if _LOAD_HANDLER is not None:
-        try:
-            bpy.app.handlers.load_post.remove(_LOAD_HANDLER)
-        except ValueError:
-            pass
-        _LOAD_HANDLER = None
+    _LOAD_HANDLER = None

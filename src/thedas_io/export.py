@@ -245,15 +245,17 @@ def export_all(
             # it; the file is named and the rest still lands
             errors.append(_why(out_name, e))
 
-        # a .phy rides along with the .mmh that owns it, but only when a
-        # collision field actually changed and PHY support is switched on
+        # a .phy rides along with the .mmh that owns it, write whenever PHY is enabled
         if item["kind"] == "mmh" and item.get("phy_raw") and phy_enabled():
             phy_name = item.get("phy_name") or ""
             try:
                 patched = _phy_bytes(item)
+                # Always write .phy when PHY is enabled; if nothing changed, write the original
                 if patched is not None:
                     write_bytes_atomic(dest / phy_name, patched)
-                    written.append(phy_name)
+                else:
+                    write_bytes_atomic(dest / phy_name, item["phy_raw"])
+                written.append(phy_name)
             except Exception as e:  # noqa: BLE001
                 # the write is inside the guard too: a full disk or a read-only
                 # folder here must not take the batch down and lose every
@@ -2095,7 +2097,7 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     tree, hosts = item["model"], item.get("hosts") or {}
     rows = list(node_paths(tree))
     node_at = {path: node for node, path in rows}
-    base_world = {id(n): (loc, q) for n, _, loc, q in flatten(tree)}
+    base_world = {id(n): (loc, q) for n, _, loc, q, _ in flatten(tree)}
     tag_maps: dict = {}
     edits: dict = {}
 
@@ -2132,7 +2134,7 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     # would wrongly absorb sibling trsl/rota leaves; look up the parent
     out_world: dict = {}
     for node, path in rows:
-        pw = out_world[path[:-1]] if path else ((0.0, 0.0, 0.0), IDENTITY_QUAT)
+        pw = out_world[path[:-1]] if path else ((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 1.0, 1.0))
         src = node_local(node.values)
         edit = edits.get(path)
         if edit is None:
@@ -2143,7 +2145,7 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
         local = src
         if world is not None:
             candidate = _inverse_compose(pw, world)
-            if _drift(candidate[0], src[0], 1e-5) or _drift(candidate[1], src[1], 1e-5):
+            if _drift(candidate[0], src[0], 1e-5) or _drift(candidate[1], src[1], 1e-5) or _drift(candidate[2], src[2], 1e-5):
                 base = bases.get(path)
                 if base is None:
                     raise ValueError(f"node {node.name or path}: lost in source walk")

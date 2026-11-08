@@ -1177,8 +1177,8 @@ def test_import_usrp_hooks():
                 hook.matrix_world.translation = tuple(
                     Vector(before) + Vector((0.05, 0.0, 0.0)))
                 moved_raw = export_bytes(reg)
-                want = {n.name: loc for n, _, loc, _ in flatten(tree) if n.name}
-                got = {n.name: loc for n, _, loc, _ in
+                want = {n.name: loc for n, _, loc, _, _ in flatten(tree) if n.name}
+                got = {n.name: loc for n, _, loc, _, _ in
                        flatten(MMHReader(moved_raw).tree) if n.name}
                 moved = all(abs(a - b) < 1e-4 for a, b in zip(
                     got[hook.name], (before[0] + 0.05, before[1], before[2])))
@@ -2058,10 +2058,10 @@ def test_imported_rig_is_internally_consistent():
             arm = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
             bones = {b.name: b for b in arm.data.bones}
             rows = flatten(load(os.path.join("data", "c_corspidra_0.mmh")))
-            parents = {id(n): p for n, p, _l, _q in rows}
+            parents = {id(n): p for n, p, _, _, _ in rows}
             out = {"count": len(bones), "dupes": [], "zero": [], "head_err": 0.0,
                    "frame_err": 0.0, "left_handed": 0, "bad_parent": 0, "untagged": 0}
-            for n, _p, l, q in rows:
+            for n, _p, l, q, _ in rows:
                 if n.kind != "node" or not n.name or n.name not in bones:
                     continue
                 b = bones[n.name]
@@ -2887,7 +2887,7 @@ def test_reimport_edited_mmh(tmp_path):
                 bones = arm.data.bones
                 tree = MMHReader(open(os.path.join(
                     "data", "c_corspidra_0.mmh"), "rb").read()).tree
-                want = {n.name: loc for n, _, loc, _ in flatten(tree) if n.name}
+                want = {n.name: loc for n, _, loc, _, _ in flatten(tree) if n.name}
                 # NB: Bone.head lies for parented bones in 5.2 (head reads
                 # back permuted); matrix_local.translation is exact.
                 head = tuple(bones["Spine02X"].matrix_local.translation)
@@ -3404,7 +3404,7 @@ def test_ani_world_targets_match_the_mmh_node_chain():
                     m = Matrix.Identity(4)
                     for n in chain(next(n for n in tree.walk()
                                         if n.kind == "node" and n.name == bone_name)):
-                        pos, q = node_local(n.values)
+                        pos, q, _ = node_local(n.values)
                         rest_pos = Vector(pos[:3])
                         rest_quat = Quaternion((q[3], q[0], q[1], q[2]))
                         for export_name in xprts.get(n.name, {}):

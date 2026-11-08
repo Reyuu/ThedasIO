@@ -553,7 +553,7 @@ def node_paths(tree: Any) -> Iterator[tuple[Any, tuple]]:
 
 def bone_names(tree: Any) -> dict:
     names = {}
-    for node, _, _, _ in flatten(tree):
+    for node, _, _, _, _ in flatten(tree):
         index = node.values.get(6254)
         if node.kind == "node" and isinstance(index, int) and index >= 0 and index not in names:
             names[index] = node.name
