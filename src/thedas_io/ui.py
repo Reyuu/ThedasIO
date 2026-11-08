@@ -197,6 +197,16 @@ def register() -> None:
     global _LOAD_HANDLER, _PRUNE_HANDLER
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    
+    # register undo handlers
+    if _LOAD_HANDLER is None:
+        _LOAD_HANDLER = bpy.app.handlers.undo_pre
+    if _LOAD_HANDLER not in bpy.app.handlers.undo_pre:
+        bpy.app.handlers.undo_pre.append(_LOAD_HANDLER)
+    if _PRUNE_HANDLER is None:
+        _PRUNE_HANDLER = bpy.app.handlers.undo_post
+    if _PRUNE_HANDLER not in bpy.app.handlers.undo_post:
+        bpy.app.handlers.undo_post.append(_PRUNE_HANDLER)
     bpy.types.Scene.thedas_io_assets = bpy.props.CollectionProperty(type=THEDAS_IO_AssetItem)  # type: ignore
     bpy.types.Scene.thedas_io_index = bpy.props.IntProperty()  # type: ignore
     bpy.types.Scene.thedas_io_page = bpy.props.IntProperty(  # type: ignore
@@ -350,6 +360,35 @@ def register() -> None:
 
 _LOAD_HANDLER = None
 _PRUNE_HANDLER = None
+_UNDOING = False
+
+
+def _on_undo_pre(_dummy: Any) -> None:
+    # set flag to skip handlers on undo
+    global _UNDOING
+    _UNDOING = True
+
+
+def _on_undo_post(_dummy: Any) -> None:
+    # clear undo flag and reset the registry after undo
+    global _UNDOING, _LOAD_HANDLER, _PRUNE_HANDLER
+    _UNDOING = False
+    
+    # reset ITEMS to drop all stored bpy refs
+    try:
+        from .export import reset
+        reset()
+    except (ImportError, AttributeError):
+        pass
+    
+    # rebuild registry for all scenes
+    for scene in list(getattr(getattr(bpy, "data", None), "scenes", None) or []):
+        try:
+            for note in _fill_assets(scene, getattr(scene, "thedas_io_db_path", "") or None):
+                print(f"DAO: {note}")
+        except (AttributeError, KeyError, ValueError) as e:
+            print(f"DAO: registry rebuild failed: {e}")
+            continue
 
 
 def _autoload_db() -> None:
