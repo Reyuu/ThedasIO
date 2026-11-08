@@ -90,6 +90,25 @@ def _import_row(
         reg["hosts"] = stats["hosts"]
         reg["armature"] = stats["armature"]
         reg["meshes"] = list(chunks.values())  # tint export reads their materials
+        
+        # diagnostic: log mesh resolution details for DA2 variants
+        if msh_name and sibling is not None:
+            for chunk in smesh.chunks:  # type: ignore
+                vcount = chunk.cells.get(8001, 0)
+                icount = chunk.cells.get(8002, 0)
+                decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method) for d in chunk.declarators]
+                bounds = chunk.bounds
+                emit({"INFO"}, f"  Mesh chunk '{chunk.name}': {vcount} verts, {icount} idx, "
+                               f"stride={chunk.stride}, bounds={bounds}")
+                for d in decls:
+                    emit({"INFO"}, f"    decl: stream={d[0]}, offset={d[1]}, dtype={d[2]}, "
+                               f"usage={d[3]}, idx={d[4]}, method={d[5]}")
+            # Log resolution path
+            hit = resolve(msh_name, row, db, local_only, game=game)
+            if hit:
+                emit({"INFO"}, f"  Resolved '{msh_name}' -> pkg={hit.get('package')}, "
+                               f"resource={hit.get('resource')}, path={hit.get('path')}")
+        
         stem = Path(row["filename"]).stem
         for name in stats["linked"]:
             node = tree.find(name)  # type: ignore

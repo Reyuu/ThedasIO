@@ -75,6 +75,20 @@ def apply_materials(
     tint = _existing_tint(mao_path.stem, row, db_path, local_only, game)
 
     mat = build_material(parsed.get("name") or mao_path.stem, parsed, images, color, tint)
+    
+    # diagnostic: log material transparency settings
+    semantic = (parsed.get("semantic") or "").lower()
+    is_transparent = semantic.startswith(("alpha", "punchthrough", "addvpunchthrough"))
+    is_cutout = semantic.startswith(("punchthrough", "addvpunchthrough"))
+    print(f"  Material '{mat.name}': semantic='{semantic}', "
+          f"transparent={is_transparent}, cutout={is_cutout}, "
+          f"blend_method={getattr(mat, 'blend_method', 'N/A')}, "
+          f"alpha_threshold={getattr(mat, 'alpha_threshold', 'N/A')}")
+    if is_transparent:
+        print(f"  -> BLEND mode enabled (see-through)")
+    elif is_cutout:
+        print(f"  -> CLIP mode enabled (alpha test)")
+    
     item["objects"].append(mat)  # live material for mao edit-back
     for obj in objs:
         obj.data.materials.append(mat)
