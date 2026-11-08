@@ -312,6 +312,37 @@ def phy_enabled(context: Any = None) -> bool:
     return False
 
 
+def node_scale_enabled(context: Any = None) -> bool:
+    # The "Export MMH node scale" switch in addon settings.
+    addons: Any = {}
+    if context is not None:
+        prefs = getattr(context, "preferences", None)
+        if prefs is not None:
+            addons = getattr(prefs, "addons", {}) or {}
+    if not addons:
+        try:
+            prefs = bpy.context.preferences
+            addons = prefs.addons if prefs is not None else {}
+        except AttributeError:
+            return False
+    candidates = []
+    get = getattr(addons, "get", None)
+    if get is not None:
+        for key in (__package__ or "", "thedas_io", "bl_ext.user_default.thedas_io"):
+            try:
+                candidates.append(get(key))
+            except (KeyError, TypeError):
+                continue
+    values = getattr(addons, "values", None)
+    if values is not None:
+        candidates.extend(values())
+    for addon in candidates:
+        prefs = getattr(addon, "preferences", None)
+        if prefs is not None and getattr(prefs, "thedas_io_export_node_scale", True):
+            return True
+    return False
+
+
 def _tnt_name(item: Item, tint_name: str = "") -> str:
     name = (tint_name or "").strip().lower()
     if name:

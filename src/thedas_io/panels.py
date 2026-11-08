@@ -375,6 +375,12 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         "collision proxies, the Add Collision operator and collision export. "
         "Off keeps PHY parsing read-only in the background.",
     )
+    thedas_io_export_node_scale: bpy.props.BoolProperty(  # type: ignore
+        name="Export MMH node scale",
+        default=True,
+        description="Include node scale (scal 6278) in .mmh files. "
+        "Off keeps the legacy behavior of exporting only position and rotation.",
+    )
     thedas_io_unlimited_assets: bpy.props.BoolProperty(  # type: ignore
         name="Show all assets (no limit)",
         default=False,
@@ -390,4 +396,5 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
         self.layout.prop(self, "thedas_io_game_dir")
         self.layout.prop(self, "thedas_io_da2_game_dir")
         self.layout.prop(self, "thedas_io_enable_phy")
+        self.layout.prop(self, "thedas_io_export_node_scale")
         self.layout.prop(self, "thedas_io_unlimited_assets")
