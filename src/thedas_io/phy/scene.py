@@ -132,7 +132,7 @@ def _bone_parent_inverse(bone: Any) -> Matrix:
     return parent.inverted_safe() @ Matrix.Translation(bone.head_local)
 
 
-def build_proxies(context: Any, reader: PhyReader, bones: Any) -> list:
+def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") -> list:
     if not reader.shapes:
         return []
     collection = _collection(context)
@@ -176,6 +176,8 @@ def build_proxies(context: Any, reader: PhyReader, bones: Any) -> list:
                 obj["thedas_io_phy_box_dim"] = tuple(float(v) for v in shape.box_dim[:3])
             for short, value in shape.masks.items():
                 obj[f"{MASK_PREFIX}{short}"] = int(value)
+            if owner:
+                obj["thedas_io_phy_owner"] = owner
             made.append(obj)
     return made
 
@@ -194,7 +196,7 @@ def default_name(kind: str, bone: str = "") -> str:
     return f"{label}_{bone}" if bone else label
 
 
-def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any) -> bpy.types.Object:
+def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any, owner: str = "") -> bpy.types.Object:
     kind = str(spec.get("kind") or "capsule")
     mesh = _mesh_for_kind(kind, spec.get("radius"), spec.get("height"), spec.get("size"))
     name = str(spec.get("name") or default_name(kind, spec.get("bone") or ""))
@@ -219,6 +221,8 @@ def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any) -> bpy.type
         obj["thedas_io_phy_height"] = float(spec.get("height") or 0.0)
     if kind == "box" and spec.get("box_dim"):
         obj["thedas_io_phy_box_dim"] = tuple(float(v) for v in spec["box_dim"][:3])
+    if owner:
+        obj["thedas_io_phy_owner"] = owner
     return obj
 
 
@@ -386,9 +390,13 @@ def adopted_specs(item: Any) -> list:
     collection = bpy.data.collections.get(COLLECTION)
     if collection is None:
         return []
+    owner = item.get("file", "")
     tracked = {o.name for o in proxies_for(item)}
     specs = []
     for obj in collection.objects:
+        # only adopt proxies that belong to this item
+        if obj.get("thedas_io_phy_owner") != owner:
+            continue
         bone_name = str(obj.get("thedas_io_phy_bone") or "")
         if not bone_name or bone_name not in arm.data.bones:
             continue

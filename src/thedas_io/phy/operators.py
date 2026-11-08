@@ -132,7 +132,8 @@ def _spawn_added_proxy(context: Any, item: Any, spec: dict) -> str:
     if bone is None:
         return ""
 
-    obj = add_proxy_for(context, spec, arm, bone)
+    owner = item.get("file", "")
+    obj = add_proxy_for(context, spec, arm, bone, owner)
     item.setdefault("collision", []).append(obj)
     mark_snapshots([obj])
     return obj.name
@@ -167,8 +168,13 @@ def _load_collision(
     bones: dict = {}
     if arm_obj is not None:
         bones = {b.name: arm_obj for b in arm_obj.data.bones}
-    proxies = build_proxies(context, reader, bones)
+    owner = reg.get("file", "")
+    proxies = build_proxies(context, reader, bones, owner)
     mark_snapshots(proxies)
+    # ensure all proxies have the owner tag
+    for p in proxies:
+        if "thedas_io_phy_owner" not in p:
+            p["thedas_io_phy_owner"] = owner
     reg["collision"] = proxies
     reg["phy_raw"] = hit.read_bytes()
     reg["phy_name"] = hit.name
