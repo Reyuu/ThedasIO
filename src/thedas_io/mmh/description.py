@@ -94,12 +94,14 @@ class MMHReader:
                 continue
             children.append(self._node(e["struct_index"], e["value"], visited))
 
-        # trsl/rota live in child structs, fold them up
+        # trsl/rota/scal live in child structs, fold them up
         for child in children:
             if child.kind == "trsl" and 6047 in child.values and 6047 not in values:
                 values[6047] = child.values[6047]
             elif child.kind == "rota" and 6048 in child.values and 6048 not in values:
                 values[6048] = child.values[6048]
+            elif child.kind == "scal" and 6278 in child.values and 6278 not in values:
+                values[6278] = child.values[6278]
 
         visited.add(struct_index)
         return Node(kind, name, values, children)
