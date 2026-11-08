@@ -2288,29 +2288,53 @@ def _patch_node_xf(gff: Any, writer: Any, base: Any, node: Any, local: Any) -> N
             pack.append(float(source[3]))
         struct.pack_into("<4f", writer.data_block, entry["offset"] + field.data_index, *pack)
 
+    # patch scale if enabled and scale is present in the source
+    if node_scale_enabled() and 6278 in node.values:
+        fourcc = int.from_bytes(b"scal", "little")
+        entry = next(
+            (
+                e
+                for e in entries
+                if e.get("value") is not None
+                and gff.struct_defs[e["struct_index"]].type_fourcc == fourcc
+            ),
+            None,
+        )
+        if entry is not None:
+            field = _field(gff, entry["struct_index"], 6278)
+            if field is not None and field.flags == 0 and field.type_id == 12:
+                # create scale pack from local[2] (scale)
+                scale = local[2]
+                pack = [float(scale[0]), float(scale[1]), float(scale[2]), 1.0]
+                struct.pack_into("<4f", writer.data_block, entry["offset"] + field.data_index, *pack)
+
 
 def _inverse_compose(parent: Any, world: Any) -> tuple:
     # exact inverse of geometry.compose: local such that compose(parent, local) == world
-    (ploc, prot), (wloc, wrot) = parent, world
+    (ploc, prot, pscale), (wloc, wrot, wscale) = parent, world
     conj = (-prot[0], -prot[1], -prot[2], prot[3])
     delta = (wloc[0] - ploc[0], wloc[1] - ploc[1], wloc[2] - ploc[2])
-    return quat_rotate(conj, delta), quat_mul(conj, wrot)
+    return quat_rotate(conj, delta), quat_mul(conj, wrot), (wscale[0] / pscale[0], wscale[1] / pscale[1], wscale[2] / pscale[2])
 
 
 def _mat_state(matrix: Any) -> tuple:
     # blender matrix -> (xyz, xyzw quat) in geometry.py convention
     t, q = matrix.translation, matrix.to_quaternion()
-    return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w)
+    # extract scale if available
+    if hasattr(matrix, 'scale'):
+        s = matrix.scale
+        return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w), (float(s[0]), float(s[1]), float(s[2]))
+    return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w), (1.0, 1.0, 1.0)
 
 
 def _live_world(live: Any, snap: Any, base: Any) -> tuple | None:
-    # edited world (loc, xyzw quat), or None when the rest matrix is untouched
-    live_loc, live_q = _mat_state(live)
-    snap_loc, snap_q = _mat_state(snap)
-    if not (_drift(live_loc, snap_loc, 1e-4) or _drift(live_q, snap_q, 1e-4)):
+    # edited world (loc, xyzw quat, scale), or None when the rest matrix is untouched
+    live_loc, live_q, live_s = _mat_state(live)
+    snap_loc, snap_q, snap_s = _mat_state(snap)
+    if not (_drift(live_loc, snap_loc, 1e-4) or _drift(live_q, snap_q, 1e-4) or _drift(live_s, snap_s, 1e-4)):
         return None
     conj = (-snap_q[0], -snap_q[1], -snap_q[2], snap_q[3])
-    return live_loc, quat_mul(quat_mul(live_q, conj), base[1])
+    return live_loc, quat_mul(quat_mul(live_q, conj), base[1]), live_s
 
 
 _DIRTY["mmh"] = _mmh_bytes

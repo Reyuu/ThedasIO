@@ -44,7 +44,7 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
     try:
         names = bone_names(tree)
         rows = flatten(tree)
-        parents = {id(n): p for n, p, _, _ in rows}
+        parents = {id(n): p for n, p, _, _, _ in rows}
         paths = {id(n): path for n, path in node_paths(tree)}
         lengths = _bone_lengths(rows)
 
@@ -59,7 +59,7 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
                 ancestor = parents[id(ancestor)]
             return None
 
-        for node, _, loc, quat in rows:
+        for node, _, loc, quat, scale in rows:
             host = host_of(node, want_bone=(node.kind == "node"))
             if node.kind == "node":
                 bone = arm_data.edit_bones.new(node.name or "bone")
@@ -117,11 +117,13 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
             recipe_bone["thedas_io_xprt"] = ",".join(exports)
         # the node's own parent-relative transform: the animation value at rest,
         # so the anim importer can subtract it (pose = rest^-1 * channel)
-        bn_pos, bn_rot = node_local(node.values)
+        bn_pos, bn_rot, bn_scale = node_local(node.values)
         if bn_rot:
             recipe_bone["thedas_io_node_rot"] = tuple(float(v) for v in bn_rot)
         if bn_pos:
             recipe_bone["thedas_io_node_pos"] = tuple(float(v) for v in bn_pos)
+        if bn_scale:
+            recipe_bone["thedas_io_node_scale"] = tuple(float(v) for v in bn_scale)
 
     # bone names stable in object mode, attach hooks then snapshot rest
 

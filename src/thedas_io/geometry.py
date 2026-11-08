@@ -493,7 +493,8 @@ def triangulate_faces(polys: list) -> list:
 def node_local(values: dict) -> tuple:
     trsl = values.get(6047) or (0.0, 0.0, 0.0, 1.0)
     rota = values.get(6048) or IDENTITY_QUAT
-    return (float(trsl[0]), float(trsl[1]), float(trsl[2])), tuple(float(x) for x in rota)
+    scale = values.get(6278) or (1.0, 1.0, 1.0)
+    return (float(trsl[0]), float(trsl[1]), float(trsl[2])), tuple(float(x) for x in rota), tuple(float(x) for x in scale[:3])
 
 
 def bone_frame(quat: tuple) -> tuple:
@@ -513,14 +514,17 @@ def compose(parent: tuple, local: tuple) -> tuple:
     # the other order looks equivalent on a flat chain but drifts with depth:
     # on qm_uhm_basb_0 it put deep bones a mean 1.38m from the geometry they
     # deform, against 0.05m here.
-    (ploc, prot), (lloc, lrot) = parent, local
+    (ploc, prot, pscale), (lloc, lrot, lscale) = parent, local
+    # apply local scale to translation
+    translated_local = (lloc[0] * lscale[0], lloc[1] * lscale[1], lloc[2] * lscale[2])
     return (
         (
-            ploc[0] + quat_rotate(prot, lloc)[0],
-            ploc[1] + quat_rotate(prot, lloc)[1],
-            ploc[2] + quat_rotate(prot, lloc)[2],
+            ploc[0] + quat_rotate(prot, translated_local)[0],
+            ploc[1] + quat_rotate(prot, translated_local)[1],
+            ploc[2] + quat_rotate(prot, translated_local)[2],
         ),
         quat_mul(prot, lrot),
+        (pscale[0] * lscale[0], pscale[1] * lscale[1], pscale[2] * lscale[2]),
     )
 
 
@@ -530,11 +534,11 @@ def flatten(tree: Any) -> list:
     def visit(node: Any, parent: Any, transform: tuple) -> None:
         local = node_local(node.values)
         world = compose(transform, local) if parent is not None else local
-        out.append((node, parent, world[0], world[1]))
+        out.append((node, parent, world[0], world[1], world[2]))
         for child in node.children:
             visit(child, node, world)
 
-    visit(tree, None, ((0.0, 0.0, 0.0), IDENTITY_QUAT))
+    visit(tree, None, ((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 1.0, 1.0)))
     return out
 
 
