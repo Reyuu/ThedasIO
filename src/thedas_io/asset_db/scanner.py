@@ -552,6 +552,28 @@ def find(
     return out
 
 
+def find_resource(name: str, db_path: Any = None, game: str | None = None) -> dict | None:
+    # Look up by the full internal path stored in the resource column.
+    db = _db_path(db_path, game)
+    if not db.exists():
+        return None
+    con = _connect(db)
+    con.row_factory = sqlite3.Row
+    try:
+        _ensure_columns(con)
+        row = con.execute(
+            "SELECT package, filename, ext, path, name_hash, resource FROM assets "
+            "WHERE resource = ? COLLATE NOCASE "
+            "ORDER BY package IS NOT NULL, prio DESC, package, path LIMIT 1",
+            (name,),
+        ).fetchone()
+    finally:
+        con.close()
+    if row is not None:
+        return dict(row)
+    return None
+
+
 def find_exact(name: str, db_path: Any = None, game: str | None = None) -> dict | None:
     # loose files first so we skip extracting, then the latest-loaded package
     # so a player's override beats the stock data it shadows

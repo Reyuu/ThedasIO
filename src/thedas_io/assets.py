@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .asset_db.scanner import find_exact, leaf_name, payload
+from .asset_db.scanner import find_exact, find_resource, leaf_name, payload
 
 IMPORTERS = {"msh": "msh", "mmh": "mmh"}
 _SESSION_DIR = None
@@ -79,6 +79,12 @@ def resolve(
     # leaf then as-given, same dir first, then db, unless local_only
     if not name:
         return None
+    # Prefer exact resource match (full internal path) for DA2 archives
+    resource = row.get("resource")
+    if resource:
+        hit = find_resource(resource, db_path=db_path, game=game)
+        if hit is not None:
+            return extract(hit) if hit["package"] else Path(hit["path"])
     candidates = _candidates(name)
     if not row["package"]:
         parent = Path(row["path"]).parent
