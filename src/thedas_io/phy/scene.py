@@ -235,16 +235,26 @@ def _values(obj: Any) -> dict:
     name = obj.get("thedas_io_phy_name")
     if name is not None:
         out["name"] = name
-    loc = obj.location
+    
+    # get bone-local transform if proxy is parented to a bone
+    if obj.parent and obj.parent_type == "BONE":
+        arm_obj = obj.parent
+        bone_local = _armature_space(obj, arm_obj)
+        if bone_local:
+            loc, quat, scale = bone_local
+        else:
+            loc, quat, scale = obj.location, obj.rotation_quaternion, obj.scale
+    else:
+        loc, quat, scale = obj.location, obj.rotation_quaternion, obj.scale
+    
     out["position"] = (loc[0], loc[1], loc[2], 1.0)
-    q = obj.rotation_quaternion
-    out["rotation"] = (q[1], q[2], q[3], q[0])
+    out["rotation"] = (quat[1], quat[2], quat[3], quat[0])
 
     # dimensions are authored in Blender by scaling the proxy, so the export
     # reads the stored size through the object's own scale. the file's capsule
     # runs along X: radius is across Y/Z, the cylinder length is along X.
     kind = obj.get("thedas_io_phy_kind")
-    sx, sy, sz = obj.scale
+    sx, sy, sz = scale
     radius = obj.get("thedas_io_phy_radius")
     if radius is not None:
         out["radius"] = float(radius) * (sy + sz) / 2.0 if kind in ("caps",) else float(radius) * sx
@@ -266,6 +276,21 @@ def _values(obj: Any) -> dict:
         out["group"] = int(obj["thedas_io_phy_group"])
     return out
 
+
+def _armature_space(obj: Any, arm_obj: Any) -> tuple:
+    """Compute object transform relative to its bone parent."""
+    bone_name = str(obj.get("thedas_io_phy_bone") or "")
+    if not bone_name or bone_name not in arm_obj.data.bones:
+        return None
+    
+    bone = arm_obj.data.bones[bone_name]
+    arm_inv = arm_obj.matrix_world.inverted()
+    m = arm_inv @ obj.matrix_world
+    return (
+        m.translation,  # position in armature space
+        m.to_quaternion(),  # rotation in armature space
+        m.to_scale(),     # scale in armature space
+    )
 
 def _same(a: Any, b: Any) -> bool:
     if isinstance(a, float) or isinstance(b, float):
