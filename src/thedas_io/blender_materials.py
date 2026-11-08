@@ -11,7 +11,7 @@ import numpy as np
 
 from .datablocks import tag
 from .export import _LOADED_ITEMS, remember
-from .materials import parse_mao_bytes, slot_roles
+from .materials import classify_material, parse_mao_bytes, slot_roles
 from .textures import _existing_tint, _missing_image, _resolve_texture
 from .tnt import DEFAULTS, alpha_input, for_side, group_name
 
@@ -74,13 +74,21 @@ def apply_materials(
 
     tint = _existing_tint(mao_path.stem, row, db_path, local_only, game)
 
+    # classify material type
+    material_type = classify_material(parsed)
+    
     mat = build_material(parsed.get("name") or mao_path.stem, parsed, images, color, tint)
+    
+    # apply specialized node group if available
+    node_group = get_material_node_group(material_type)
+    if node_group is not None:
+        _apply_node_group(mat, node_group, parsed, images)
     
     # diagnostic: log material transparency settings
     semantic = (parsed.get("semantic") or "").lower()
     is_transparent = semantic.startswith(("alpha", "punchthrough", "addvpunchthrough"))
     is_cutout = semantic.startswith(("punchthrough", "addvpunchthrough"))
-    print(f"  Material '{mat.name}': semantic='{semantic}', "
+    print(f"  Material '{mat.name}': semantic='{semantic}', type='{material_type}', "
           f"transparent={is_transparent}, cutout={is_cutout}, "
           f"blend_method={getattr(mat, 'blend_method', 'N/A')}, "
           f"alpha_threshold={getattr(mat, 'alpha_threshold', 'N/A')}")
@@ -93,6 +101,68 @@ def apply_materials(
     for obj in objs:
         obj.data.materials.append(mat)
     return mat
+
+
+def _apply_node_group(mat: Any, node_group: Any, parsed: dict, images: dict) -> None:
+    # apply a pre-built node group to the material
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    
+    # find the group node or create one
+    group_node = None
+    for node in nodes:
+        if node.type == "GROUP" and node.node_tree == node_group:
+            group_node = node
+            break
+    
+    if group_node is None:
+        group_node = nodes.new("ShaderNodeGroup")
+        group_node.node_tree = node_group
+        group_node.location = (500.0, 0.0)
+    
+    # connect texture inputs to group
+    roles = slot_roles(parsed.get("textures"))
+    for semantic, image in images.items():
+        role = roles.get(semantic)
+        if role is None:
+            continue
+        
+        tex_node = None
+        for node in nodes:
+            if node.type == "TEX_IMAGE" and node.image == image:
+                tex_node = node
+                break
+        
+        if tex_node is None:
+            tex_node = _image_node(mat, image)
+        
+        # try to connect to group input
+        if role in group_node.inputs:
+            links.new(tex_node.outputs["Color"], group_node.inputs[role])
+        elif role + " (RGB)" in group_node.inputs:
+            links.new(tex_node.outputs["Color"], group_node.inputs[role + " (RGB)"])
+            if _has_alpha(image) and (role + " (A)") in group_node.inputs:
+                links.new(tex_node.outputs["Alpha"], group_node.inputs[role + " (A)"])
+    
+    # connect group outputs to BSDF
+    out = nodes.get("Material Output")
+    bsdf = None
+    for node in nodes:
+        if node.type in ("BSDF_PRINCIPLED", "BSDF_SPECULAR"):
+            bsdf = node
+            break
+    
+    if bsdf is not None and out is not None:
+        if "Base Color" in group_node.outputs:
+            links.new(group_node.outputs["Base Color"], bsdf.inputs["Base Color"])
+        if "Normal" in group_node.outputs:
+            links.new(group_node.outputs["Normal"], bsdf.inputs["Normal"])
+        if "Height" in group_node.outputs:
+            links.new(group_node.outputs["Height"], bsdf.inputs["Displacement"])
+        if "Alpha" in group_node.outputs:
+            links.new(group_node.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if "Emission" in group_node.outputs:
+            links.new(group_node.outputs["Emission"], bsdf.inputs["Emission Color"])
 
 
 def _seed_tint(group: Any, name: str, colour: Any) -> None:
@@ -202,6 +272,31 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
         if _channel_varies(image, 2):
             trans_feed = _to_transparency(mat, bsdf, sep.outputs["Blue"])
 
+    # character-specific texture slots
+    age_diffuse = by_role.get("ageDiffuse")
+    age_normal = by_role.get("ageNormal")
+    tattoo = by_role.get("tattoo")
+    brow_stubble = by_role.get("browStubble")
+    brow_stubble_normal = by_role.get("browStubbleNormal")
+    
+    # special-purpose slots (stored as custom props for export)
+    cornea_normal = by_role.get("corneaNormal")
+    emotions_mask = by_role.get("emotionsMask")
+    emotions_normal = by_role.get("emotionsNormal")
+    relief_map = by_role.get("reliefMap")
+    mask_v = by_role.get("maskV")
+    mask_a = by_role.get("maskA")
+    mask_a2 = by_role.get("maskA2")
+    
+    # terrain-specific slots
+    palette = by_role.get("palette")
+    palette_normal = by_role.get("paletteNormal")
+    
+    # water-specific slots
+    water_normal = by_role.get("waterNormal")
+    water_decal = by_role.get("waterDecal")
+    water_mask = by_role.get("waterMask")
+
     tint_image = by_role.get("tint")
     tint_groups = {}
     if tint_image is not None and base_feed is not None:
@@ -239,6 +334,79 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
         links.new(tex.outputs["Color"], nmap.inputs["Color"])
         links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
         normal_feed = nmap.outputs["Normal"]
+
+    # character age maps (overlay on base)
+    if age_diffuse is not None:
+        tex = _image_node(mat, age_diffuse, vector, (352.6, 200.0))
+        mix = nodes.new("ShaderNodeMix")
+        mix.location = (700.0, 200.0)
+        mix.blend_type = "MULTIPLY"
+        mix.data_type = "RGBA"
+        mix.inputs["Factor"].default_value = 1.0
+        links.new(base_feed, mix.inputs["A"])
+        links.new(tex.outputs["Color"], mix.inputs["B"])
+        base_feed = mix.outputs["Result"]
+    
+    if age_normal is not None:
+        tex = _image_node(mat, age_normal, vector, (352.6, -300.0))
+        nmap = nodes.new("ShaderNodeNormalMap")
+        nmap.location = (788.1, -258.8)
+        nmap.width = 160.0
+        links.new(tex.outputs["Color"], nmap.inputs["Color"])
+        # combine with main normal
+        if normal_feed is not None:
+            mix = nodes.new("ShaderNodeMix")
+            mix.location = (1000.0, -200.0)
+            mix.blend_type = "MIX"
+            mix.data_type = "VECTOR"
+            mix.inputs["Factor"].default_value = 0.5
+            links.new(normal_feed, mix.inputs["A"])
+            links.new(nmap.outputs["Normal"], mix.inputs["B"])
+            normal_feed = mix.outputs["Result"]
+        else:
+            normal_feed = nmap.outputs["Normal"]
+
+    # tattoo overlay
+    if tattoo is not None:
+        tex = _image_node(mat, tattoo, vector, (352.6, 150.0))
+        mix = nodes.new("ShaderNodeMix")
+        mix.location = (700.0, 150.0)
+        mix.blend_type = "OVERLAY"
+        mix.data_type = "RGBA"
+        mix.inputs["Factor"].default_value = 1.0
+        links.new(base_feed, mix.inputs["A"])
+        links.new(tex.outputs["Color"], mix.inputs["B"])
+        base_feed = mix.outputs["Result"]
+
+    # brow stubble
+    if brow_stubble is not None:
+        tex = _image_node(mat, brow_stubble, vector, (352.6, 100.0))
+        mix = nodes.new("ShaderNodeMix")
+        mix.location = (700.0, 100.0)
+        mix.blend_type = "MULTIPLY"
+        mix.data_type = "RGBA"
+        mix.inputs["Factor"].default_value = 1.0
+        links.new(base_feed, mix.inputs["A"])
+        links.new(tex.outputs["Color"], mix.inputs["B"])
+        base_feed = mix.outputs["Result"]
+    
+    if brow_stubble_normal is not None:
+        tex = _image_node(mat, brow_stubble_normal, vector, (352.6, -350.0))
+        nmap = nodes.new("ShaderNodeNormalMap")
+        nmap.location = (788.1, -308.8)
+        nmap.width = 160.0
+        links.new(tex.outputs["Color"], nmap.inputs["Color"])
+        if normal_feed is not None:
+            mix = nodes.new("ShaderNodeMix")
+            mix.location = (1000.0, -250.0)
+            mix.blend_type = "MIX"
+            mix.data_type = "VECTOR"
+            mix.inputs["Factor"].default_value = 0.5
+            links.new(normal_feed, mix.inputs["A"])
+            links.new(nmap.outputs["Normal"], mix.inputs["B"])
+            normal_feed = mix.outputs["Result"]
+        else:
+            normal_feed = nmap.outputs["Normal"]
 
     if spec is not None:
         tex = _image_node(mat, spec, vector, _POS_TEX["specular"])
@@ -297,6 +465,25 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     for node in nodes:
         if node.type == "TEX_IMAGE" and node.image is not None:
             node.label = by_semantic.get(id(node.image), "")
+    
+    # store special slots as custom properties on material for export
+    special_slots = {
+        "corneaNormal": cornea_normal,
+        "emotionsMask": emotions_mask,
+        "emotionsNormal": emotions_normal,
+        "reliefMap": relief_map,
+        "maskV": mask_v,
+        "maskA": mask_a,
+        "maskA2": mask_a2,
+        "palette": palette,
+        "paletteNormal": palette_normal,
+        "waterNormal": water_normal,
+        "waterDecal": water_decal,
+        "waterMask": water_mask,
+    }
+    for key, image in special_slots.items():
+        if image is not None:
+            mat[f"thedas_io_{key}"] = image.name
 
 
 def _tint_group(side: str) -> Any:
@@ -442,3 +629,144 @@ def _channel_varies(image: Any, channel: int) -> bool:
 
 def _has_alpha(image: Any) -> bool:
     return _channel_varies(image, 3)
+
+
+# node group templates for material types
+
+def _terrain_node_group() -> Any:
+    # create or get the terrain material node group.
+    #
+    # terrain materials use a palette texture for diffuse, with mask channels
+    # controlling blending between palette entries. normal map is palette-specific.
+
+    name = "ThedasIO_Terrain"
+    tree: Any = bpy.data.node_groups.get(name)
+    if tree is not None:
+        return tree
+
+    tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    tag(tree, "node_group")
+    
+    # inputs
+    tree.interface.new_socket("Palette", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("Normal", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("MaskV", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("MaskA", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("MaskA2", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("ReliefMap", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("UVScale", in_out="INPUT", socket_type="NodeSocketVector")
+    tree.interface.new_socket("ReliefScale", in_out="INPUT", socket_type="NodeSocketVector")
+    tree.interface.new_socket("PaletteParams", in_out="INPUT", socket_type="NodeSocketVector")
+    tree.interface.new_socket("PaletteDim", in_out="INPUT", socket_type="NodeSocketVector")
+    
+    # outputs
+    tree.interface.new_socket("Base Color", in_out="OUTPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("Normal", in_out="OUTPUT", socket_type="NodeSocketVector")
+    tree.interface.new_socket("Height", in_out="OUTPUT", socket_type="NodeSocketFloat")
+    
+    nodes = tree.nodes
+    links = tree.links
+    
+    gin = nodes.new("NodeGroupInput")
+    gin.location = (-1200.0, 0.0)
+    gout = nodes.new("NodeGroupOutput")
+    gout.location = (800.0, 0.0)
+    
+    # palette texture -> Base Color (palette is the diffuse)
+    # the palette texture contains multiple color entries; UV determines which entry
+    # for now, pass through directly; actual palette indexing is done in shader
+    links.new(gin.outputs["Palette"], gout.inputs["Base Color"])
+    
+    # normal map
+    nmap = nodes.new("ShaderNodeNormalMap")
+    nmap.location = (0.0, -200.0)
+    nmap.width = 160.0
+    links.new(gin.outputs["Normal"], nmap.inputs["Color"])
+    links.new(nmap.outputs["Normal"], gout.inputs["Normal"])
+    
+    # height from relief map (red channel)
+    sep = nodes.new("ShaderNodeSeparateColor")
+    sep.location = (0.0, 200.0)
+    links.new(gin.outputs["ReliefMap"], sep.inputs["Color"])
+    links.new(sep.outputs["Red"], gout.inputs["Height"])
+    
+    return tree
+
+
+def _water_node_group() -> Any:
+    # create or get the water material node group
+    # 
+    # water materials use normal map for distortion, decal for surface detail,
+    # mask for foam/edges, and vector parameters for wave animation
+    
+    name = "ThedasIO_Water"
+    tree: Any = bpy.data.node_groups.get(name)
+    if tree is not None:
+        return tree
+
+    tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    tag(tree, "node_group")
+    
+    # inputs
+    tree.interface.new_socket("Normal", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("Decal", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("Mask", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("WaveParams", in_out="INPUT", socket_type="NodeSocketVector")  # 12 floats packed
+    tree.interface.new_socket("WaterColor", in_out="INPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("WaterVisual", in_out="INPUT", socket_type="NodeSocketVector")  # 4 floats
+    
+    # outputs
+    tree.interface.new_socket("Base Color", in_out="OUTPUT", socket_type="NodeSocketColor")
+    tree.interface.new_socket("Normal", in_out="OUTPUT", socket_type="NodeSocketVector")
+    tree.interface.new_socket("Alpha", in_out="OUTPUT", socket_type="NodeSocketFloat")
+    tree.interface.new_socket("Emission", in_out="OUTPUT", socket_type="NodeSocketColor")
+    
+    nodes = tree.nodes
+    links = tree.links
+    
+    gin = nodes.new("NodeGroupInput")
+    gin.location = (-1200.0, 0.0)
+    gout = nodes.new("NodeGroupOutput")
+    gout.location = (800.0, 0.0)
+    
+    # water color as base
+    links.new(gin.outputs["WaterColor"], gout.inputs["Base Color"])
+    
+    # normal map for water distortion
+    nmap = nodes.new("ShaderNodeNormalMap")
+    nmap.location = (0.0, -200.0)
+    nmap.width = 160.0
+    links.new(gin.outputs["Normal"], nmap.inputs["Color"])
+    links.new(nmap.outputs["Normal"], gout.inputs["Normal"])
+    
+    # mask alpha for transparency/foam
+    sep = nodes.new("ShaderNodeSeparateColor")
+    sep.location = (0.0, 200.0)
+    links.new(gin.outputs["Mask"], sep.inputs["Color"])
+    links.new(sep.outputs["Alpha"], gout.inputs["Alpha"])
+    
+    # emission from decal (specular highlights)
+    links.new(gin.outputs["Decal"], gout.inputs["Emission"])
+    
+    return tree
+
+
+def _character_node_group() -> Any:
+    # create or get the character material node group.
+    
+    # extended character shader with age maps, tattoo, and brow stubble.
+
+    # for now, the standard character wiring in _wire_material handles this
+    # this is a placeholder
+    return None
+
+
+def get_material_node_group(material_type: str) -> Any:
+    # get the appropriate node group for a material type
+    if material_type == "terrain":
+        return _terrain_node_group()
+    elif material_type == "water":
+        return _water_node_group()
+    elif material_type == "character":
+        return _character_node_group()
+    return None

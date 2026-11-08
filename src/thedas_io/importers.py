@@ -11,13 +11,15 @@ from .ani.operators import _play_animation
 from .asset_browser import _scene_db
 from .asset_db.scanner import _db_path, find_exact, leaf_name
 from .assets import extract, importer_for, resolve
-from .blender_materials import apply_materials
+from .blender_materials import apply_materials, build_material, get_material_node_group
 from .builders import build_chunk_object, build_hierarchy
 from .export import remember
 from .export_registry import _show_materials, _store_registry, _sync_export_items
+from .materials import classify_material, parse_mao_bytes, slot_roles
 from .mmh.description import MMHReader
 from .msh.description import MSHReader
 from .phy.operators import _load_collision
+from .tnt import DEFAULTS, alpha_input, for_side, group_name
 
 
 def _import_row(
@@ -106,8 +108,7 @@ def _import_row(
             # Log resolution path
             hit = resolve(msh_name, row, db, local_only, game=game)
             if hit:
-                emit({"INFO"}, f"  Resolved '{msh_name}' -> pkg={hit.get('package')}, "
-                               f"resource={hit.get('resource')}, path={hit.get('path')}")
+                emit({"INFO"}, f"  Resolved '{msh_name}' -> path={hit}")
         
         stem = Path(row["filename"]).stem
         for name in stats["linked"]:

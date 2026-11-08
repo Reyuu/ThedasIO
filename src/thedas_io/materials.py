@@ -21,7 +21,9 @@ ROLE_BY_SUFFIX = {
 }
 
 # semantic wins over filename when both claim a slot
+# extended from Haven-Tools parseMAO coverage
 ROLE_BY_SEMANTIC = {
+    # standard character materials
     "mml_tDiffuse": "diffuse",
     "mml_tNormalMap": "normal",
     "mml_tSpecularMask": "specular",
@@ -30,6 +32,39 @@ ROLE_BY_SEMANTIC = {
     "mml_tLightmap": "lightmap",
     "mml_tReliefMapPalette": "height",
     "mml_tHeightMap": "height",
+    # character-specific (age/tattoo/brow)
+    "mml_tAgeDiffuseMap": "ageDiffuse",
+    "mml_tAgeNormalMap": "ageNormal",
+    "mml_tTattooMap": "tattoo",
+    "mml_tBrowStubbleMap": "browStubble",
+    "mml_tBrowStubbleNormalMap": "browStubbleNormal",
+    # special-purpose (stored as custom props, not wired to BSDF)
+    "mml_tCorneaNormalMap": "corneaNormal",
+    "mml_tEmotionsMask": "emotionsMask",
+    "mml_tEmotionsNormal": "emotionsNormal",
+    "mml_tReliefMap": "reliefMap",
+    "mml_tMaskV": "maskV",
+    "mml_tMaskA": "maskA",
+    "mml_tMaskA2": "maskA2",
+    # terrain materials
+    "mml_tPalette": "palette",
+    "mml_tNormalMapPalette": "paletteNormal",
+    "mml_tReliefMapPalette": "reliefMap",
+    # water materials
+    "mml_tNormalMapWater": "waterNormal",
+    "mml_tWaterNormalMap": "waterNormal",
+    "mml_tDecal": "waterDecal",
+    "mml_tWaterMask": "waterMask",
+}
+
+# semantics that should ALWAYS use semantic mapping (not filename-based)
+# these are unique Haven-Tools semantics that filename suffixes would misclassify
+_SEMANTIC_PRIORITY = {
+    "ageDiffuse", "ageNormal", "tattoo", "browStubble", "browStubbleNormal",
+    "corneaNormal", "emotionsMask", "emotionsNormal", "reliefMap",
+    "maskV", "maskA", "maskA2",
+    "palette", "paletteNormal",
+    "waterNormal", "waterDecal", "waterMask",
 }
 
 
@@ -40,8 +75,8 @@ def semantic_role(semantic: str | None) -> str | None:
 
 
 def slot_roles(textures: dict | None) -> dict:
-    # filename first, semantic as fallback so mml_tTintMask
-    # doesn't steal tint from mml_tTintNoise
+    # semantic first for known priority semantics, filename as fallback
+    # for ambiguous cases like mml_tTintMask vs mml_tTintNoise
     if not textures:
         textures = {}
 
@@ -49,7 +84,11 @@ def slot_roles(textures: dict | None) -> dict:
     claimed = set()
     for semantic, res in textures.items():
         role = None
-        if res:
+        # semantic mapping for known unique semantics
+        fallback = semantic_role(semantic)
+        if fallback is not None and fallback in _SEMANTIC_PRIORITY:
+            role = fallback
+        elif res:
             role = role_of(res)
         out[semantic] = role
         if role is not None:
@@ -64,6 +103,39 @@ def slot_roles(textures: dict | None) -> dict:
                 out[semantic] = fallback
                 claimed.add(fallback)
     return out
+
+
+def classify_material(parsed: dict) -> str:
+    # classify material type for node group selection.
+    # 
+    # returns: "terrain", "water", "character", or "standard"
+
+    semantic = (parsed.get("semantic") or "").lower()
+    textures = parsed.get("textures") or {}
+    
+    # check for terrain
+    if semantic.startswith("terrain") or "terrain" in semantic:
+        return "terrain"
+    if any("palette" in k.lower() for k in textures):
+        return "terrain"
+    if any("maskv" in k.lower() or "maska" in k.lower() for k in textures):
+        return "terrain"
+    
+    # check for water
+    if semantic.startswith("water") or "water" in semantic:
+        return "water"
+    if any("water" in k.lower() for k in textures):
+        return "water"
+    if any("decal" in k.lower() for k in textures):
+        return "water"
+    
+    # check for character (age/tattoo/brow stubble)
+    if any("age" in k.lower() or "tattoo" in k.lower() or "brow" in k.lower() for k in textures):
+        return "character"
+    if any("cornea" in k.lower() or "emotion" in k.lower() for k in textures):
+        return "character"
+    
+    return "standard"
 
 
 def role_of(filename: str) -> str | None:

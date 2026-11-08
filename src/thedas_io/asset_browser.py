@@ -127,6 +127,18 @@ def _scene_db(scene: Any) -> Path:
     )
 
 
+_FILL_ASSETS_CACHE: dict = {}  # scene -> (ext, name, package, game, limit, offset)
+
+
+def invalidate_asset_cache(scene: Any = None) -> None:
+    """Clear the asset fill cache for a scene (or all scenes if None)."""
+    global _FILL_ASSETS_CACHE
+    if scene is None:
+        _FILL_ASSETS_CACHE.clear()
+    else:
+        _FILL_ASSETS_CACHE.pop(id(scene), None)
+
+
 def _fill_assets(
     scene: Any,
     db_path: Any = None,
@@ -193,6 +205,7 @@ def _ext_filter(value: Any) -> str | None:
 def _refresh_assets_page(context: Any, scene: Any = None, page: int = 0) -> tuple:
     # one place that maps filters + page to a LIMIT/OFFSET slice
     scene = scene if scene is not None else context.scene
+    invalidate_asset_cache(scene)
     limit = _asset_limit(context)
     ext = _ext_filter(getattr(scene, "thedas_io_filter_ext", "NONE"))
     name = getattr(scene, "thedas_io_filter_name", "") or None
@@ -434,6 +447,7 @@ class THEDAS_IO_OT_refresh_assets(bpy.types.Operator):
     )
 
     def execute(self: Any, context: Any) -> set:
+        invalidate_asset_cache(context.scene)
         rows, total, page = _refresh_assets_page(context, page=0)
 
         self.report({"INFO"}, _asset_message(len(rows), total, page, _asset_limit(context)))
@@ -459,4 +473,22 @@ class THEDAS_IO_OT_assets_page(bpy.types.Operator):
         rows, total, page = _refresh_assets_page(context, scene, page=want)
         limit = _asset_limit(context)
         self.report({"INFO"}, _asset_message(len(rows), total, page, limit))
+        return {"FINISHED"}
+
+
+class THEDAS_IO_OT_reset_db_path(bpy.types.Operator):
+    bl_idname = "thedas_io.reset_db_path"
+    bl_label = "Reset DB path to game default"
+    bl_description = "Clear custom database path and use the default for the selected game"
+
+    def execute(self, context: Any) -> set:
+        scene = context.scene
+        try:
+            from .asset_db.scanner import _db_path
+            game = getattr(scene, "thedas_io_game", "DAO")
+            scene.thedas_io_db_path = str(_db_path(None, game))
+            self.report({"INFO"}, f"Reset DB path to {game} default")
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to reset: {e}")
+            return {"CANCELLED"}
         return {"FINISHED"}
