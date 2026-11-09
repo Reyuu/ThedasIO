@@ -11,15 +11,13 @@ from .ani.operators import _play_animation
 from .asset_browser import _scene_db
 from .asset_db.scanner import _db_path, find_exact, leaf_name
 from .assets import extract, importer_for, resolve
-from .blender_materials import apply_materials, build_material, get_material_node_group
+from .blender_materials import apply_materials
 from .builders import build_chunk_object, build_hierarchy
 from .export import remember
 from .export_registry import _show_materials, _store_registry, _sync_export_items
-from .materials import classify_material, parse_mao_bytes, slot_roles
 from .mmh.description import MMHReader
 from .msh.description import MSHReader
 from .phy.operators import _load_collision
-from .tnt import DEFAULTS, alpha_input, for_side, group_name
 
 
 def _import_row(
@@ -92,43 +90,49 @@ def _import_row(
         reg["hosts"] = stats["hosts"]
         reg["armature"] = stats["armature"]
         reg["meshes"] = list(chunks.values())  # tint export reads their materials
-        
+
         # diagnostic: log mesh resolution details for DA2 variants
         if msh_name and sibling is not None:
             for chunk in smesh.chunks:  # type: ignore
                 vcount = chunk.cells.get(8001, 0)
                 icount = chunk.cells.get(8002, 0)
-                decls = [(d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method) for d in chunk.declarators]
+                decls = [
+                    (d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
+                    for d in chunk.declarators
+                ]
                 bounds = chunk.bounds
-                emit({"INFO"}, f"  Mesh chunk '{chunk.name}': {vcount} verts, {icount} idx, "
-                               f"stride={chunk.stride}, bounds={bounds}")
+                emit(
+                    {"INFO"},
+                    f"  Mesh chunk '{chunk.name}': {vcount} verts, {icount} idx, "
+                    f"stride={chunk.stride}, bounds={bounds}",
+                )
                 for d in decls:
-                    emit({"INFO"}, f"    decl: stream={d[0]}, offset={d[1]}, dtype={d[2]}, "
-                               f"usage={d[3]}, idx={d[4]}, method={d[5]}")
+                    emit(
+                        {"INFO"},
+                        f"    decl: stream={d[0]}, offset={d[1]}, dtype={d[2]}, "
+                        f"usage={d[3]}, idx={d[4]}, method={d[5]}",
+                    )
             # Log resolution path
             hit = resolve(msh_name, row, db, local_only, game=game)
             if hit:
                 emit({"INFO"}, f"  Resolved '{msh_name}' -> path={hit}")
-        
+
         stem = Path(row["filename"]).stem
-        for name in stats["linked"]:
-            node = tree.find(name)  # type: ignore
-            linked = chunks.get(node.values.get(6006))
-            if linked is not None:
-                mesh_mao, tried = _mao_for_node(node, stem, row, db, local_only)
-                if mesh_mao is None:
-                    notes.append(f"No MAO found for {', '.join(tried)} (scan its package first)")
-                else:
-                    apply_materials(
-                        mesh_mao,
-                        [linked],
-                        node.values.get(6335),
-                        row=row,
-                        db_path=db,
-                        notes=notes,
-                        local_only=local_only,
-                        game=game,
-                    )
+        for node, linked in stats["mesh_nodes"]:
+            mesh_mao, tried = _mao_for_node(node, stem, row, db, local_only, game)
+            if mesh_mao is None:
+                notes.append(f"No MAO found for {', '.join(tried)} (scan its package first)")
+            else:
+                apply_materials(
+                    mesh_mao,
+                    [linked],
+                    node.values.get(6335),
+                    row=row,
+                    db_path=db,
+                    notes=notes,
+                    local_only=local_only,
+                    game=game,
+                )
         note = f", missing chunks: {stats['missing']}" if stats["missing"] else ""
         collisions = _load_collision(
             context, row, stem, reg, stats["armature"], db, local_only, emit
@@ -153,6 +157,7 @@ def _mao_for_node(
     row: dict,
     db_path: Any = None,
     local_only: bool = False,
+    game: str | None = None,
 ) -> Any:
     # mao file for one mshh node, tries verbatim then lowered
 
@@ -163,7 +168,7 @@ def _mao_for_node(
     tried.append(f"{stem}.mao")
 
     for name in dict.fromkeys(tried):
-        hit = resolve(name, row, db_path, local_only)
+        hit = resolve(name, row, db_path, local_only, game=game)
         if hit is not None:
             return hit, tried
     return None, tried

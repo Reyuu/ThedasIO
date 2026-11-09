@@ -1040,6 +1040,7 @@ def test_import_mmh_pair():
                 chunk = chunks["C_CORSPIDR_Mesh1"]
                 out = {"bones": len(bones), "empties": stats["empties"],
                        "linked": stats["linked"], "missing": stats["missing"],
+                       "mesh_nodes": [[n.name, c.name] for n, c in stats["mesh_nodes"]],
                        "chain": chain[:4],
                        "parent": chunk.parent.name if chunk.parent else None,
                        "parent_type": chunk.parent_type,
@@ -1058,6 +1059,7 @@ def test_import_mmh_pair():
         "empties": 16,
         "linked": ["Mesh1"],
         "missing": [],
+        "mesh_nodes": [["Mesh1", "C_CORSPIDR_Mesh1"]],
         "chain": ["GOB", "GOD", "Root", "JSpiderButt01"],
         "parent": "c_corspidra_0.mmh",
         "parent_type": "OBJECT",

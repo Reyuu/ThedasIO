@@ -11,6 +11,7 @@ from thedas_io.materials import (
     semantic_role,
     slot_roles,
     thedas_io_normals_to_rgba,
+    vector_arrays,
     write_mao,
 )
 
@@ -58,10 +59,166 @@ def test_semantic_role():
     assert semantic_role("mml_tTintMask") == "tint"
     assert semantic_role("mml_tLightmap") == "lightmap"
     assert semantic_role("mml_tReliefMapPalette") == "height"
-    assert semantic_role("MaskV") is None
     assert semantic_role("") is None
     # a suffixed name the file convention misses stays resolved via the slot
     assert semantic_role("mml_tDiffuse") == role_of("ace_master_d.dds")
+
+
+def test_semantic_role_real_game_slots():
+    # Names as shipped: DAO uppercases some, leaves terrain and character slots
+    # unprefixed, and the brow/tattoo maps use *_0t files that a filename-first
+    # pass would hand to "tint".
+    assert semantic_role("MaskV") == "maskV"
+    assert semantic_role("MaskA") == "maskA"
+    assert semantic_role("MaskA2") == "maskA2"
+    assert semantic_role("palette") == "palette"
+    assert semantic_role("LowLodMap") == "lowLod"
+    assert semantic_role("mml_tBrowStubble") == "browStubble"
+    assert semantic_role("mml_tBrowStubbleNormal") == "browStubbleNormal"
+    assert semantic_role("mml_tTattooMask") == "tattoo"
+    assert semantic_role("mml_tEmotionsMask0") == "emotionsMask"
+    assert semantic_role("mml_tEmotionsMask1") == "emotionsMask1"
+    assert semantic_role("mml_tEmotionsNormal") == "emotionsNormal"
+    assert semantic_role("mml_tAgeDiffuseMap") == "ageDiffuse"
+    assert semantic_role("mml_tAgeNormalMap") == "ageNormal"
+    assert semantic_role("mml_tCorneaNormalMap") == "corneaNormal"
+
+
+def test_slot_roles_real_face_mao():
+    # uh_hed_deda.mao: the age/tattoo/brow maps share suffixes with the tint
+    # and normal maps, so the slot name wins for every one of them.
+    textures = {
+        "mml_tBrowStubble": "uh_hed_stb_0t.dds",
+        "mml_tBrowStubbleNormal": "uh_hed_stb_0n.dds",
+        "mml_tDiffuse": "uh_hed_deda_0d.dds",
+        "mml_tEmotionsMask0": "uh_hed_mlw.dds",
+        "mml_tEmotionsMask1": "uh_hed_mup.dds",
+        "mml_tEmotionsNormal": "uh_hed_emo_0n.dds",
+        "mml_tTintMask": "uh_hed_maka_0t.dds",
+        "mml_tNormalMap": "uh_hed_deda_0n.dds",
+        "mml_tAgeDiffuseMap": "uh_hed_olda_0d.dds",
+        "mml_tAgeNormalMap": "uh_hed_olda_0n.dds",
+        "mml_tTattooMask": "uh_tat_p01_0t.dds",
+    }
+    from thedas_io.materials import slot_roles
+
+    assert slot_roles(textures) == {
+        "mml_tBrowStubble": "browStubble",
+        "mml_tBrowStubbleNormal": "browStubbleNormal",
+        "mml_tDiffuse": "diffuse",
+        "mml_tEmotionsMask0": "emotionsMask",
+        "mml_tEmotionsMask1": "emotionsMask1",
+        "mml_tEmotionsNormal": "emotionsNormal",
+        "mml_tTintMask": "tint",
+        "mml_tNormalMap": "normal",
+        "mml_tAgeDiffuseMap": "ageDiffuse",
+        "mml_tAgeNormalMap": "ageNormal",
+        "mml_tTattooMask": "tattoo",
+    }
+
+
+def test_slot_roles_real_terrain_mao():
+    # kcc000d_79_0.mao: the terrain slots carry no mml_ prefix at all
+    from thedas_io.materials import slot_roles
+
+    assert slot_roles(
+        {
+            "palette": "kcc000d__pal.dds",
+            "normal": "kcc000d__nrm.dds",
+            "mml_tReliefMapPalette": "kcc000d__hgt.dds",
+            "MaskV": "kcc000d_79_0_v.dds",
+            "MaskA": "kcc000d_79_0_a.dds",
+            "MaskA2": "kcc000d_79_0_a2.dds",
+            "mml_tLightmap": "LM.dds",
+            "LowLodMap": "kcc000d_79_lowlod.dds",
+        }
+    ) == {
+        "palette": "palette",
+        "normal": "normal",
+        "mml_tReliefMapPalette": "height",
+        "MaskV": "maskV",
+        "MaskA": "maskA",
+        "MaskA2": "maskA2",
+        "mml_tLightmap": "lightmap",
+        "LowLodMap": "lowLod",
+    }
+
+
+def test_vector_arrays_reads_mml_extras():
+    # shl200d_water_119.mao: 3 wave rows in VSH, 2 pixel-shader rows
+    parsed = {
+        "extra": [
+            (
+                "Vector4fArray",
+                {
+                    "Name": "mat_vVSHWaterParams",
+                    "value": "0.022 -9.61651e-010 0.1 0 "
+                    "0.00939693 0.0034202 0.1 0 "
+                    "0.00707107 0.00707107 0.1 0",
+                },
+            ),
+            (
+                "Vector4fArray",
+                {"Name": "mat_vPSHWaterParams", "value": "0.28 0.22 0.16 0 2.58 0.88 63 0.93"},
+            ),
+            ("Matrix4x4f", {"Name": "mml_mUVScaleValues", "value": "1 2 3"}),
+        ]
+    }
+    arrays = vector_arrays(parsed)
+    assert sorted(arrays) == ["mat_vPSHWaterParams", "mat_vVSHWaterParams"]
+    assert arrays["mat_vVSHWaterParams"][0] == (0.022, -9.61651e-010, 0.1, 0.0)
+    assert len(arrays["mat_vVSHWaterParams"]) == 3
+    assert arrays["mat_vPSHWaterParams"][1] == (2.58, 0.88, 63.0, 0.93)
+    assert vector_arrays({}) == {}
+
+
+def test_classify_material_types():
+    from thedas_io.materials import MATERIAL_TYPES, classify_material
+
+    assert MATERIAL_TYPES == ("standard", "terrain", "water", "character")
+    # terrain: slots, not semantics (semantic is HighLod/BakedLowLod)
+    assert (
+        classify_material(
+            {
+                "name": "kcc000d_79_0",
+                "material": "terrain.mat",
+                "semantic": "HighLod",
+                "textures": {"palette": "a.dds", "MaskV": "b.dds"},
+            }
+        )
+        == "terrain"
+    )
+    # water: only the resource name says so in DAO
+    assert (
+        classify_material(
+            {
+                "name": "kcc000d_water_10325",
+                "semantic": "Default",
+                "textures": {"mat_tNormalMap": "water_bump_n.dds"},
+            }
+        )
+        == "water"
+    )
+    assert (
+        classify_material(
+            {
+                "name": "UH_HED_DEDa",
+                "semantic": "Default",
+                "textures": {"mml_tAgeDiffuseMap": "olda_0d.dds"},
+            }
+        )
+        == "character"
+    )
+    assert (
+        classify_material(
+            {
+                "name": "pn_arm_flta",
+                "semantic": "Default",
+                "textures": {"mml_tDiffuse": "x_0d.dds", "mml_tNormalMap": "x_0n.dds"},
+            }
+        )
+        == "standard"
+    )
 
 
 def test_parse_mao():
@@ -90,7 +247,7 @@ def test_slot_roles_filename_first_semantic_fallback():
     from thedas_io.materials import slot_roles
 
     assert slot_roles(parse_mao(MAO)["textures"]) == {
-        "mml_tPackedTexture": "mml_tPackedTexture",
+        "mml_tPackedTexture": "packed",
         "mml_tTintMask": "mml_tTintMask",
         "mml_tTintNoise": "tint",
     }

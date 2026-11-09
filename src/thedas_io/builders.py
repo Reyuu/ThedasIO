@@ -40,7 +40,13 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
     hosts: dict = {}
     live_names: dict = {}
     pending: list = []  # attach after object mode
-    stats: dict = {"bones": 0, "empties": 0, "linked": [], "missing": []}
+    stats: dict = {
+        "bones": 0,
+        "empties": 0,
+        "linked": [],
+        "missing": [],
+        "mesh_nodes": [],
+    }
     try:
         names = bone_names(tree)
         rows = flatten(tree)
@@ -95,6 +101,9 @@ def build_hierarchy(context: Any, tree: Any, chunks: dict) -> dict:
                 hosts[id(node)] = ("object", chunk)
                 pending.append((node, loc, quat, chunk, None, None))
                 stats["linked"].append(node.name)
+                # keep the node itself: names are not unique (an mmh root can
+                # share its name with the mshh child), so find(name) is unsafe
+                stats["mesh_nodes"].append((node, chunk))
 
     finally:
         bpy.ops.object.mode_set(mode="OBJECT")

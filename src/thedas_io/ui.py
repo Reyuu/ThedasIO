@@ -20,6 +20,7 @@ from .assets import cleanup_session
 from .blender_materials import (
     apply_materials,  # noqa: F401 - public helper for tests and scripts
     build_material,  # noqa: F401 - public helper for tests and scripts
+    create_material_node_groups,
 )
 from .bone_map import (
     THEDAS_IO_OT_auto_map_bones,
@@ -195,10 +196,41 @@ _SCENE_PROPS = (
 )
 
 
+def _build_node_groups() -> None:
+    # runs at register time, or from the startup timer when bpy.data was locked
+    global _GROUP_TIMER
+    _GROUP_TIMER = None
+    try:
+        create_material_node_groups()
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        print(f"DAO: material node groups unavailable: {exc}")
+
+
+def _defer_node_groups() -> None:
+    global _GROUP_TIMER
+    timers = getattr(bpy.app, "timers", None)
+    if timers is None:
+        return
+    if timers.is_registered(_build_node_groups):
+        timers.unregister(_build_node_groups)
+    _GROUP_TIMER = _build_node_groups
+    timers.register(_build_node_groups, first_interval=0.0)
+
+
 def register() -> None:
     global _LOAD_HANDLER, _PRUNE_HANDLER
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+
+    # templates must exist before the first import so Add > Group lists them.
+    # bpy.data is a restricted proxy while add-ons load at startup, so when the
+    # direct call cannot reach it, retry once from a timer after loading.
+    try:
+        create_material_node_groups()
+    except AttributeError:
+        _defer_node_groups()
+    except (RuntimeError, TypeError) as exc:
+        print(f"DAO: material node groups unavailable: {exc}")
 
     bpy.types.Scene.thedas_io_assets = bpy.props.CollectionProperty(type=THEDAS_IO_AssetItem)  # type: ignore
     bpy.types.Scene.thedas_io_index = bpy.props.IntProperty()  # type: ignore
@@ -353,6 +385,7 @@ def register() -> None:
 
 _LOAD_HANDLER = None
 _PRUNE_HANDLER = None
+_GROUP_TIMER = None
 
 
 def _autoload_db() -> None:
@@ -373,6 +406,13 @@ def _autoload_db() -> None:
 
 
 def _on_file_load(_dummy: Any) -> None:
+    # node groups are file data, so a freshly opened blend may lack the
+    # templates that make the material groups appear in Add > Group
+    try:
+        create_material_node_groups()
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        print(f"DAO: material node groups unavailable: {exc}")
+
     _autoload_db()
     # import registry is python-side and does not survive save. reset() first:
     # without it the previous file's items keep their source bytes (and dead
@@ -401,7 +441,16 @@ def _on_file_load(_dummy: Any) -> None:
 
 
 def unregister() -> None:
-    global _LOAD_HANDLER, _PRUNE_HANDLER
+    global _LOAD_HANDLER, _PRUNE_HANDLER, _GROUP_TIMER
+
+    if _GROUP_TIMER is not None:
+        timers = getattr(bpy.app, "timers", None)
+        if timers is not None:
+            try:
+                timers.unregister(_GROUP_TIMER)
+            except ValueError:
+                pass
+        _GROUP_TIMER = None
 
     for prop in _SCENE_PROPS:
         delattr(bpy.types.Scene, prop)

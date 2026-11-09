@@ -20,58 +20,91 @@ ROLE_BY_SUFFIX = {
     "_f": "fresnel",
 }
 
-# semantic wins over filename when both claim a slot
-# extended from Haven-Tools parseMAO coverage
+# semantic wins over filename when both claim a slot. keys are lower case: the
+# shipped games are not consistent about capitalisation (MaskV, palette, normal)
+# and the same slot arrives as mml_tBrowStubble in DAO but *Map in DA2.
 ROLE_BY_SEMANTIC = {
-    # standard character materials
-    "mml_tDiffuse": "diffuse",
-    "mml_tNormalMap": "normal",
-    "mml_tSpecularMask": "specular",
-    "mml_tEmissiveMask": "emission",
-    "mml_tTintMask": "tint",
-    "mml_tLightmap": "lightmap",
-    "mml_tReliefMapPalette": "height",
-    "mml_tHeightMap": "height",
-    # character-specific (age/tattoo/brow)
-    "mml_tAgeDiffuseMap": "ageDiffuse",
-    "mml_tAgeNormalMap": "ageNormal",
-    "mml_tTattooMap": "tattoo",
-    "mml_tBrowStubbleMap": "browStubble",
-    "mml_tBrowStubbleNormalMap": "browStubbleNormal",
-    # special-purpose (stored as custom props, not wired to BSDF)
-    "mml_tCorneaNormalMap": "corneaNormal",
-    "mml_tEmotionsMask": "emotionsMask",
-    "mml_tEmotionsNormal": "emotionsNormal",
-    "mml_tReliefMap": "reliefMap",
-    "mml_tMaskV": "maskV",
-    "mml_tMaskA": "maskA",
-    "mml_tMaskA2": "maskA2",
-    # terrain materials
-    "mml_tPalette": "palette",
-    "mml_tNormalMapPalette": "paletteNormal",
-    "mml_tReliefMapPalette": "reliefMap",
+    # standard materials
+    "mml_tdiffuse": "diffuse",
+    "mml_tnormalmap": "normal",
+    "mml_tspecularmask": "specular",
+    "mml_temissivemask": "emission",
+    "mml_ttintmask": "tint",
+    "mml_tpackedtexture": "packed",
+    "mml_tlightmap": "lightmap",
+    "mml_thelpermap": "lightmap",
+    "mml_theightmap": "height",
+    "mml_treliefmappalette": "height",
+    "mml_treliefmap": "reliefMap",
+    # character-specific (age/tattoo/brow/emotions)
+    "mml_tagediffusemap": "ageDiffuse",
+    "mml_tagediffuse": "ageDiffuse",
+    "mml_tagenormalmap": "ageNormal",
+    "mml_tagenormal": "ageNormal",
+    "mml_ttattoomap": "tattoo",
+    "mml_ttattoomask": "tattoo",
+    "mml_tbrowstubble": "browStubble",
+    "mml_tbrowstubblemap": "browStubble",
+    "mml_tbrowstubblenormal": "browStubbleNormal",
+    "mml_tbrowstubblenormalmap": "browStubbleNormal",
+    "mml_tcorneanormalmap": "corneaNormal",
+    "mml_temotionsmask": "emotionsMask",
+    # the game ships two copies of the emotion mask, numbered
+    "mml_temotionsmask0": "emotionsMask",
+    "mml_temotionsmask1": "emotionsMask1",
+    "mml_temotionsnormal": "emotionsNormal",
+    # terrain materials: the slots are not prefixed, they are literally
+    # "palette", "normal", "MaskV", "MaskA", "MaskA2", "LowLodMap"
+    "palette": "palette",
+    "normal": "normal",
+    "maskv": "maskV",
+    "maska": "maskA",
+    "maska2": "maskA2",
+    "lowlodmap": "lowLod",
     # water materials
-    "mml_tNormalMapWater": "waterNormal",
-    "mml_tWaterNormalMap": "waterNormal",
-    "mml_tDecal": "waterDecal",
-    "mml_tWaterMask": "waterMask",
+    "mml_tnormalmapwater": "waterNormal",
+    "mml_twaternormalmap": "waterNormal",
+    "mml_tdecal": "waterDecal",
+    "mml_twatermask": "waterMask",
 }
 
-# semantics that should ALWAYS use semantic mapping (not filename-based)
-# these are unique Haven-Tools semantics that filename suffixes would misclassify
+# roles whose slot name is authoritative even when the file name suggests
+# another slot. the game reuses *_0t for brow stubble and tattoo masks, which a
+# filename-first pass would otherwise hand to "tint".
 _SEMANTIC_PRIORITY = {
-    "ageDiffuse", "ageNormal", "tattoo", "browStubble", "browStubbleNormal",
-    "corneaNormal", "emotionsMask", "emotionsNormal", "reliefMap",
-    "maskV", "maskA", "maskA2",
-    "palette", "paletteNormal",
-    "waterNormal", "waterDecal", "waterMask",
+    "ageDiffuse",
+    "ageNormal",
+    "tattoo",
+    "browStubble",
+    "browStubbleNormal",
+    "corneaNormal",
+    "emotionsMask",
+    "emotionsMask1",
+    "emotionsNormal",
+    "reliefMap",
+    "height",
+    "maskV",
+    "maskA",
+    "maskA2",
+    "palette",
+    "lowLod",
+    "waterNormal",
+    "waterDecal",
+    "waterMask",
 }
+
+# every role a dotted blue material can carry, for lookups that must stay in
+# step with ROLE_BY_SEMANTIC
+MATERIAL_ROLES = frozenset(ROLE_BY_SEMANTIC.values())
+
+# material types classify_material can return
+MATERIAL_TYPES = ("standard", "terrain", "water", "character")
 
 
 def semantic_role(semantic: str | None) -> str | None:
     if not semantic:
         return None
-    return ROLE_BY_SEMANTIC.get(semantic.strip())
+    return ROLE_BY_SEMANTIC.get(semantic.strip().lower())
 
 
 def slot_roles(textures: dict | None) -> dict:
@@ -105,36 +138,60 @@ def slot_roles(textures: dict | None) -> dict:
     return out
 
 
-def classify_material(parsed: dict) -> str:
-    # classify material type for node group selection.
-    # 
-    # returns: "terrain", "water", "character", or "standard"
+def vector_arrays(parsed: dict) -> dict:
+    # MML Vector4fArray extras keep every vector in one space-separated
+    # "value" string (water waves, terrain specular colours)
+    out: dict = {}
+    for kind, attrs in parsed.get("extra") or []:
+        if kind != "Vector4fArray" or not isinstance(attrs, dict):
+            continue
+        name = attrs.get("Name")
+        try:
+            values = [float(v) for v in str(attrs.get("value") or "").split()]
+        except ValueError:
+            continue
+        if name and values:
+            out[name] = [tuple(values[i : i + 4]) for i in range(0, len(values), 4)]
+    return out
 
+
+_CHARACTER_ROLES = frozenset(
+    {
+        "ageDiffuse",
+        "ageNormal",
+        "tattoo",
+        "browStubble",
+        "browStubbleNormal",
+        "emotionsMask",
+        "emotionsMask1",
+        "emotionsNormal",
+        "corneaNormal",
+    }
+)
+
+
+def classify_material(parsed: dict) -> str:
+    # which node group a MAO wants. The shipped DAO terrain slots carry no
+    # semantic prefix (they are literally "palette"/"MaskV"), water is only
+    # identifiable by its resource name, so slots and name both count.
     semantic = (parsed.get("semantic") or "").lower()
+    name = f"{parsed.get('name') or ''} {parsed.get('material') or ''}".lower()
     textures = parsed.get("textures") or {}
-    
-    # check for terrain
-    if semantic.startswith("terrain") or "terrain" in semantic:
+    roles = set(slot_roles(textures).values())
+
+    if "terrain" in semantic or "terrain" in name:
         return "terrain"
-    if any("palette" in k.lower() for k in textures):
+    if {"palette", "maskV", "maskA", "maskA2"} & roles:
         return "terrain"
-    if any("maskv" in k.lower() or "maska" in k.lower() for k in textures):
-        return "terrain"
-    
-    # check for water
-    if semantic.startswith("water") or "water" in semantic:
+
+    if "water" in semantic or "water" in name:
         return "water"
-    if any("water" in k.lower() for k in textures):
+    if {"waterNormal", "waterDecal", "waterMask"} & roles:
         return "water"
-    if any("decal" in k.lower() for k in textures):
-        return "water"
-    
-    # check for character (age/tattoo/brow stubble)
-    if any("age" in k.lower() or "tattoo" in k.lower() or "brow" in k.lower() for k in textures):
+
+    if roles & _CHARACTER_ROLES:
         return "character"
-    if any("cornea" in k.lower() or "emotion" in k.lower() for k in textures):
-        return "character"
-    
+
     return "standard"
 
 

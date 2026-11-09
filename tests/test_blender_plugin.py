@@ -148,6 +148,7 @@ def test_register_unregister():
         ui.THEDAS_IO_OT_reload_textures,
         ui.THEDAS_IO_OT_export_substance,
         ui.THEDAS_IO_OT_import_substance,
+        ui.THEDAS_IO_OT_reset_db_path,
     ]
     for prop in (
         "thedas_io_assets",
@@ -1291,7 +1292,10 @@ def test_bone_length_skips_non_bone_children():
     hand = _node("hand", "node", (0.0, 0.0, 1.0))
     hook = _node("hook", "crst", (0.0, 0.0, 0.5))
     arm = _node("arm", "node", (0.0, 0.0, 0.0), [hook, hand])
-    rows = [(arm, None, (0.0, 0.0, 0.0), None, (1.0, 1.0, 1.0)), (hand, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0))]
+    rows = [
+        (arm, None, (0.0, 0.0, 0.0), None, (1.0, 1.0, 1.0)),
+        (hand, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0)),
+    ]
 
     assert abs(_bone_lengths(rows)[id(arm)] - 1.0) < 1e-9
 
@@ -1303,7 +1307,10 @@ def test_a_child_sitting_on_its_parent_does_not_make_a_zero_length_bone():
     # zero-length bone is degenerate in Blender
     stub = _node("stub", "node", (0.0, 0.0, 1.0))
     arm = _node("arm", "node", (0.0, 0.0, 1.0), [stub])
-    rows = [(arm, None, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0)), (stub, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0))]
+    rows = [
+        (arm, None, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0)),
+        (stub, arm, (0.0, 0.0, 1.0), None, (1.0, 1.0, 1.0)),
+    ]
 
     assert id(arm) not in _bone_lengths(rows)  # falls back to the stub
     assert _LEAF_BONE_LEN > 0.0
@@ -1456,6 +1463,7 @@ def _fake_mmh_branch(monkeypatch, tmp_path, msh_exists):
             "empties": 25,
             "linked": [],
             "missing": ["robem1"],
+            "mesh_nodes": [],
             "hosts": {},
             "armature": None,
         },
@@ -1482,6 +1490,64 @@ def test_mmh_import_warns_when_the_sibling_mesh_is_missing(monkeypatch, tmp_path
     finally:
         ITEMS.clear()
         ITEMS.update(saved)
+
+
+def test_mmh_import_materials_follow_the_mshh_node(monkeypatch, tmp_path):
+    # a root mdh and its mshh child can share a name; tree.find(name) returned
+    # the root, whose 6335/6006 are empty, so the mesh imported unmaterialed
+    from types import SimpleNamespace
+
+    from thedas_io.export import ITEMS
+
+    importers, mmh = _fake_mmh_branch(monkeypatch, tmp_path, msh_exists=True)
+    (tmp_path / "rob_appp.msh").write_bytes(b"msh")
+    mao = tmp_path / "rob_material.mao"
+    mao.write_bytes(b"mao")
+    chunk = SimpleNamespace(
+        name="robem1", cells={8001: 1, 8002: 1}, declarators=[], bounds={}, stride=0
+    )
+    mesh = SimpleNamespace(chunks=[chunk])
+    monkeypatch.setattr(importers, "MSHReader", lambda raw: SimpleNamespace(mesh=mesh))
+    built: dict = {}
+
+    def fake_chunk_object(ctx, m, c, raw, source, weld=True):
+        built["obj"] = SimpleNamespace(name="robem1")
+        return built["obj"]
+
+    monkeypatch.setattr(importers, "build_chunk_object", fake_chunk_object)
+    node = SimpleNamespace(values={6001: "rob_material", 6006: "robem1", 6335: 1.0})
+    monkeypatch.setattr(
+        importers,
+        "build_hierarchy",
+        lambda ctx, t, chunks: {
+            "bones": 0,
+            "empties": 0,
+            "linked": ["rob_appp"],
+            "missing": [],
+            "mesh_nodes": [(node, chunks["robem1"])],
+            "hosts": {},
+            "armature": None,
+        },
+    )
+    monkeypatch.setattr(importers, "_load_collision", lambda *a, **k: [])
+    calls: list = []
+    monkeypatch.setattr(
+        importers,
+        "apply_materials",
+        lambda path, objs, value, **kw: calls.append((path, objs, value)),
+    )
+    saved = dict(ITEMS)
+    ITEMS.clear()
+    try:
+        row = {"package": None, "filename": "rob_appp.mmh", "ext": ".mmh", "path": str(mmh)}
+        context = SimpleNamespace(scene=SimpleNamespace(thedas_io_game="DA2"))
+        importers._import_row(context, row, None, True, lambda *r: None)
+    finally:
+        ITEMS.clear()
+        ITEMS.update(saved)
+    assert len(calls) == 1
+    assert calls[0][1] == [built["obj"]]
+    assert calls[0][2] == 1.0
 
 
 def test_mmh_import_registers_the_msh_by_its_leaf(monkeypatch, tmp_path):
