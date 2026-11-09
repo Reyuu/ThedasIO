@@ -93,6 +93,8 @@ def test_every_input_has_a_tooltip():
         operators = [
             ui.THEDAS_IO_OT_scan_assets,
             ui.THEDAS_IO_OT_add_collision,
+            ui.THEDAS_IO_OT_remove_collision,
+            ui.THEDAS_IO_OT_pick_collision_bone,
             ui.THEDAS_IO_OT_load_animation,
             ui.THEDAS_IO_OT_export_animation,
             ui.THEDAS_IO_OT_refresh_assets,
@@ -105,7 +107,7 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_import_substance,
             ui.THEDAS_IO_OT_reload_textures,
         ]
-        assert len(operators) == 13
+        assert len(operators) == 15
         for cls in operators:
             assert cls.bl_label, cls.bl_idname
             assert cls.bl_description, cls.bl_idname
@@ -116,6 +118,69 @@ def test_every_input_has_a_tooltip():
                 assert kwargs.get("subtype") == "DIR_PATH", cls.bl_idname
     finally:
         ext.unregister()
+
+
+def test_the_collision_panel_lists_every_shape_with_its_bone():
+    from types import SimpleNamespace
+
+    from thedas_io.export import ITEMS
+
+    class _Proxy:
+        def __init__(self, name, kind, bone):
+            self.name = name
+            self.map = {
+                "thedas_io_phy_kind": kind,
+                "thedas_io_phy_bone": bone,
+            }
+
+        def get(self, key, default=None):
+            return self.map.get(key, default)
+
+    arm = SimpleNamespace(type="ARMATURE", data=SimpleNamespace(bones=[]))
+    ITEMS["qm.mmh"] = {
+        "file": "qm.mmh",
+        "kind": "mmh",
+        "phy_raw": b"phy",
+        "armature": arm,
+        "collision": [
+            _Proxy("HED_Capsule01", "caps", "Neck1"),
+            _Proxy("ColWmesh_1", "mshs", ""),
+        ],
+    }
+    scene = SimpleNamespace()
+    phy_ctx = SimpleNamespace(
+        scene=scene,
+        active_object=None,
+        preferences=SimpleNamespace(
+            addons={
+                "thedas_io": SimpleNamespace(preferences=SimpleNamespace(thedas_io_enable_phy=True))
+            }
+        ),
+    )
+
+    panel = cast(Any, ui.THEDAS_IO_PT_collision())
+    panel.draw(phy_ctx)
+    assert panel.layout.operators == [
+        "thedas_io.add_collision",
+        "thedas_io.add_collision",
+        "thedas_io.add_collision",
+        "thedas_io.add_collision",
+        "thedas_io.pick_collision_bone",
+        "thedas_io.remove_collision",
+        "thedas_io.pick_collision_bone",
+        "thedas_io.remove_collision",
+    ]
+    assert "HED_Capsule01 (capsule)" in panel.layout.labels
+    assert "ColWmesh_1 (mesh)" in panel.layout.labels
+    # the bone picker offers the armature's bones, and names the new shape's bone
+    assert panel.layout.props == [(scene, "thedas_io_collision_bone", "New shape bone")]
+
+    # nothing imported: the panel says so instead of drawing rows
+    ITEMS.clear()
+    panel = cast(Any, ui.THEDAS_IO_PT_collision())
+    panel.draw(phy_ctx)
+    assert panel.layout.operators == []
+    assert "Import a model with a .phy to edit its collision" in panel.layout.labels
 
 
 def test_register_unregister():
@@ -137,6 +202,9 @@ def test_register_unregister():
         ui.THEDAS_IO_AddonPreferences,
         ui.THEDAS_IO_OT_scan_assets,
         ui.THEDAS_IO_OT_add_collision,
+        ui.THEDAS_IO_OT_remove_collision,
+        ui.THEDAS_IO_OT_pick_collision_bone,
+        ui.THEDAS_IO_PT_collision,
         ui.THEDAS_IO_OT_load_animation,
         ui.THEDAS_IO_OT_export_animation,
         ui.THEDAS_IO_OT_refresh_assets,
@@ -223,10 +291,10 @@ def test_addon_preferences():
         (prefs, "thedas_io_export_node_scale", ""),
         (prefs, "thedas_io_unlimited_assets", ""),
     ]
-    # experimental collider work stays off until the user turns it on
+    # collision handling is on by default
     ann = cast(Any, ui.THEDAS_IO_AddonPreferences).__annotations__
     phy_prop = ann.get("thedas_io_enable_phy")
-    assert phy_prop is not None and phy_prop.kwargs.get("default") is False
+    assert phy_prop is not None and phy_prop.kwargs.get("default") is True
     uncapped = ann.get("thedas_io_unlimited_assets")
     assert uncapped is not None and uncapped.kwargs.get("default") is False
 
@@ -374,6 +442,7 @@ def test_browser_refresh_and_draw(tmp_path):
     assert "thedas_io.add_collision" not in panel.layout.operators
     assert "thedas_io.load_animation" not in panel.layout.operators
 
+    # the collision controls live in the Collision panel now, not here
     phy_ctx = SimpleNamespace(
         scene=scene,
         preferences=SimpleNamespace(
@@ -387,7 +456,6 @@ def test_browser_refresh_and_draw(tmp_path):
     assert panel.layout.operators == [
         "thedas_io.refresh_assets",
         "thedas_io.scan_assets",
-        "thedas_io.add_collision",
         "thedas_io.import_asset",
     ]
     assert panel.layout.lists == [("THEDAS_IO_UL_assets", "thedas_io_assets")]

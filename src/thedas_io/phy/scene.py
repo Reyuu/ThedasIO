@@ -3,35 +3,93 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Quaternion, Vector
 
 from .description import PhyReader
 
-COLLECTION = "ThedasIO Collision"
+COLLECTION = "Collision"
+COLLECTION_TAG = "thedas_io_phy_owner"
+MODEL_TAG = "thedas_io_model_owner"
+PROXY_FRAME = "thedas_io_phy_frame"
+PROXY_FRAME_VERSION = 2
 MASK_PREFIX = "thedas_io_phy_mask_"
 SIDES = 12
 
+# node axes -> blender bone axes: node x -> bone y, node y -> bone z, node z -> bone x
+NODE_TO_BONE = Matrix(
+    (
+        (0.0, 0.0, 1.0, 0.0),
+        (1.0, 0.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+)
+QP = Quaternion((0.5, 0.5, 0.5, 0.5))
+QP_INV = Quaternion((0.5, -0.5, -0.5, -0.5))
 
-def _capsule(radius: float | None, height: float | None) -> tuple[list, list]:
+# barely-there fill with an edge outline, so shapes read against the model
+PROXY_MATERIAL = "ThedasIO Collision"
+PROXY_ALPHA = 0.1
+PROXY_COLOR = (1.0, 0.45, 0.15)
+
+
+def proxy_material() -> Any:
+    material = bpy.data.materials.get(PROXY_MATERIAL)
+    if material is None:
+        material = bpy.data.materials.new(PROXY_MATERIAL)
+    material.diffuse_color = (*PROXY_COLOR, PROXY_ALPHA)
+    try:
+        material.blend_method = "BLEND"
+    except (AttributeError, TypeError):
+        pass
+    material.use_nodes = True
+    bsdf = material.node_tree.nodes.get("Principled BSDF")
+    if bsdf is not None:
+        bsdf.inputs["Base Color"].default_value = (*PROXY_COLOR, 1.0)
+        bsdf.inputs["Alpha"].default_value = PROXY_ALPHA
+    return material
+
+
+def _dress(obj: Any) -> None:
+    # shared material, edge outline, drawn through the model it collides for
+    try:
+        if not obj.data.materials:
+            obj.data.materials.append(proxy_material())
+        obj.show_in_front = True
+        obj.show_wire = True
+    except (AttributeError, ReferenceError, TypeError, RuntimeError):
+        pass
+
+
+def _capsule(
+    radius: float | None, height: float | None, along_x: bool = False
+) -> tuple[list, list]:
+    # node space: a .phy capsule runs along Z, except on a model-space root bone
     r = float(radius) if radius else 0.05
     h = float(height) if height else 0.0
+    if h <= r:
+        return _sphere(radius)
     cap = 4
     rings = []
-    for i in range(cap + 1):  # -X cap, pole to equator
+    for i in range(cap + 1):  # -Z cap, pole to equator
         a = (math.pi / 2) * i / cap
         rings.append((-h / 2 - r * math.cos(a), r * math.sin(a)))
-    for i in range(cap + 1):  # +X cap, equator to pole
+    for i in range(cap + 1):  # +Z cap, equator to pole
         a = (math.pi / 2) * (cap - i) / cap
         rings.append((h / 2 + r * math.cos(a), r * math.sin(a)))
 
     verts, faces = [], []
-    for x, rad in rings:
+    for z, rad in rings:
         for j in range(SIDES):
             t = 2 * math.pi * j / SIDES
-            verts.append((x, rad * math.cos(t), rad * math.sin(t)))
+            if along_x:
+                verts.append((z, rad * math.cos(t), rad * math.sin(t)))
+            else:
+                verts.append((rad * math.cos(t), rad * math.sin(t), z))
     for i in range(len(rings) - 1):
         for j in range(SIDES):
             k = (j + 1) % SIDES
@@ -72,12 +130,79 @@ def _mesh_from(nxs_mesh: Any) -> bpy.types.Mesh:
     return mesh
 
 
-def _mesh_for(shape: Any) -> bpy.types.Mesh:
+def _mesh_from_geometry(verts: Any, tris: Any) -> bpy.types.Mesh:
+    mesh = bpy.data.meshes.new(f"thedas_io_proxy_mesh_{len(verts)}")
+    mesh.from_pydata(list(verts), [], list(tris))
+    mesh.update()
+    return mesh
+
+
+def object_geometry(obj: Any, selected_only: bool = False) -> tuple[list, list]:
+    # triangle soup of an object's mesh, optionally only its selected faces
+    mesh = getattr(obj, "data", None)
+    if mesh is None or not hasattr(mesh, "vertices"):
+        return [], []
+    try:
+        mesh.calc_loop_triangles()
+        triangles = list(mesh.loop_triangles)
+    except (AttributeError, RuntimeError):
+        return [], []
+    selected = selected_only and any(p.select for p in mesh.polygons)
+    verts, tris, remap = [], [], {}
+    for tri in triangles:
+        if selected and not mesh.polygons[tri.polygon_index].select:
+            continue
+        corners = []
+        for vi in tri.vertices:
+            if vi not in remap:
+                remap[vi] = len(verts)
+                co = mesh.vertices[vi].co
+                verts.append((float(co[0]), float(co[1]), float(co[2])))
+            corners.append(remap[vi])
+        if len(set(corners)) == 3:
+            tris.append(tuple(corners))
+    return verts, tris
+
+
+def object_hull(obj: Any) -> tuple[list, list]:
+    # convex hull of the mesh's selected vertices, as a triangle soup
+    import bmesh
+
+    mesh = getattr(obj, "data", None)
+    if mesh is None or not hasattr(mesh, "vertices"):
+        return [], []
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(mesh)
+        chosen = [v for v in bm.verts if v.select]
+        if len(chosen) < 4:
+            return [], []
+        result = bmesh.ops.convex_hull(bm, input=chosen, use_existing_faces=False)
+        faces = [g for g in result["geom"] if isinstance(g, bmesh.types.BMFace)]
+        if not faces:
+            return [], []
+        verts, tris, remap = [], [], {}
+        for face in faces:
+            ids = []
+            for v in face.verts:
+                if v.index not in remap:
+                    remap[v.index] = len(verts)
+                    verts.append((float(v.co[0]), float(v.co[1]), float(v.co[2])))
+                ids.append(remap[v.index])
+            for i in range(1, len(ids) - 1):
+                if len({ids[0], ids[i], ids[i + 1]}) == 3:
+                    tris.append((ids[0], ids[i], ids[i + 1]))
+        return verts, tris
+    finally:
+        bm.free()
+
+
+def _mesh_for(shape: Any, root: bool = False) -> bpy.types.Mesh:
     kind = shape.kind
     if kind in ("mshs", "mesh") and shape.mesh is not None:
         return _mesh_from(shape.mesh)
     if kind in ("caps", "capsule"):
-        verts, faces = _capsule(shape.radius, shape.height)
+        verts, faces = _capsule(shape.radius, shape.height, along_x=root)
     elif kind in ("sphs", "sphere"):
         verts, faces = _sphere(shape.radius)
     else:
@@ -98,10 +223,14 @@ def _box_faces() -> list:
 
 
 def _mesh_for_kind(
-    kind: str, radius: float | None = None, height: float | None = None, size: Any = None
+    kind: str,
+    radius: float | None = None,
+    height: float | None = None,
+    size: Any = None,
+    root: bool = False,
 ) -> bpy.types.Mesh:
     if kind in ("caps", "capsule"):
-        verts, faces = _capsule(radius, height)
+        verts, faces = _capsule(radius, height, along_x=root)
     elif kind in ("sphs", "sphere"):
         verts, faces = _sphere(radius)
     elif kind in ("mshs", "mesh"):
@@ -114,22 +243,53 @@ def _mesh_for_kind(
     return mesh
 
 
-def _collection(context: Any) -> Any:
-    existing = bpy.data.collections.get(COLLECTION)
-    if existing is None:
-        existing = bpy.data.collections.new(COLLECTION)
-    if existing.name not in {c.name for c in context.collection.children}:
-        try:
-            context.collection.children.link(existing)
-        except (RuntimeError, TypeError):
-            pass
-    return existing
+# one collection per imported model, tagged with the owner so export finds it
+def model_collection(owner: str) -> Any:
+    owner = str(owner or "")
+    if not owner:
+        return None
+    for collection in bpy.data.collections:
+        if str(collection.get(MODEL_TAG) or "") == owner:
+            return collection
+    return None
+
+
+def collection_for(owner: str, context: Any = None) -> Any:
+    owner = str(owner or "")
+    if owner:
+        for collection in bpy.data.collections:
+            if str(collection.get(COLLECTION_TAG) or "") == owner:
+                return collection
+    if context is None:
+        return None
+    parent = (
+        model_collection(owner)
+        or getattr(context, "collection", None)
+        or getattr(getattr(context, "scene", None), "collection", None)
+    )
+    if parent is None:
+        return None
+    stem = Path(owner).stem if owner else ""
+    collection = bpy.data.collections.new(f"{stem} {COLLECTION}" if stem else COLLECTION)
+    if owner:
+        collection[COLLECTION_TAG] = owner
+    parent.children.link(collection)
+    return collection
+
+
+def _model_space(bone: Any) -> bool:
+    # the root chain keeps model space; the rest of the skeleton is bone-local
+    return bone is not None and (bone.parent is None or str(bone.name).lower() == "root")
 
 
 def _bone_parent_inverse(bone: Any) -> Matrix:
-    tail = Matrix.Translation((0.0, bone.length, 0.0))
-    parent = bone.matrix_local @ tail
-    return parent.inverted_safe() @ Matrix.Translation(bone.head_local)
+    if _model_space(bone):
+        # the root's file values are model-space, as they always were
+        tail = Matrix.Translation((0.0, bone.length, 0.0))
+        parent = bone.matrix_local @ tail
+        return parent.inverted_safe() @ Matrix.Translation(bone.head_local)
+    # child bones keep the basis in the game's node space
+    return Matrix.Translation((0.0, -bone.length, 0.0)) @ NODE_TO_BONE
 
 
 def _match_bone(bones: dict, name: Any) -> Any:
@@ -146,13 +306,20 @@ def _match_bone(bones: dict, name: Any) -> Any:
 def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") -> list:
     if not reader.shapes:
         return []
-    collection = _collection(context)
+    collection = collection_for(owner, context)
+    if collection is None:
+        return []
     made = []
     for cobj in reader.objects:
         for shape in cobj.shapes:
-            mesh = _mesh_for(shape)
+            bone_name = _match_bone(bones, shape.bone)
+            parent = bones.get(bone_name) if bone_name else None
+            bone = parent.data.bones.get(bone_name) if parent is not None else None
+            root = _model_space(bone)
+            mesh = _mesh_for(shape, root)
             obj = bpy.data.objects.new(shape.name or f"collision_{shape.type_id}", mesh)
             collection.objects.link(obj)
+            _dress(obj)
 
             # the file's transform is the object's own basis for every kind.
             # A mesh shape's vertices are centred on its own origin (a 12x16 m
@@ -164,15 +331,12 @@ def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") 
             obj.rotation_mode = "QUATERNION"
             obj.rotation_quaternion = (rot[3], rot[0], rot[1], rot[2])
 
-            bone_name = _match_bone(bones, shape.bone)
-            parent = bones.get(bone_name) if bone_name else None
             if parent is not None:
                 obj.parent = parent
                 obj.parent_type = "BONE"
                 obj.parent_bone = bone_name
                 # keep the rig link (so the proxy follows animation) while the
                 # object's own basis stays the file's
-                bone = parent.data.bones.get(bone_name)
                 if bone is not None:
                     obj.matrix_parent_inverse = _bone_parent_inverse(bone)
 
@@ -180,6 +344,7 @@ def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") 
             obj["thedas_io_phy_kind"] = shape.kind
             obj["thedas_io_phy_name"] = shape.name or ""
             obj["thedas_io_phy_bone"] = bone_name or ""
+            obj[PROXY_FRAME] = PROXY_FRAME_VERSION
             obj["thedas_io_phy_object_type"] = cobj.obj_type if cobj.obj_type is not None else 0
             obj["thedas_io_phy_group"] = cobj.group if cobj.group is not None else 0
             if shape.radius is not None:
@@ -210,12 +375,24 @@ def default_name(kind: str, bone: str = "") -> str:
     return f"{label}_{bone}" if bone else label
 
 
-def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any, owner: str = "") -> bpy.types.Object:
+def add_proxy_for(
+    context: Any, spec: dict, arm_obj: Any, bone: Any, owner: str = ""
+) -> bpy.types.Object:
     kind = str(spec.get("kind") or "capsule")
-    mesh = _mesh_for_kind(kind, spec.get("radius"), spec.get("height"), spec.get("size"))
+    root = _model_space(bone)
+    if kind in ("mesh", "mshs") and spec.get("verts") and spec.get("tris"):
+        mesh = _mesh_from_geometry(spec["verts"], spec["tris"])
+    else:
+        mesh = _mesh_for_kind(
+            kind, spec.get("radius"), spec.get("height"), spec.get("size"), root=root
+        )
     name = str(spec.get("name") or default_name(kind, spec.get("bone") or ""))
     obj = bpy.data.objects.new(name, mesh)
-    _collection(context).objects.link(obj)
+    collection = collection_for(owner, context)
+    if collection is None:
+        return obj
+    collection.objects.link(obj)
+    _dress(obj)
     pos = tuple(spec.get("position") or (0.0, 0.0, 0.0))[:3]
     obj.location = pos
     rot = tuple(spec.get("rotation") or (0.0, 0.0, 0.0, 1.0))
@@ -227,10 +404,12 @@ def add_proxy_for(context: Any, spec: dict, arm_obj: Any, bone: Any, owner: str 
     obj.matrix_parent_inverse = _bone_parent_inverse(bone)
     obj["thedas_io_phy_path"] = ""
     obj["thedas_io_phy_new"] = True
-    obj["thedas_io_phy_kind"] = "caps" if kind == "capsule" else kind
+    obj["thedas_io_phy_kind"] = {"capsule": "caps", "mesh": "mshs"}.get(kind, kind)
     obj["thedas_io_phy_name"] = name
     obj["thedas_io_phy_bone"] = spec.get("bone") or ""
-    obj["thedas_io_phy_radius"] = float(spec.get("radius") or 0.05)
+    obj[PROXY_FRAME] = PROXY_FRAME_VERSION
+    if kind in ("capsule", "sphere"):
+        obj["thedas_io_phy_radius"] = float(spec.get("radius") or 0.05)
     if kind == "capsule":
         obj["thedas_io_phy_height"] = float(spec.get("height") or 0.0)
     if kind == "box" and spec.get("box_dim"):
@@ -267,15 +446,21 @@ def _values(obj: Any) -> dict:
 
     # dimensions are authored in Blender by scaling the proxy, so the export
     # reads the stored size through the object's own scale. the file's capsule
-    # runs along X: radius is across Y/Z, the cylinder length is along X.
+    # runs along Z, except on a model-space root bone, where it runs along X.
     kind = obj.get("thedas_io_phy_kind")
+    root = False
+    parent = getattr(obj, "parent", None)
+    if parent is not None and getattr(parent, "type", "") == "ARMATURE":
+        bone = parent.data.bones.get(str(getattr(obj, "parent_bone", "") or ""))
+        root = _model_space(bone)
     sx, sy, sz = scale
     radius = obj.get("thedas_io_phy_radius")
     if radius is not None:
-        out["radius"] = float(radius) * (sy + sz) / 2.0 if kind in ("caps",) else float(radius) * sx
+        across = (sy + sz) / 2.0 if root else (sx + sy) / 2.0
+        out["radius"] = float(radius) * across if kind in ("caps",) else float(radius) * sx
     height = obj.get("thedas_io_phy_height")
     if height is not None and kind in ("caps",):
-        out["height"] = float(height) * sx
+        out["height"] = float(height) * (sx if root else sz)
     box = obj.get("thedas_io_phy_box_dim")
     if box is not None:
         out["box_dim"] = tuple(float(v) * s for v, s in zip(box, (sx, sy, sz)))
@@ -343,15 +528,34 @@ def edits_for(item: Any) -> dict:
     return edits
 
 
+def node_transform(obj: Any, arm_obj: Any, bone: Any) -> tuple:
+    # object's world placement as the position/rotation/scale a .phy stores
+    m = arm_obj.matrix_world.inverted() @ obj.matrix_world
+    if _model_space(bone):
+        # root bones keep model space
+        offset = m.translation - bone.head_local
+        q = m.to_quaternion()
+        return (
+            (offset[0], offset[1], offset[2]),
+            (q.x, q.y, q.z, q.w),
+            m.to_scale(),
+        )
+    rest = bone.matrix_local.to_quaternion()
+    q_node = QP_INV @ rest.inverted() @ m.to_quaternion()
+    offset = rest.inverted() @ (m.translation - bone.head_local)
+    return (
+        (offset[1], offset[2], offset[0]),
+        (q_node.x, q_node.y, q_node.z, q_node.w),
+        m.to_scale(),
+    )
+
+
 def _adopted_spec(obj: Any, arm_obj: Any, bone_name: str) -> dict:
     from mathutils import Vector
 
     bone = arm_obj.data.bones[bone_name]
     arm_inv = arm_obj.matrix_world.inverted()
-    m = arm_inv @ obj.matrix_world
-    q = m.to_quaternion()
-    base = tuple(m.translation)
-    pos = (base[0] - bone.head_local[0], base[1] - bone.head_local[1], base[2] - bone.head_local[2])
+    pos, rot, _scale = node_transform(obj, arm_obj, bone)
 
     kind = str(obj.get("thedas_io_phy_kind") or "box")
     kind = {
@@ -367,23 +571,29 @@ def _adopted_spec(obj: Any, arm_obj: Any, bone_name: str) -> dict:
         "bone": bone_name,
         "kind": kind,
         "position": pos,
-        "rotation": (q[1], q[2], q[3], q[0]),
+        "rotation": rot,
         "name": default_name(kind, bone_name),
     }
     if kind == "box":
-        # an armature-aligned box that covers the mesh in its current (world)
-        # pose, so scale and rotation are both honoured
+        # an armature-aligned box covering the mesh in its current pose
         if hasattr(obj.data, "bound_box"):
+            rest = bone.matrix_local.to_quaternion()
             corners = [arm_inv @ (obj.matrix_world @ Vector(c)) for c in obj.data.bound_box]
             lo = [min(c[i] for c in corners) for i in range(3)]
             hi = [max(c[i] for c in corners) for i in range(3)]
-            spec["box_dim"] = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
-            spec["position"] = (
-                (lo[0] + hi[0]) / 2 - bone.head_local[0],
-                (lo[1] + hi[1]) / 2 - bone.head_local[1],
-                (lo[2] + hi[2]) / 2 - bone.head_local[2],
-            )
-            spec["rotation"] = (0.0, 0.0, 0.0, 1.0)
+            dims = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+            centre = Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2))
+            if _model_space(bone):
+                spec["box_dim"] = (dims[0], dims[1], dims[2])
+                offset = centre - bone.head_local
+                spec["position"] = (offset[0], offset[1], offset[2])
+                spec["rotation"] = (0.0, 0.0, 0.0, 1.0)
+            else:
+                offset = rest.inverted() @ (centre - bone.head_local)
+                spec["box_dim"] = (dims[1], dims[2], dims[0])
+                spec["position"] = (offset[1], offset[2], offset[0])
+                axis = QP_INV @ rest.inverted()
+                spec["rotation"] = (axis.x, axis.y, axis.z, axis.w)
     else:
         spec["radius"] = float(obj.get("thedas_io_phy_radius") or 0.05)
         if kind == "capsule":
@@ -392,15 +602,13 @@ def _adopted_spec(obj: Any, arm_obj: Any, bone_name: str) -> dict:
 
 
 def adopted_specs(item: Any) -> list:
-    import bpy
-
     arm = item.get("armature")
     if arm is None:
         return []
-    collection = bpy.data.collections.get(COLLECTION)
+    owner = item.get("file", "")
+    collection = collection_for(owner)
     if collection is None:
         return []
-    owner = item.get("file", "")
     tracked = {o.name for o in proxies_for(item)}
     specs = []
     for obj in collection.objects:
@@ -415,3 +623,72 @@ def adopted_specs(item: Any) -> list:
             continue
         specs.append(_adopted_spec(obj, arm, bone_name))
     return specs
+
+
+def _upgrade_proxy(obj: Any, arm: Any) -> None:
+    if obj.get(PROXY_FRAME) == PROXY_FRAME_VERSION:
+        return
+    bone = None
+    if arm is not None:
+        name = str(obj.get("thedas_io_phy_bone") or "")
+        bone = arm.data.bones.get(name) if name else None
+    if bone is not None:
+        if obj.get("thedas_io_phy_new") and bone.parent is not None:
+            # old added shapes on a child bone stored their basis in armature space
+            rest = bone.matrix_local.to_quaternion()
+            offset = rest.inverted() @ Vector(obj.location)
+            obj.location = (offset[1], offset[2], offset[0])
+            obj.rotation_mode = "QUATERNION"
+            obj.rotation_quaternion = QP_INV @ rest.inverted() @ obj.rotation_quaternion
+        obj.matrix_parent_inverse = _bone_parent_inverse(bone)
+    if str(obj.get("thedas_io_phy_kind") or "") in ("caps", "capsule"):
+        old = obj.data
+        obj.data = _mesh_for_kind(
+            "capsule",
+            obj.get("thedas_io_phy_radius"),
+            obj.get("thedas_io_phy_height"),
+            root=_model_space(bone),
+        )
+        if old is not None and old.users == 0:
+            bpy.data.meshes.remove(old)
+    obj[PROXY_FRAME] = PROXY_FRAME_VERSION
+
+
+def migrate_item(item: Any, context: Any = None) -> list:
+    # old blends: proxies in the global collection, armature-space bases
+    owner = str(item.get("file") or "")
+    if not owner:
+        return []
+    arm = item.get("armature")
+    scene = getattr(context, "scene", None)
+    model = model_collection(owner)
+    if model is None:
+        parent = getattr(context, "collection", None) or getattr(scene, "collection", None)
+        if parent is not None:
+            model = bpy.data.collections.new(Path(owner).stem)
+            model[MODEL_TAG] = owner
+            parent.children.link(model)
+            for obj in [arm, *(item.get("meshes") or [])]:
+                if obj is None:
+                    continue
+                for old in list(getattr(obj, "users_collection", ()) or ()):
+                    old.objects.unlink(obj)
+                model.objects.link(obj)
+    collection = collection_for(owner, context)
+    proxies = []
+    for obj in bpy.data.objects:
+        if str(obj.get("thedas_io_phy_owner") or "") != owner:
+            continue
+        if not obj.get("thedas_io_phy_kind"):
+            continue
+        _upgrade_proxy(obj, arm)
+        if collection is not None:
+            for old in list(getattr(obj, "users_collection", ()) or ()):
+                if old is not collection:
+                    old.objects.unlink(obj)
+            if collection.name not in {c.name for c in obj.users_collection}:
+                collection.objects.link(obj)
+        proxies.append(obj)
+    if proxies:
+        item["collision"] = proxies
+    return proxies

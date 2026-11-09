@@ -79,12 +79,18 @@ def resolve(
     # leaf then as-given, same dir first, then db, unless local_only
     if not name:
         return None
-    # Prefer exact resource match (full internal path) for DA2 archives
+    # Prefer exact resource match (full internal path) for DA2 archives, but only
+    # for the row's own file: siblings share the row and would resolve to it
     resource = row.get("resource")
     if resource:
-        hit = find_resource(resource, db_path=db_path, game=game)
-        if hit is not None:
-            return extract(hit) if hit["package"] else Path(hit["path"])
+        own = {
+            leaf_name(str(row.get("filename") or "")).lower(),
+            leaf_name(str(resource)).lower(),
+        }
+        if leaf_name(str(name)).lower() in own:
+            hit = find_resource(resource, db_path=db_path, game=game)
+            if hit is not None:
+                return extract(hit) if hit["package"] else Path(hit["path"])
     candidates = _candidates(name)
     if not row["package"]:
         parent = Path(row["path"]).parent

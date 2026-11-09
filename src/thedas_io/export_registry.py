@@ -357,7 +357,7 @@ def rebuild_registry(scene: Any) -> list:
     def fetch(name: str) -> Any:
         row = {"package": None, "filename": name, "ext": Path(name).suffix, "path": ""}
         try:
-            return resolve(name, row, db, False)
+            return resolve(name, row, db, False, game=getattr(scene, "thedas_io_game", "DAO"))
         except (OSError, ValueError, KeyError, sqlite3.Error):
             return None
 
@@ -387,6 +387,25 @@ def rebuild_registry(scene: Any) -> list:
             item["meshes"] = [
                 meshes_by_name[n] for n in entry.get("meshes") or [] if n in meshes_by_name
             ]
+            stem = Path(name).stem
+            phy = fetch(f"{stem}.phy")
+            if phy is not None and phy.is_file():
+                try:
+                    item["phy_raw"] = phy.read_bytes()
+                    item["phy_name"] = phy.name
+                    from .phy.description import PhyReader
+
+                    item["phy_shapes"] = PhyReader(item["phy_raw"]).shapes
+                except (ValueError, OSError):
+                    pass
+            try:
+                from types import SimpleNamespace
+
+                from .phy.scene import migrate_item
+
+                migrate_item(item, SimpleNamespace(scene=scene, collection=scene.collection))
+            except Exception as exc:  # noqa: BLE001 - migration must not block opening a blend
+                notes.append(f"{name}: could not migrate collision ({exc})")
         elif kind == "msh":
             # msh item carries object chunk pairs, match chunk back by name
             mesh = MSHReader(raw).mesh

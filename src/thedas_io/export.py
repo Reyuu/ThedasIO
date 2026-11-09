@@ -110,7 +110,9 @@ Item = TypedDict(
         "as_tnt": str,
         "phy_raw": bytes,
         "phy_name": str,
+        "phy_shapes": list,
         "phy_additions": list,
+        "phy_removals": list,
         "collision": list,
     },
     total=False,
@@ -266,24 +268,45 @@ def export_all(
 
 def _phy_bytes(item: Item) -> "bytes | None":
     # None means nothing changed, so the caller leaves the file out entirely.
-    # edits first (they address shapes by their path in the original file and
-    # change no structure), then additions on top of the edited bytes.
-    from .phy.export import add_shapes, phy_bytes
+    # order: edits (path-addressed, no structure), removals, then additions.
+    from .phy.export import add_shapes, phy_bytes, remove_shapes
     from .phy.scene import adopted_specs, edits_for
 
     if not phy_enabled():
         return None
     raw = item["phy_raw"]
     out = phy_bytes(raw, edits_for(item))
+    removals = list(item.get("phy_removals") or [])
+    if removals:
+        out = remove_shapes(out or raw, removals) or out
     additions = list(item.get("phy_additions") or [])
     additions.extend(adopted_specs(item))
+    additions = _cooked_additions(additions)
     if additions:
         out = add_shapes(out or raw, additions) or out
     return out
 
 
+def _cooked_additions(additions: Any) -> list:
+    # mesh collision stores a cooked PhysX stream, so cook new/moved geometry first
+    from .phy.cooker import cook_in_context
+
+    prepared = []
+    for spec in additions:
+        if not isinstance(spec, dict):
+            continue
+        kind = str(spec.get("kind") or "").lower()
+        if kind in ("mesh", "mshs") and not spec.get("cooked"):
+            verts, tris = spec.get("verts") or [], spec.get("tris") or []
+            if not verts or not tris:
+                raise ValueError("mesh collision needs vertices and triangles")
+            spec = {**spec, "kind": "mesh", "cooked": cook_in_context(verts, tris, bpy.context)}
+        prepared.append(spec)
+    return prepared
+
+
 def phy_enabled(context: Any = None) -> bool:
-    # The "Enable experimental PHY support" switch in addon settings.
+    # The "Enable PHY collision" switch in addon settings, on unless turned off.
     addons: Any = {}
     if context is not None:
         prefs = getattr(context, "preferences", None)
@@ -308,7 +331,9 @@ def phy_enabled(context: Any = None) -> bool:
         candidates.extend(values())
     for addon in candidates:
         prefs = getattr(addon, "preferences", None)
-        if prefs is not None and getattr(prefs, "thedas_io_enable_phy", False):
+        if prefs is None or not hasattr(prefs, "thedas_io_enable_phy"):
+            continue
+        if prefs.thedas_io_enable_phy:
             return True
     return False
 
@@ -2144,7 +2169,11 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
         local = src
         if world is not None:
             candidate = _inverse_compose(pw, world)
-            if _drift(candidate[0], src[0], 1e-5) or _drift(candidate[1], src[1], 1e-5) or _drift(candidate[2], src[2], 1e-5):
+            if (
+                _drift(candidate[0], src[0], 1e-5)
+                or _drift(candidate[1], src[1], 1e-5)
+                or _drift(candidate[2], src[2], 1e-5)
+            ):
                 base = bases.get(path)
                 if base is None:
                     raise ValueError(f"node {node.name or path}: lost in source walk")
@@ -2307,7 +2336,9 @@ def _patch_node_xf(gff: Any, writer: Any, base: Any, node: Any, local: Any) -> N
                 # create scale pack from local[2] (scale)
                 scale = local[2]
                 pack = [float(scale[0]), float(scale[1]), float(scale[2]), 1.0]
-                struct.pack_into("<4f", writer.data_block, entry["offset"] + field.data_index, *pack)
+                struct.pack_into(
+                    "<4f", writer.data_block, entry["offset"] + field.data_index, *pack
+                )
 
 
 def _inverse_compose(parent: Any, world: Any) -> tuple:
@@ -2315,16 +2346,24 @@ def _inverse_compose(parent: Any, world: Any) -> tuple:
     (ploc, prot, pscale), (wloc, wrot, wscale) = parent, world
     conj = (-prot[0], -prot[1], -prot[2], prot[3])
     delta = (wloc[0] - ploc[0], wloc[1] - ploc[1], wloc[2] - ploc[2])
-    return quat_rotate(conj, delta), quat_mul(conj, wrot), (wscale[0] / pscale[0], wscale[1] / pscale[1], wscale[2] / pscale[2])
+    return (
+        quat_rotate(conj, delta),
+        quat_mul(conj, wrot),
+        (wscale[0] / pscale[0], wscale[1] / pscale[1], wscale[2] / pscale[2]),
+    )
 
 
 def _mat_state(matrix: Any) -> tuple:
     # blender matrix -> (xyz, xyzw quat) in geometry.py convention
     t, q = matrix.translation, matrix.to_quaternion()
     # extract scale if available
-    if hasattr(matrix, 'scale'):
+    if hasattr(matrix, "scale"):
         s = matrix.scale
-        return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w), (float(s[0]), float(s[1]), float(s[2]))
+        return (
+            (float(t[0]), float(t[1]), float(t[2])),
+            (q.x, q.y, q.z, q.w),
+            (float(s[0]), float(s[1]), float(s[2])),
+        )
     return (float(t[0]), float(t[1]), float(t[2])), (q.x, q.y, q.z, q.w), (1.0, 1.0, 1.0)
 
 
@@ -2332,7 +2371,11 @@ def _live_world(live: Any, snap: Any, base: Any) -> tuple | None:
     # edited world (loc, xyzw quat, scale), or None when the rest matrix is untouched
     live_loc, live_q, live_s = _mat_state(live)
     snap_loc, snap_q, snap_s = _mat_state(snap)
-    if not (_drift(live_loc, snap_loc, 1e-4) or _drift(live_q, snap_q, 1e-4) or _drift(live_s, snap_s, 1e-4)):
+    if not (
+        _drift(live_loc, snap_loc, 1e-4)
+        or _drift(live_q, snap_q, 1e-4)
+        or _drift(live_s, snap_s, 1e-4)
+    ):
         return None
     conj = (-snap_q[0], -snap_q[1], -snap_q[2], snap_q[3])
     return live_loc, quat_mul(quat_mul(live_q, conj), base[1]), live_s

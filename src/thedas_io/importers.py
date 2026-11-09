@@ -77,9 +77,20 @@ def _import_row(
         sibling = resolve(msh_name, row, db, local_only, game=game)
         if sibling is not None and sibling.is_file():
             sraw = sibling.read_bytes()
-            smesh = MSHReader(sraw).mesh
-            for chunk in smesh.chunks:  # type: ignore
-                chunks[chunk.name] = build_chunk_object(context, smesh, chunk, sraw, source, weld)
+            try:
+                smesh = MSHReader(sraw).mesh
+            except (ValueError, IndexError, OSError) as exc:
+                smesh = None
+                notes.append(f"{row['filename']}: could not read {sibling.name} ({exc})")
+            if smesh is not None:
+                for chunk in smesh.chunks:  # type: ignore
+                    chunks[chunk.name] = build_chunk_object(
+                        context, smesh, chunk, sraw, source, weld
+                    )
+                # log mesh resolution details for DA2 variants
+                if msh_name:
+                    _log_mesh_chunks(smesh, emit)
+                    emit({"INFO"}, f"  Resolved '{msh_name}' -> path={sibling}")
         elif msh_name:
             notes.append(
                 f"{row['filename']}: sibling mesh {msh_name} not found, imported the skeleton only"
@@ -91,28 +102,8 @@ def _import_row(
         reg["armature"] = stats["armature"]
         reg["meshes"] = list(chunks.values())  # tint export reads their materials
 
-        # diagnostic: log mesh resolution details for DA2 variants
-        if msh_name and sibling is not None:
-            for chunk in smesh.chunks:  # type: ignore
-                cells = getattr(chunk, "cells", None)
-                if not isinstance(cells, dict):
-                    continue
-                emit(
-                    {"INFO"},
-                    f"  Mesh chunk '{chunk.name}': {cells.get(8001, 0)} verts, "
-                    f"{cells.get(8002, 0)} idx, stride={chunk.stride}, "
-                    f"bounds={chunk.bounds}",
-                )
-                for d in chunk.declarators:
-                    emit(
-                        {"INFO"},
-                        f"    decl: stream={d.stream}, offset={d.offset}, "
-                        f"dtype={d.dtype}, usage={d.usage}, "
-                        f"idx={d.usage_index}, method={d.method}",
-                    )
-            emit({"INFO"}, f"  Resolved '{msh_name}' -> path={sibling}")
-
         stem = Path(row["filename"]).stem
+        _model_collection(context, stem, reg)
         for node, linked in stats["mesh_nodes"]:
             mesh_mao, tried = _mao_for_node(node, stem, row, db, local_only, game)
             if mesh_mao is None:
@@ -144,6 +135,61 @@ def _import_row(
         return {"FINISHED"}
     emit({"WARNING"}, f"No importer for {row['filename']}")
     return {"CANCELLED"}
+
+
+def _log_mesh_chunks(smesh: Any, emit: Any) -> None:
+    # what the sibling mesh contained, for DA2 variants with other declarators
+    for chunk in getattr(smesh, "chunks", None) or []:
+        cells = getattr(chunk, "cells", None)
+        if not isinstance(cells, dict):
+            continue
+        emit(
+            {"INFO"},
+            f"  Mesh chunk '{chunk.name}': {cells.get(8001, 0)} verts, "
+            f"{cells.get(8002, 0)} idx, stride={chunk.stride}, bounds={chunk.bounds}",
+        )
+        for d in getattr(chunk, "declarators", None) or []:
+            emit(
+                {"INFO"},
+                f"    decl: stream={d.stream}, offset={d.offset}, dtype={d.dtype}, "
+                f"usage={d.usage}, idx={d.usage_index}, method={d.method}",
+            )
+
+
+def _model_collection(context: Any, stem: str, reg: Any) -> Any:
+    # one collection per model, so its collision collection can live inside it
+    from .phy.scene import MODEL_TAG
+
+    try:
+        collection = bpy.data.collections.new(stem)
+    except AttributeError:  # the headless fake has no collection store
+        return None
+    collection[MODEL_TAG] = reg.get("file") or stem
+    context.collection.children.link(collection)
+    for obj in _model_objects(reg):
+        for old in list(getattr(obj, "users_collection", ()) or ()):
+            old.objects.unlink(obj)
+        collection.objects.link(obj)
+    return collection
+
+
+def _model_objects(reg: Any) -> list:
+    objs = [reg.get("armature"), *(reg.get("meshes") or [])]
+    for entry in (reg.get("hosts") or {}).values():
+        if entry and entry[0] == "object" and not isinstance(entry[1], tuple):
+            objs.append(entry[1])
+    out, seen = [], set()
+    for obj in objs:
+        if obj is None:
+            continue
+        try:
+            name = obj.name
+        except (AttributeError, ReferenceError):
+            continue
+        if name not in seen:
+            seen.add(name)
+            out.append(obj)
+    return out
 
 
 def _mao_for_node(

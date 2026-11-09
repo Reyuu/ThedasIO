@@ -35,6 +35,10 @@ class FakeLayout:
     def row(self, align=False):
         return self
 
+    def prop_search(self, data, prop, search_data, search_prop, text=""):
+        # the real one returns None; record it the way prop() is recorded
+        self.props.append((data, prop, text))
+
     def operator(self, opname, text=""):
         self.operators.append(opname)
         return SimpleNamespace()
@@ -235,11 +239,17 @@ class _Quaternion:
         self.args = args
 
 
+class _Vector:
+    def __init__(self, *args):
+        self.args = args
+
+
 class _Mathutils(ModuleType):
     def __init__(self):
         super().__init__("mathutils")
         self.Matrix = _Matrix
         self.Quaternion = _Quaternion
+        self.Vector = _Vector
 
 
 mathutils = _Mathutils()

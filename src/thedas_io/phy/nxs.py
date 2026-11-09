@@ -1,20 +1,25 @@
 # A ``mshs`` collision shape stores its geometry as an ``NXS`` blob: the literal
-# ``b"NXS"``, a version byte, the ``b"MESH"`` section tag, a fixed 28-byte header,
-# then the arrays::
+# ``b"NXS"``, a version byte, the ``b"MESH"`` section tag, then::
 #
-#     36                     A * 3  float32   vertex positions
-#     36 + 12 * A            B * 3  indices   triangles, 1 byte if A <= 256
-#     ...                    B * 3  indices                      else 2
-#     end of indices         opaque tail       normals, sub-meshes
+#     0                     4   "NXS" + version
+#     4                     4   "MESH"
+#     8                     4   1
+#     12                    4   bits per axis of the accelerator's coordinates
+#                                (8 = plain float record, 10 and 18 quantised)
+#     16                    4   quantum, always 0.001 (millimetres)
+#     20                    4   255, or 2 where indices are two bytes wide
+#     24                    4   quantisation origin (float)
+#     28                    4   vertex count
+#     32                    4   triangle count
+#     36           12 * A       vertex positions
+#     ...       3 * B * W       triangle indices, W = 1 if A <= 256 else 2
+#     end of indices         the collision accelerator (see ``accelerator``)
 #
-# ``A`` is the vertex count and ``B`` the triangle count; closed meshes hit
-# ``B == 2A - 4`` exactly. Positions are the only array this module interprets.
-# Everything after the indices is carried through byte for byte, so a mesh can be
-# rescaled or moved without the collision structure that follows it shifting.
+# Positions and indices are all this module interprets; the tail is carried
+# through byte for byte, so a mesh can be rescaled or moved.
 #
-# Verified across all 624 mesh shapes in the DAO install: every stream parses,
-# and under the index-width rule above no triangle references a vertex that does
-# not exist.
+# Verified against every mesh shape in the DAO install: every stream parses and
+# no index points past its vertex array.
 
 
 from __future__ import annotations
@@ -132,3 +137,32 @@ def looks_like_mesh(raw: bytes) -> bool:
     except (ValueError, struct.error):
         return False
     return True
+
+
+# after the indices: the triangle tree's internal nodes, then OPC and HBM
+SECTIONS = (b"OPC", b"HBM")
+
+
+# map the accelerator after a mesh's indices: internal node count, then OPC and
+# HBM. bits == 8 = plain floats, 10/18 = quantised. The +64 floats and OPC pairs
+# are not decoded; the game's own cooker writes them.
+def accelerator(raw: bytes) -> dict:
+    verts, tris = struct.unpack_from("<II", raw, OFF_VERTS)
+    start = HEADER_SIZE + 12 * verts + 3 * tris * _index_width(verts)
+    tail = raw[start:]
+    out: dict = {
+        "start": start,
+        "length": len(tail),
+        "nodes": None,
+        "bits": struct.unpack_from("<I", raw, 12)[0],
+        "quantum": struct.unpack_from("<f", raw, 16)[0],
+        "origin": struct.unpack_from("<f", raw, 24)[0],
+        "sections": {},
+    }
+    if len(tail) >= 4:
+        out["nodes"] = struct.unpack_from("<I", tail, 0)[0]
+    for name in SECTIONS:
+        at = tail.find(name + b"\x01")
+        if at >= 0:
+            out["sections"][name.decode()] = at
+    return out

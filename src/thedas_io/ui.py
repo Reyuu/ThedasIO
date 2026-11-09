@@ -68,7 +68,12 @@ from .panels import (
     THEDAS_IO_UL_rename,
     _on_use_toggled,  # noqa: F401 - kept on the ui facade for tests
 )
-from .phy.operators import THEDAS_IO_OT_add_collision
+from .phy.operators import (
+    THEDAS_IO_OT_add_collision,
+    THEDAS_IO_OT_pick_collision_bone,
+    THEDAS_IO_OT_remove_collision,
+)
+from .phy.panels import THEDAS_IO_PT_collision
 from .textures import (
     THEDAS_IO_OT_reload_textures,
     _relocate_cache,
@@ -95,6 +100,9 @@ _CLASSES: tuple = (
     THEDAS_IO_AddonPreferences,
     THEDAS_IO_OT_scan_assets,
     THEDAS_IO_OT_add_collision,
+    THEDAS_IO_OT_remove_collision,
+    THEDAS_IO_OT_pick_collision_bone,
+    THEDAS_IO_PT_collision,
     THEDAS_IO_OT_load_animation,
     THEDAS_IO_OT_export_animation,
     THEDAS_IO_OT_refresh_assets,

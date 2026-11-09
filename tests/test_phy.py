@@ -12,14 +12,49 @@ import struct
 import pytest
 
 from conftest import DATA_DIR
+from thedas_io.phy import nxs
 from thedas_io.phy.description import PhyReader
-from thedas_io.phy.export import add_shapes, phy_bytes
+from thedas_io.phy.export import add_shapes, phy_bytes, remove_shapes
 
 PHY = DATA_DIR / "qm_uhm_basb_0.phy"
 
 
 def load_raw():
     return PHY.read_bytes()
+
+
+def test_remove_shapes_cuts_one_instance_out_of_its_parent():
+    # the instance stays in the data block, so every other shape keeps its bytes
+    raw = load_raw()
+    shapes = PhyReader(raw).shapes
+    assert [s.name for s in shapes] == ["HED_Capsule01", "HED_Capsule02"]
+
+    after = remove_shapes(raw, [shapes[0].path])
+    kept = PhyReader(after).shapes
+    assert [s.name for s in kept] == ["HED_Capsule02"]
+    assert kept[0].radius == shapes[1].radius
+    assert kept[0].height == shapes[1].height
+    assert kept[0].position == shapes[1].position
+    assert kept[0].masks == shapes[1].masks
+
+
+def test_remove_shapes_takes_several_and_reports_nothing_removed():
+    raw = load_raw()
+    shapes = PhyReader(raw).shapes
+    assert PhyReader(remove_shapes(raw, [s.path for s in shapes])).shapes == []
+    # a path that is not a shape, and an empty request, leave the file alone
+    assert remove_shapes(raw, [(9, 9, 9)]) is None
+    assert remove_shapes(raw, []) is None
+
+
+def test_remove_shapes_works_on_a_file_full_of_meshes():
+    # cai_lrgcrna_0 holds two NXS meshes; dropping one must not touch the other
+    raw = (DATA_DIR / "cai_lrgcrna_0.phy").read_bytes()
+    before = PhyReader(raw).shapes
+    after = PhyReader(remove_shapes(raw, [before[0].path])).shapes
+    assert [s.name for s in after] == ["Object202"]
+    assert after[0].mesh.vertex_count == before[1].mesh.vertex_count
+    assert after[0].mesh.raw == before[1].mesh.raw
 
 
 def test_names_its_model_hierarchy():
@@ -393,6 +428,50 @@ def test_mesh_fixture_decodes_its_geometry():
     reader = PhyReader(MESH_PHY.read_bytes())
     meshes = [s.mesh for s in reader.shapes if s.mesh is not None]
     assert [(m.vertex_count, m.tri_count) for m in meshes] == [(28, 52), (16, 28)]
+
+
+def test_the_accelerator_block_starts_with_its_node_count():
+    # node count is t - 1 for 2,252 of 2,283 sampled shapes, then OPC and HBM
+    reader = PhyReader(MESH_PHY.read_bytes())
+    for shape in reader.shapes:
+        mesh = shape.mesh
+        info = nxs.accelerator(mesh.raw)
+        assert info["nodes"] == mesh.tri_count - 1
+        assert info["sections"]["OPC"] < info["sections"]["HBM"]
+        assert info["sections"]["HBM"] < info["length"]
+        # bits per axis, millimetre quantum
+        assert info["bits"] in (8, 10, 18)
+        assert info["quantum"] == pytest.approx(0.001, rel=1e-3)
+
+
+def test_adding_a_mesh_shape_embeds_the_cooked_stream():
+    # a mshs shape stores a PhysX stream; cloning a shipped one proves the blob
+    # lands in COOKED_DATA_STREAM and parses back as the same mesh
+    raw = (DATA_DIR / "cai_lrgcrna_0.phy").read_bytes()
+    shipped = next(s for s in PhyReader(raw).shapes if s.kind == "mshs")
+    out = add_shapes(
+        raw,
+        [
+            {
+                "bone": "GOB",
+                "kind": "mesh",
+                "name": "TESTMESH",
+                "cooked": shipped.mesh.raw,
+                "position": (0.0, 0.0, 0.0, 1.0),
+                "rotation": (0.0, 0.0, 0.0, 1.0),
+            }
+        ],
+    )
+    added = next(s for s in PhyReader(out).shapes if s.name == "TESTMESH")
+    assert added.kind == "mshs"
+    assert added.mesh.vertex_count == shipped.mesh.vertex_count
+    assert added.mesh.tri_count == shipped.mesh.tri_count
+
+
+def test_adding_a_mesh_without_a_cooked_stream_is_an_error():
+    raw = (DATA_DIR / "cai_lrgcrna_0.phy").read_bytes()
+    with pytest.raises(ValueError, match="cooked"):
+        add_shapes(raw, [{"bone": "GOB", "kind": "mesh", "name": "NOSTREAM"}])
 
 
 def test_adding_a_primitive_the_file_defines_but_never_uses():

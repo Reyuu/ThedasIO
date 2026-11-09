@@ -9,7 +9,7 @@ from .asset_browser import (
     _invalidate_asset_limit,
     _page_count,
 )
-from .export import ITEMS, connected, phy_enabled
+from .export import ITEMS, connected
 from .export_registry import _sync_rename_later, _viewport_objects
 
 
@@ -217,17 +217,6 @@ class THEDAS_IO_PT_import(bpy.types.Panel):
             row.operator("thedas_io.scan_assets", text="Scan")
             if scene.thedas_io_scan_addins:
                 self.layout.prop(scene, "thedas_io_addins_dir", text="")
-            if phy_enabled(context):
-                arm = getattr(context, "active_object", None)
-                if arm is None or arm.type != "ARMATURE":
-                    arms = [o for o in getattr(scene, "objects", []) if o.type == "ARMATURE"]
-                    arm = arms[-1] if arms else None
-                if arm is not None and hasattr(arm, "data"):
-                    self.layout.prop_search(
-                        scene, "thedas_io_collision_bone", arm.data, "bones", text="Bone"
-                    )
-                row2 = self.layout.row(align=True)
-                row2.operator("thedas_io.add_collision", text="Add Collision")
             if scene.thedas_io_scan_active:
                 self.layout.prop(scene, "thedas_io_scan_progress", text="Scanning", slider=True)
 
@@ -370,10 +359,9 @@ class THEDAS_IO_AddonPreferences(bpy.types.AddonPreferences):
     )
     thedas_io_enable_phy: bpy.props.BoolProperty(  # type: ignore
         name="Enable PHY collision",
-        default=False,
-        description="Enable experimental PHY collision support: importing "
-        "collision proxies, the Add Collision operator and collision export. "
-        "Off keeps PHY parsing read-only in the background.",
+        default=True,
+        description="Import collision proxies and export .phy edits. "
+        "Off imports models without collision and leaves PHY parsing read-only.",
     )
     thedas_io_export_node_scale: bpy.props.BoolProperty(  # type: ignore
         name="Export MMH node scale",

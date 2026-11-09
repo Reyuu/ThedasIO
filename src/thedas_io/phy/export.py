@@ -10,6 +10,7 @@ from .description import (
     L_COBJ_DENSITY,
     L_COBJ_GROUP,
     L_COBJ_TYPE,
+    L_COOKED,
     L_HEIGHT,
     L_NAME,
     L_RADIUS,
@@ -177,11 +178,14 @@ PRIMITIVES = {
     "capsule": (b"caps", 3),
     "sphere": (b"sphs", 0),
     "box": (b"boxs", 2),
+    "mesh": (b"mshs", 5),
 }
 
 
 def _add_label(kind: str) -> Any:
-    return {"capsule": "Capsule", "sphere": "Sphere", "box": "Box"}.get(kind, "Shape")
+    return {"capsule": "Capsule", "sphere": "Sphere", "box": "Box", "mesh": "Mesh"}.get(
+        kind, "Shape"
+    )
 
 
 TEMPLATE_FOURCC = b"shap"
@@ -360,7 +364,16 @@ def add_shapes(raw: bytes, additions: Any) -> bytes | None:
             type_base = writer.alloc(bytes(gff.struct_defs[type_si].struct_size))
         else:
             type_base = _clone(writer, gff, type_si, source)
-        if kind == "capsule":
+        if kind == "mesh":
+            cooked = spec.get("cooked")
+            if not cooked:
+                raise ValueError("mesh collision needs its cooked PhysX stream")
+            field = _field(gff, type_si, L_COOKED)
+            if field is None or field.flags == 0:
+                raise ValueError("this file's mshs has no cooked data field")
+            offset = writer.alloc(struct.pack("<I", len(cooked)) + bytes(cooked))
+            struct.pack_into("<I", writer.data_block, type_base + field.data_index, offset)
+        elif kind == "capsule":
             _set_inline(
                 writer, gff, type_si, type_base, L_RADIUS, "<f", float(spec.get("radius") or 0.05)
             )
@@ -435,3 +448,44 @@ def add_shapes(raw: bytes, additions: Any) -> bytes | None:
             added += 1
 
     return writer.write() if added else None
+
+
+def remove_shapes(raw: bytes, paths: Any) -> bytes | None:
+    # cut each instance out of its parent's CHILDREN list; the instance stays in
+    # the data block, so every other byte is untouched. None = nothing removed.
+    paths = [tuple(p) for p in (paths or []) if p]
+    if not paths:
+        return None
+
+    reader = PhyReader(raw)
+    gff = reader.gff
+    writer = GFFWriter.from_reader(gff)
+    by_path = {p: (si, base) for p, si, base in _walk(gff, 0, 0)}
+    shapes = {s.path: s for s in reader.shapes}
+
+    # carry each parent's running list: after the first rewrite it lives in the writer
+    parents: dict = {}
+    removed = 0
+    for path in paths:
+        if path not in shapes or path not in by_path:
+            continue
+        parent = by_path.get(path[:-1])
+        if parent is None:
+            continue
+        key = parent
+        if key not in parents:
+            parents[key] = _child_entries(gff, parent[0], parent[1]) or []
+        entries = parents[key]
+        target = by_path[path][1]
+        keep = [
+            entry
+            for entry in entries
+            if (entry[2] if isinstance(entry, tuple) else entry) != target
+        ]
+        if len(keep) == len(entries):
+            continue
+        if _replace_children(writer, gff, parent[0], parent[1], keep):
+            parents[key] = keep
+            removed += 1
+
+    return writer.write() if removed else None
