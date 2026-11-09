@@ -3223,6 +3223,111 @@ def test_a_mesh_dropped_in_the_collision_collection_is_adopted():
     }
 
 
+def test_mesh_collision_keeps_its_position_on_export():
+    # a mesh shape's vertices are centred on the shape's own origin (the real
+    # 12x16 m stairs collision sits at +-0.1 m), so POSITION is what places it
+    # on the bone. Reading the proxy's location back as zero wrote that zero
+    # over the file's transform, so a plain import/export moved every mesh
+    # collision whose POSITION was not already zero (69 of the 148 in the
+    # shipped game).
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import export, ui
+            from thedas_io.phy.description import PhyReader
+            from thedas_io.phy.export import phy_bytes
+            try:
+                # the capsule fixture has no mesh shape, so borrow one and move
+                # it off the origin through the patcher the tool itself uses
+                raw = open(os.path.join("data", "cai_lrgcrna_0.phy"), "rb").read()
+                shapes = PhyReader(raw).shapes
+                moved = shapes[0].path
+                raw = phy_bytes(raw, {moved: {"position": (1.5, -2.0, 3.0, 1.0)}})
+                open(os.path.join(tmp, "qm_uhm_basb_0.phy"), "wb").write(raw)
+
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                item = export.ITEMS["qm_uhm_basb_0.mmh"]
+                parsed = item.get("phy_shapes") or []
+                proxies = item.get("collision") or []
+                pair = [(s, p) for s, p in zip(parsed, proxies)
+                        if s.mesh is not None]
+                return {
+                    "mesh_shapes": len(pair),
+                    "file_position": [round(v, 3)
+                                      for v in pair[0][0].position[:3]],
+                    "proxy_location": [round(v, 3)
+                                       for v in pair[0][1].location],
+                    "untouched_writes_nothing": export._phy_bytes(item) is None,
+                    "vertices_kept": len(pair[0][1].data.vertices),
+                }
+            finally:
+                phy_cleanup(tmp)
+        """)
+    ) == {
+        "mesh_shapes": 2,
+        "file_position": [1.5, -2.0, 3.0],
+        "proxy_location": [1.5, -2.0, 3.0],
+        "untouched_writes_nothing": True,
+        "vertices_kept": 28,
+    }
+
+
+def test_a_phy_that_cases_a_bone_differently_still_parents():
+    # the .phy repeats the mmh's node names, so a file can disagree with the
+    # armature on casing; the proxy still has to land on the bone, and store the
+    # armature's own spelling so later edits and adoption address the same bone
+    assert run(
+        _PHY_SETUP
+        + textwrap.dedent("""\
+        def main():
+            import bpy
+            tmp = phy_setup()  # puts src on sys.path, so import after it
+            from thedas_io import ui
+            from thedas_io.phy.description import PhyReader
+            from thedas_io.phy.scene import build_proxies
+            try:
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "qm_uhm_basb_0.mmh",
+                     "ext": ".mmh", "path": tmp + "/qm_uhm_basb_0.mmh"},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+                reader = PhyReader(open(os.path.join(
+                    tmp, "qm_uhm_basb_0.phy"), "rb").read())
+                before = sorted(s.bone for s in reader.shapes)
+                for cobj in reader.objects:
+                    for shape in cobj.shapes:
+                        shape.bone = shape.bone.swapcase()
+                bones = {b.name: arm for b in arm.data.bones}
+                made = build_proxies(bpy.context, reader, bones, "case_probe")
+                return {
+                    "file_bones": before,
+                    "asked": sorted(s.bone for s in reader.shapes),
+                    "parented": sorted(o.parent_bone for o in made),
+                    "stored": sorted(o["thedas_io_phy_bone"] for o in made),
+                    "unparented": [o.name for o in made if o.parent_type != "BONE"],
+                }
+            finally:
+                phy_cleanup(tmp)
+        """)
+    ) == {
+        "file_bones": ["Head", "Neck1"],
+        "asked": ["hEAD", "nECK1"],
+        "parented": ["Head", "Neck1"],
+        "stored": ["Head", "Neck1"],
+        "unparented": [],
+    }
+
+
 def test_phy_is_gated_until_the_experimental_switch_is_turned_on():
     # everything collision related is off until the preference is set: import
     # makes no proxies and export does not write the .phy

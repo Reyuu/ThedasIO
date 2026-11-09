@@ -132,6 +132,17 @@ def _bone_parent_inverse(bone: Any) -> Matrix:
     return parent.inverted_safe() @ Matrix.Translation(bone.head_local)
 
 
+def _match_bone(bones: dict, name: Any) -> Any:
+    # a .phy repeats the mmh's node names and may disagree with the armature on
+    # casing, so match insensitively and keep the armature's own spelling
+    if not name:
+        return None
+    if name in bones:
+        return name
+    lowered = str(name).lower()
+    return next((key for key in bones if str(key).lower() == lowered), None)
+
+
 def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") -> list:
     if not reader.shapes:
         return []
@@ -143,29 +154,32 @@ def build_proxies(context: Any, reader: PhyReader, bones: Any, owner: str = "") 
             obj = bpy.data.objects.new(shape.name or f"collision_{shape.type_id}", mesh)
             collection.objects.link(obj)
 
-            # a mesh shape's geometry is already in the file's frame; a
-            # primitive's local origin is the shape's, which sits on the bone
-            pos = tuple(shape.position or (0.0, 0.0, 0.0))[:3]
-            obj.location = pos if shape.mesh is None else (0.0, 0.0, 0.0)
+            # the file's transform is the object's own basis for every kind.
+            # A mesh shape's vertices are centred on its own origin (a 12x16 m
+            # collision mesh sits at +-0.1 m), so POSITION is what puts it on
+            # the bone: reading the object back gives the file's own values,
+            # where forcing the location to zero rewrote POSITION on export.
+            obj.location = tuple(shape.position or (0.0, 0.0, 0.0))[:3]
             rot = tuple(shape.rotation or (0.0, 0.0, 0.0, 1.0))
             obj.rotation_mode = "QUATERNION"
             obj.rotation_quaternion = (rot[3], rot[0], rot[1], rot[2])
 
-            parent = bones.get(shape.bone) if shape.bone else None
+            bone_name = _match_bone(bones, shape.bone)
+            parent = bones.get(bone_name) if bone_name else None
             if parent is not None:
                 obj.parent = parent
                 obj.parent_type = "BONE"
-                obj.parent_bone = shape.bone
+                obj.parent_bone = bone_name
                 # keep the rig link (so the proxy follows animation) while the
                 # object's own basis stays the file's
-                bone = parent.data.bones.get(shape.bone)
+                bone = parent.data.bones.get(bone_name)
                 if bone is not None:
                     obj.matrix_parent_inverse = _bone_parent_inverse(bone)
 
             obj["thedas_io_phy_path"] = ",".join(str(i) for i in shape.path)
             obj["thedas_io_phy_kind"] = shape.kind
             obj["thedas_io_phy_name"] = shape.name or ""
-            obj["thedas_io_phy_bone"] = shape.bone or ""
+            obj["thedas_io_phy_bone"] = bone_name or ""
             obj["thedas_io_phy_object_type"] = cobj.obj_type if cobj.obj_type is not None else 0
             obj["thedas_io_phy_group"] = cobj.group if cobj.group is not None else 0
             if shape.radius is not None:
@@ -239,18 +253,15 @@ def _values(obj: Any) -> dict:
     name = obj.get("thedas_io_phy_name")
     if name is not None:
         out["name"] = name
-    
-    # get bone-local transform if proxy is parented to a bone
-    if obj.parent and obj.parent_type == "BONE":
-        arm_obj = obj.parent
-        bone_local = _armature_space(obj, arm_obj)
-        if bone_local:
-            loc, quat, scale = bone_local
-        else:
-            loc, quat, scale = obj.location, obj.rotation_quaternion, obj.scale
-    else:
-        loc, quat, scale = obj.location, obj.rotation_quaternion, obj.scale
-    
+
+    # The file stores a shape's transform in its bone's space, and the proxy's
+    # own basis is exactly that: build_proxies wrote the file's values there,
+    # and the viewport moves them there. Reading the world matrix instead would
+    # need the depsgraph to have run (right after an import it has not, so every
+    # shape would look edited and every untouched .phy would be rewritten).
+    loc = obj.location
+    quat = obj.rotation_quaternion
+    scale = obj.scale
     out["position"] = (loc[0], loc[1], loc[2], 1.0)
     out["rotation"] = (quat[1], quat[2], quat[3], quat[0])
 
@@ -281,22 +292,21 @@ def _values(obj: Any) -> dict:
     return out
 
 
-def _armature_space(obj: Any, arm_obj: Any) -> tuple:
-    """Compute object transform relative to its bone parent."""
-    bone_name = str(obj.get("thedas_io_phy_bone") or "")
-    if not bone_name or bone_name not in arm_obj.data.bones:
-        return None
-    
-    bone = arm_obj.data.bones[bone_name]
-    arm_inv = arm_obj.matrix_world.inverted()
-    m = arm_inv @ obj.matrix_world
-    return (
-        m.translation,  # position in armature space
-        m.to_quaternion(),  # rotation in armature space
-        m.to_scale(),     # scale in armature space
-    )
+def _sequence(value: Any) -> list | None:
+    # a custom property holding a vector hands back an IDPropertyArray, which
+    # has to_list(); a tuple does not, and the two never compare equal
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    to_list = getattr(value, "to_list", None)
+    return list(to_list()) if callable(to_list) else None
+
 
 def _same(a: Any, b: Any) -> bool:
+    left, right = _sequence(a), _sequence(b)
+    if left is not None or right is not None:
+        if left is None or right is None or len(left) != len(right):
+            return False
+        return all(_same(x, y) for x, y in zip(left, right))
     if isinstance(a, float) or isinstance(b, float):
         try:
             return abs(float(a) - float(b)) <= 1e-6
@@ -394,8 +404,9 @@ def adopted_specs(item: Any) -> list:
     tracked = {o.name for o in proxies_for(item)}
     specs = []
     for obj in collection.objects:
-        # only adopt proxies that belong to this item
-        if obj.get("thedas_io_phy_owner") != owner:
+        # proxies belong to the item that made them; one dropped in by hand has
+        # no owner at all, and that is exactly the case worth adopting
+        if obj.get("thedas_io_phy_owner") not in (None, "", owner):
             continue
         bone_name = str(obj.get("thedas_io_phy_bone") or "")
         if not bone_name or bone_name not in arm.data.bones:

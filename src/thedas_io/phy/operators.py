@@ -176,6 +176,9 @@ def _load_collision(
         if "thedas_io_phy_owner" not in p:
             p["thedas_io_phy_owner"] = owner
     reg["collision"] = proxies
+    # the parsed shapes behind the proxies: the data model the proxies are a
+    # view of, so gizmos and tests can read the file's own values
+    reg["phy_shapes"] = reader.shapes
     reg["phy_raw"] = hit.read_bytes()
     reg["phy_name"] = hit.name
     return proxies

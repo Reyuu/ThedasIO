@@ -94,28 +94,23 @@ def _import_row(
         # diagnostic: log mesh resolution details for DA2 variants
         if msh_name and sibling is not None:
             for chunk in smesh.chunks:  # type: ignore
-                vcount = chunk.cells.get(8001, 0)
-                icount = chunk.cells.get(8002, 0)
-                decls = [
-                    (d.stream, d.offset, d.dtype, d.usage, d.usage_index, d.method)
-                    for d in chunk.declarators
-                ]
-                bounds = chunk.bounds
+                cells = getattr(chunk, "cells", None)
+                if not isinstance(cells, dict):
+                    continue
                 emit(
                     {"INFO"},
-                    f"  Mesh chunk '{chunk.name}': {vcount} verts, {icount} idx, "
-                    f"stride={chunk.stride}, bounds={bounds}",
+                    f"  Mesh chunk '{chunk.name}': {cells.get(8001, 0)} verts, "
+                    f"{cells.get(8002, 0)} idx, stride={chunk.stride}, "
+                    f"bounds={chunk.bounds}",
                 )
-                for d in decls:
+                for d in chunk.declarators:
                     emit(
                         {"INFO"},
-                        f"    decl: stream={d[0]}, offset={d[1]}, dtype={d[2]}, "
-                        f"usage={d[3]}, idx={d[4]}, method={d[5]}",
+                        f"    decl: stream={d.stream}, offset={d.offset}, "
+                        f"dtype={d.dtype}, usage={d.usage}, "
+                        f"idx={d.usage_index}, method={d.method}",
                     )
-            # Log resolution path
-            hit = resolve(msh_name, row, db, local_only, game=game)
-            if hit:
-                emit({"INFO"}, f"  Resolved '{msh_name}' -> path={hit}")
+            emit({"INFO"}, f"  Resolved '{msh_name}' -> path={sibling}")
 
         stem = Path(row["filename"]).stem
         for node, linked in stats["mesh_nodes"]:

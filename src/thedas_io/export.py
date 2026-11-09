@@ -245,17 +245,16 @@ def export_all(
             # it; the file is named and the rest still lands
             errors.append(_why(out_name, e))
 
-        # a .phy rides along with the .mmh that owns it, write whenever PHY is enabled
+        # a .phy rides along with the .mmh that owns it, but only when the
+        # shapes actually changed: an untouched file is left out entirely so it
+        # stays byte-identical on disk and never shows up as a diff
         if item["kind"] == "mmh" and item.get("phy_raw") and phy_enabled():
             phy_name = item.get("phy_name") or ""
             try:
                 patched = _phy_bytes(item)
-                # Always write .phy when PHY is enabled; if nothing changed, write the original
                 if patched is not None:
                     write_bytes_atomic(dest / phy_name, patched)
-                else:
-                    write_bytes_atomic(dest / phy_name, item["phy_raw"])
-                written.append(phy_name)
+                    written.append(phy_name)
             except Exception as e:  # noqa: BLE001
                 # the write is inside the guard too: a full disk or a read-only
                 # folder here must not take the batch down and lose every
