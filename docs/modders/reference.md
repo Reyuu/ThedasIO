@@ -12,6 +12,7 @@ Edit > Preferences > Add-ons > ThedasIO.
 | **Game folder** | The Dragon Age: Origins install folder. Scan uses it when no scan folder is given. |
 | **Dragon Age II folder** | The Dragon Age II install folder. Scan uses it when no scan folder is given. |
 | **Enable PHY collision** | Turns on collision import, the Add Collision button, and `.phy` export. Off by default. |
+| **Export MMH node scale** | Include node scale (scal 6278) in `.mmh` files. Off keeps the legacy behavior of exporting only position and rotation. On by default. |
 | **Show all assets (no limit)** | Loads every database row into the asset list. Off by default; use search and paging for a full game install. |
 
 ## Assets panel
@@ -163,7 +164,8 @@ After a scan, the message bar reads:
 | `.tnt` tint | With its model | Yes | Read with the model. Written by Export tint for DAO; DA2 tint colours live in `tints.rim`. |
 | `.phy` collision | Yes, with PHY on | Yes, with PHY on | Capsule, sphere, and box edit and add. Mesh edit only. |
 | `.ani` animation | Yes | Yes | Edited keys re-encoded; untouched channels keep their bytes. |
-| `.cub` cutscene blend tree | Read only | No | Listed in the filter, not imported. |
+| `.mor` character preset | Yes | No | Imports every part as one character on the first part's rig. |
+| `.mop` morph preset override | Yes | No | Patches a `.mor`'s material values; keeps what it doesn't set. |
 | `.anb`, `.fxe` | No | No | Not supported. |
 | `.erf` / `.rim` archives | Read only | Never written | Origins reads ERF V2.0, V2.1, and V2.2. DA2 reads ERF V3 with hashed entry paths. |
 

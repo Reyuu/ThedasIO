@@ -19,6 +19,8 @@ The panels live in the ThedasIO tab.
   it.
 - [Collision](collision.md): turn on PHY support, edit collision shapes, and add
   a capsule to a bone.
+- [Character presets](presets.md): import a `.mor` character preset and apply a
+  `.mop` override on top.
 - [Substance Painter round trip](substance.md): paint textures in Substance and
   bring them back.
 

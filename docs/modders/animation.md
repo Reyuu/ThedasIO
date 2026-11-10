@@ -58,8 +58,7 @@ place.
   not bone-driven, so editing them in Blender has no effect. When a clip grows,
   their key times are rescaled to the new length.
 - **Bones that do not exist in the model** are kept as they were in the file.
-- **Other animation formats:** `.anb` and `.fxe` are not imported. `.cub`
-  files are listed in the asset filter, but importing one reports "No importer".
+- **Other animation formats:** `.anb` and `.fxe` are not imported.
 
 ## Related
 
