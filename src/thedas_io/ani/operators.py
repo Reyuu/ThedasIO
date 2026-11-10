@@ -14,6 +14,7 @@ from ..fsio import write_bytes_atomic
 
 
 def _play_animation(context: Any, raw: bytes, name: str, fps: float, emit: Any) -> set:
+    from .channels import load_table, unmapped
     from .description import ANIReader
     from .scene import _fcurves, build_action
 
@@ -28,21 +29,42 @@ def _play_animation(context: Any, raw: bytes, name: str, fps: float, emit: Any) 
         emit({"ERROR"}, f"Could not read {name}: {exc}")
         return {"CANCELLED"}
 
+    # da2 channels carry a u32 id; the table is the only way to name them
+    table = load_table()
     try:
-        action = build_action(anim, arm, float(fps))
+        action = build_action(anim, arm, float(fps), table)
     except Exception as exc:  # noqa: BLE001
         emit({"ERROR"}, f"Could not build animation: {exc}")
         return {"CANCELLED"}
 
     curves = _fcurves(action)
+    missing = unmapped([node.name for node in anim.nodes], table)
     if not curves:
-        emit({"WARNING"}, f"No bone in {arm.name} matched {anim.name}'s channels")
+        if missing:
+            emit(
+                {"WARNING"},
+                f"{anim.name}: its {len(missing)} channels are raw DA2 node ids with no "
+                "name, so no bone can be driven",
+            )
+        else:
+            emit({"WARNING"}, f"No bone in {arm.name} matched {anim.name}'s channels")
         return {"CANCELLED"}
+    if missing:
+        shown = ", ".join(missing[:4]) + (", ..." if len(missing) > 4 else "")
+        emit(
+            {"WARNING"},
+            f"{len(missing)} channels keep their raw DA2 node id ({shown}) and drive no "
+            "bone; stamp that id on a bone or add it to da2_channels.json",
+        )
 
     # the source travels with the action, so Export Animation can rewrite
     # the file's keys from the edited pose later
     action["thedas_io_ani_base64"] = base64.b64encode(raw).decode("ascii")
     action["thedas_io_ani_fps"] = float(fps)
+    # the armature it was loaded on, so export all writes it with that model
+    action["thedas_io_ani_armature"] = arm.name
+    # loading the next clip onto this rig must not orphan this one
+    action.use_fake_user = True
     arm.animation_data_create().action = action
 
     scene = context.scene
@@ -152,6 +174,7 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
         return action
 
     def execute(self, context: Any) -> set:
+        from .channels import load_table
         from .export import export_action
 
         action = self._action(context)
@@ -163,7 +186,11 @@ class THEDAS_IO_OT_export_animation(bpy.types.Operator):
         raw = base64.b64decode(action["thedas_io_ani_base64"])
         try:
             data = export_action(
-                context, context.active_object, raw, float(action["thedas_io_ani_fps"])
+                context,
+                context.active_object,
+                raw,
+                float(action["thedas_io_ani_fps"]),
+                load_table(),
             )
         except Exception as exc:  # noqa: BLE001 - report, do not crash Blender
             self.report({"ERROR"}, f"Could not export {action.name}: {exc}")

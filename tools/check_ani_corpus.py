@@ -19,18 +19,20 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from thedas_io.ani.description import TRANSLATION, ANIReader, rotation_bits
+from thedas_io.ani.description import TRANSLATION, ANIReader, patch_ani, rotation_bits
 from thedas_io.asset_db.scanner import _db_path
 from thedas_io.assets import extract
 
 COLUMNS = ("package", "filename", "ext", "path", "prio", "name_hash", "resource")
 
 
-def check(db_path: Path, limit: int | None = None) -> dict:
+def check(db_path: Path, limit: int | None = None, roundtrip: bool = False) -> dict:
     stats: dict = {
         "db": str(db_path),
         "files": 0,
         "failed": 0,
+        "roundtrip_changed": 0,
+        "roundtrip_failed": 0,
         "empty": 0,
         "nodes": 0,
         "keys": 0,
@@ -61,14 +63,31 @@ def check(db_path: Path, limit: int | None = None) -> dict:
     for row in rows:
         row = dict(zip(COLUMNS, row))
         stats["files"] += 1
+        raw = extract(row).read_bytes()
         try:
-            reader = ANIReader(extract(row).read_bytes())
+            reader = ANIReader(raw)
         except Exception as exc:  # noqa: BLE001 - the tool keeps going
             stats["failed"] += 1
             stats["errors"].append(
                 {"file": row["filename"], "error": f"{type(exc).__name__}: {exc}"}
             )
             continue
+
+        if roundtrip:
+            try:
+                patched = patch_ani(raw, lambda node: None)
+            except Exception as exc:  # noqa: BLE001
+                stats["roundtrip_failed"] += 1
+                stats["errors"].append(
+                    {"file": row["filename"], "error": f"roundtrip: {type(exc).__name__}: {exc}"}
+                )
+            else:
+                if patched != raw:
+                    stats["roundtrip_changed"] += 1
+                    if len(stats["errors"]) < 50:
+                        stats["errors"].append(
+                            {"file": row["filename"], "error": "identity roundtrip changed bytes"}
+                        )
 
         anim = reader.animation
         version = reader.version.decode("ascii", "replace") if reader.version else "?"
@@ -116,20 +135,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--game", default="DAO", choices=("DAO", "DA2"))
     ap.add_argument("--db", default="")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--roundtrip", action="store_true", help="also check identity export")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     db = Path(args.db) if args.db else _db_path(None, args.game)
-    stats = check(db, args.limit or None)
+    stats = check(db, args.limit or None, roundtrip=args.roundtrip)
     if args.json:
         print(json.dumps(stats, indent=2))
     else:
         for key, value in stats.items():
             if key != "errors":
-                print(f"{key:12} {value}")
+                print(f"{key:14} {value}")
         for err in stats["errors"][:50]:
             print(f"  {err['file']}: {err['error']}")
-    return 1 if stats["failed"] else 0
+    return 1 if stats["failed"] or stats["roundtrip_failed"] or stats["roundtrip_changed"] else 0
 
 
 if __name__ == "__main__":

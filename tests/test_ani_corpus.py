@@ -35,3 +35,7 @@ def test_corpus_tool_reads_the_fixtures(tmp_path):
     assert stats["rotation64"] > 0
     assert stats["position"] > 0
     assert stats["versions"] == {"V0.1": 2}
+
+    again = check(db, roundtrip=True)
+    assert again["roundtrip_changed"] == 0
+    assert again["roundtrip_failed"] == 0

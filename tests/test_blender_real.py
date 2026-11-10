@@ -4027,6 +4027,189 @@ def test_edited_pose_exports_back_into_the_ani():
     }
 
 
+def test_da2_raw_node_ids_stay_raw_and_bind_only_by_their_id():
+    # da2 names a channel by its u32 id: with no table nothing binds, never a
+    # wrong bone. a bone stamped with the id binds, and a 48-bit only clip
+    # still has to produce key times.
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import Animation, AnimNode, ROTATION48
+                from thedas_io.ani.scene import _fcurves, build_action
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh", "ext": ".mmh",
+                     "path": os.path.abspath(os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                node = AnimNode("506703156", ROTATION48,
+                                [(0.0, (0.0, 0.0, 0.0, 1.0)),
+                                 (1.0, (0.0, 0.0, 0.3826834, 0.9238795))])
+                anim = Animation("hash.ani", 1.0, False, [node])
+                out = {}
+                out["raw_id_binds_nothing"] = len(_fcurves(build_action(anim, arm, 30.0))) == 0
+                out["table_binds_by_name"] = len(_fcurves(
+                    build_action(anim, arm, 30.0, {"506703156": "chest_rotation"}))) > 0
+                arm.data.bones[0]["thedas_io_xprt"] = "506703156"
+                stamped = build_action(anim, arm, 30.0)
+                out["raw_id_binds_when_stamped"] = len(_fcurves(stamped)) > 0
+                out["rotation_only_has_keys"] = len(stamped.frame_range) > 0
+                return out
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "raw_id_binds_nothing": True,
+        "table_binds_by_name": True,
+        "raw_id_binds_when_stamped": True,
+        "rotation_only_has_keys": True,
+    }
+
+
+def test_export_assets_writes_an_edited_ani_next_to_its_armature():
+    # export all writes the .ani the armature plays, but only once its keys
+    # moved: an untouched clip re-encodes to its source bytes and is left out
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        import tempfile
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            from mathutils import Matrix
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                from thedas_io.ani.description import ANIReader
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh", "ext": ".mmh",
+                     "path": os.path.abspath(os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                bpy.context.view_layer.objects.active = arm
+                ani = os.path.abspath(os.path.join("data", "c_dog.sit_p.ani"))
+                bpy.ops.thedas_io.load_animation(filepath=ani, fps=30.0)
+                raw = open(ani, "rb").read()
+
+                quiet = tempfile.mkdtemp()
+                bpy.ops.thedas_io.export_assets(directory=quiet)
+                out = {"unedited_writes_no_ani": not any(
+                    n.lower().endswith(".ani") for n in os.listdir(quiet))}
+
+                chest = next(b.name for b in arm.data.bones
+                             if "chest_rotation" in
+                             (b.get("thedas_io_xprt") or "").split(","))
+                bpy.context.scene.frame_set(0)
+                pb = arm.pose.bones[chest]
+                pb.matrix = Matrix.Rotation(0.3, 4, "Z") @ pb.matrix
+                pb.keyframe_insert("rotation_quaternion", frame=0)
+
+                edited = tempfile.mkdtemp()
+                bpy.ops.thedas_io.export_assets(directory=edited)
+                target = os.path.join(edited, "c_dog.sit_p.ani")
+                out["ani_written"] = os.path.isfile(target)
+                if out["ani_written"]:
+                    before = ANIReader(raw).animation.by_name("chest_rotation").keys
+                    after = ANIReader(open(target, "rb").read()).animation
+                    out["chest_moved"] = before[0][1] != after.by_name(
+                        "chest_rotation").keys[0][1]
+                return out
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "unedited_writes_no_ani": True,
+        "ani_written": True,
+        "chest_moved": True,
+    }
+
+
+def test_export_assets_writes_every_clip_the_armature_loaded():
+    # several clips on one rig: each exports its own edits, and a clip stamped
+    # for another armature is left alone
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        import tempfile
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            from mathutils import Matrix
+            import thedas_io as ext
+            ext.register()
+            try:
+                from thedas_io import ui
+                ui._import_row(
+                    bpy.context,
+                    {"package": None, "filename": "c_doga_0.mmh", "ext": ".mmh",
+                     "path": os.path.abspath(os.path.join("data", "c_doga_0.mmh"))},
+                    None, True, lambda t, m: None, True,
+                )
+                arm = next(o for o in bpy.context.scene.objects
+                           if o.type == "ARMATURE")
+                bpy.context.view_layer.objects.active = arm
+                ani = os.path.abspath(os.path.join("data", "c_dog.sit_p.ani"))
+
+                def load(name=None):
+                    bpy.ops.thedas_io.load_animation(filepath=ani, fps=30.0)
+                    act = arm.animation_data.action
+                    if name:
+                        act.name = name
+                    return act
+
+                def nudge(action, frame, angle):
+                    arm.animation_data.action = action
+                    bpy.context.scene.frame_set(frame)
+                    pb = arm.pose.bones[chest]
+                    pb.matrix = Matrix.Rotation(angle, 4, "Z") @ pb.matrix
+                    pb.keyframe_insert("rotation_quaternion", frame=frame)
+
+                chest = next(b.name for b in arm.data.bones
+                             if "chest_rotation" in
+                             (b.get("thedas_io_xprt") or "").split(","))
+                first = load()
+                nudge(first, 0, 0.3)
+                second = load("c_dog.sit_p_b.ani")
+                nudge(second, 1, -0.2)
+                foreign = first.copy()
+                foreign.name = "other_rig.ani"
+                foreign["thedas_io_ani_armature"] = "not_this_armature"
+
+                out_dir = tempfile.mkdtemp()
+                bpy.ops.thedas_io.export_assets(directory=out_dir)
+                names = sorted(os.listdir(out_dir))
+                out = {"files": [n for n in names if n.lower().endswith(".ani")]}
+                out["foreign_skipped"] = "other_rig.ani" not in names
+                a = open(os.path.join(out_dir, "c_dog.sit_p.ani"), "rb").read()
+                b = open(os.path.join(out_dir, "c_dog.sit_p_b.ani"), "rb").read()
+                out["own_edits"] = a != b
+                return out
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "files": ["c_dog.sit_p.ani", "c_dog.sit_p_b.ani"],
+        "foreign_skipped": True,
+        "own_edits": True,
+    }
+
+
 def test_hand_keyframes_at_any_time_become_new_keys():
     # a keyframe between the file's own key times (3.5 s, 4.75 s) is exported
     # as a new key; the other channels are unchanged

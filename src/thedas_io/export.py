@@ -1,5 +1,6 @@
 # standalone export of loaded resources, untouched ones go out byte-identical
 
+import base64
 import io
 import math
 import struct
@@ -180,6 +181,7 @@ def export_all(
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     written, errors = [], []
+    ani_written: set = set()
     keys = [k for k in ITEMS if only is None or k in only]
 
     renames = {}
@@ -247,6 +249,25 @@ def export_all(
             # it; the file is named and the rest still lands
             errors.append(_why(out_name, e))
 
+        # every clip this armature loaded rides along, and only when its keys
+        # moved: an unedited clip re-encodes to its source bytes and is left
+        # out, so exporting an untouched model writes nothing new
+        if item["kind"] == "mmh":
+            for action in _ani_clips(item):
+                ani_name = Path(str(action.name)).name
+                try:
+                    patched = _ani_bytes(item, action)
+                    if patched is None:
+                        continue
+                    if ani_name in ani_written:
+                        errors.append(f"{ani_name}: two clips write one file; keeping the first")
+                        continue
+                    write_bytes_atomic(dest / ani_name, patched)
+                    ani_written.add(ani_name)
+                    written.append(ani_name)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(_why(ani_name or item["file"], e))
+
         # a .phy rides along with the .mmh that owns it, but only when the
         # shapes actually changed: an untouched file is left out entirely so it
         # stays byte-identical on disk and never shows up as a diff
@@ -264,6 +285,40 @@ def export_all(
                 errors.append(_why(phy_name, e))
 
     return written, errors
+
+
+def _ani_clips(item: Item) -> list:
+    # every clip the load operator brought in for this armature: it stamps the
+    # armature's name on the action, so clips loaded on another rig stay there
+    arm = item.get("armature")
+    if arm is None:
+        return []
+    return [
+        action
+        for action in bpy.data.actions
+        if str(action.get("thedas_io_ani_armature") or "") == arm.name
+        and "thedas_io_ani_base64" in action
+    ]
+
+
+def _ani_bytes(item: Item, action: Any) -> "bytes | None":
+    # None when nothing in the clip moved. the clip has to be the active action
+    # while it re-encodes, so put the armature's own back afterwards.
+    from .ani.channels import load_table
+    from .ani.export import export_action
+
+    arm = item["armature"]
+    data = arm.animation_data
+    previous = data.action
+    data.action = action
+    try:
+        raw = base64.b64decode(action["thedas_io_ani_base64"])
+        patched = export_action(
+            bpy.context, arm, raw, float(action["thedas_io_ani_fps"]), load_table()
+        )
+    finally:
+        data.action = previous
+    return None if patched == raw else patched
 
 
 def _phy_bytes(item: Item) -> "bytes | None":

@@ -13,6 +13,7 @@ from typing import Any
 
 from mathutils import Matrix, Vector
 
+from .channels import resolve
 from .description import TRANSLATION, ANIReader, is_rotation, patch_ani
 from .scene import _fcurves, _match, _quat, bones_by_export, rest_local
 
@@ -98,9 +99,12 @@ def _differs(new: Any, old: Any, is_rot: bool) -> bool:
     return (Vector(new) - Vector(old)).length >= POS_TOL
 
 
-def export_action(context: Any, arm: Any, raw: bytes, fps: float) -> bytes:
+def export_action(
+    context: Any, arm: Any, raw: bytes, fps: float, names: dict | None = None
+) -> bytes:
     scene = context.scene
     keep = (scene.frame_current, scene.frame_subframe)
+    table = names or {}
     bone_names = bones_by_export(arm)
     node_rests = _node_rests(arm)
     action = None
@@ -138,7 +142,7 @@ def export_action(context: Any, arm: Any, raw: bytes, fps: float) -> bytes:
             return None
 
         is_rot = node.target != TRANSLATION
-        bone = _match(bone_names, node.name)
+        bone = _match(bone_names, resolve(node.name, table))
 
         # unmapped nodes only re-encode when the clip grows
         if bone is None:

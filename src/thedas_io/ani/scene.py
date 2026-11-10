@@ -12,7 +12,8 @@ from typing import Any
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from .description import ROTATION32, ROTATION64, TRANSLATION, is_rotation
+from .channels import resolve
+from .description import TRANSLATION, is_rotation
 
 BONE_EXPORT_KEY = "thedas_io_xprt"
 BONE_NODE_POS = "thedas_io_node_pos"
@@ -106,17 +107,20 @@ def rest_local(arm_obj: Any, name: str) -> tuple:
 
 # Evaluated in MMH node space, so no frame conversion anywhere: each bone is
 # driven to the target world transform the animation implies.
-def build_action(anim: Any, arm_obj: Any, fps: float = 30.0) -> bpy.types.Action:
+def build_action(
+    anim: Any, arm_obj: Any, fps: float = 30.0, names: dict | None = None
+) -> bpy.types.Action:
     # Work out what the clip would drive before touching the armature. A clip
     # whose channel names match nothing used to replace the action the user
     # already had on this armature, which the caller then reports as a failed
     # load -- the old action was orphaned at zero users and gone from the UI.
+    table = names or {}
     rot_channels: dict = {}
     pos_channels: dict = {}
     by_export = bones_by_export(arm_obj)
 
     for node in anim.nodes:
-        bone = _match(by_export, node.name)
+        bone = _match(by_export, resolve(node.name, table))
         if bone is None:
             continue
         if is_rotation(node.target):
@@ -128,7 +132,7 @@ def build_action(anim: Any, arm_obj: Any, fps: float = 30.0) -> bpy.types.Action
         {
             time
             for node in anim.nodes
-            if node.target in (ROTATION32, ROTATION64, TRANSLATION)
+            if is_rotation(node.target) or node.target == TRANSLATION
             for time, _value in node.keys
         }
     )

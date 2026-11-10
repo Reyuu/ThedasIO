@@ -426,6 +426,8 @@ def _locate_keys(reader: GFFReader) -> list:
     node_def = reader.struct_defs[nodes_field.type_id]
     node_data_field = field(node_def, L_NODE_DATA)
     nodes_block = u32(0, nodes_field.data_index)
+    if nodes_block == 0xFFFFFFFF:
+        return []
     out: list = []
 
     for i in range(u32(nodes_block, 0)):
@@ -439,6 +441,9 @@ def _locate_keys(reader: GFFReader) -> list:
         if at + 8 > len(reader.data):
             raise ValueError(f"key list reads past end of file at {at}")
         packed, address = struct.unpack_from("<II", reader.data, at)
+        if address == 0xFFFFFFFF:
+            out.append(None)
+            continue
 
         rows_def = reader.struct_defs[packed & 0xFFFF]
         rows_field = field(rows_def, L_NODE_DATA)
@@ -452,6 +457,9 @@ def _locate_keys(reader: GFFReader) -> list:
         data_fields = [f for f in data_fields if f is not None]
 
         rows_block = u32(address, rows_field.data_index)
+        if rows_block == 0xFFFFFFFF:
+            out.append(None)
+            continue
         if time_field is None or not data_fields or u32(rows_block, 0) == 0:
             out.append(None)
             continue

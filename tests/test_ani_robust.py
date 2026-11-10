@@ -6,11 +6,12 @@ it skipped; a non-ANI GFF must be rejected by name.
 
 from __future__ import annotations
 
+import math
 import struct
 
 import pytest
 
-from conftest import DATA_DIR
+from conftest import DATA_DIR, fourcc
 from thedas_io.ani.description import (
     L_KEY_DATA0,
     L_KEY_DATA1,
@@ -28,8 +29,9 @@ from thedas_io.ani.description import (
     decode_key,
     decode_quat48,
     encode_quat48,
+    patch_ani,
 )
-from thedas_io.gff40.description import GFFReader
+from thedas_io.gff40.description import FLAGS, GFFField, GFFReader, GFFStructDef, GFFWriter
 
 DOG = DATA_DIR / "c_dog.sit_p.ani"
 
@@ -56,6 +58,16 @@ def test_reader_handles_an_empty_node_list():
     parsed = ANIReader(bytes(raw))
     assert parsed.nodes == []
     assert parsed.summary()["nodes"] == 0
+
+
+def test_patch_identity_handles_a_null_node_list():
+    raw = bytearray(DOG.read_bytes())
+    reader = GFFReader(bytes(raw))
+    field = next(f for f in reader.struct_defs[0].field_instances if f.label_id == L_NODES)
+    struct.pack_into("<I", raw, reader.data_offset + field.data_index, 0xFFFFFFFF)
+
+    assert ANIReader(bytes(raw)).nodes == []
+    assert patch_ani(bytes(raw), lambda node: None) == bytes(raw)
 
 
 def test_bad_nodes_are_skipped_with_a_reason():
@@ -138,6 +150,82 @@ def test_quat48_round_trips_and_stays_unit():
 def test_quat48_place_comes_from_the_low_bits():
     # DAOLib's case: place 1 (first low bit 0, second 1), largest goes second
     assert decode_quat48(32768, 32769, 32768) == pytest.approx((0.0, 1.0, 0.0, 0.0), abs=1e-4)
+
+
+def test_quat48_writer_round_trips():
+    from thedas_io.ani.description import TYPE_U16, _KeyLayout, _write_value
+
+    layout = _KeyLayout(0, 0, 6, 0, [(0, TYPE_U16), (2, TYPE_U16), (4, TYPE_U16)])
+    q = (0.1, -0.2, 0.3, 0.9273618495495703)
+    length = math.sqrt(sum(c * c for c in q))
+    q = tuple(c / length for c in q)
+
+    buf = bytearray(6)
+    _write_value(buf, 0, layout, ROTATION48, q)
+    back = decode_quat48(*struct.unpack("<3H", bytes(buf)))
+    dot = min(1.0, abs(sum(a * b for a, b in zip(q, back))))
+    assert 2 * math.acos(dot) < 1e-4
+
+
+DOOR = DATA_DIR / "prp_door.dying.ani"
+
+
+def _quat48_clip() -> bytes:
+    # the door clip plus one DA2-style 48-bit channel: three u16 parts per key
+    reader = GFFReader(DOOR.read_bytes())
+    writer = GFFWriter.from_reader(reader)
+
+    key_def = GFFStructDef(fourcc("q48k"), 4, 0, 8)
+    key_def.field_instances.append(GFFField(L_KEY_TIME, 2, 0, 0))
+    key_def.field_instances.append(GFFField(L_KEY_DATA0, 2, 0, 2))
+    key_def.field_instances.append(GFFField(L_KEY_DATA1, 2, 0, 4))
+    key_def.field_instances.append(GFFField(L_KEY_DATA2, 2, 0, 6))
+    key_index = len(writer.struct_defs)
+    writer.struct_defs.append(key_def)
+
+    wrap_def = GFFStructDef(fourcc("q48w"), 1, 0, 4)
+    wrap_def.field_instances.append(GFFField(L_NODE_DATA, key_index, FLAGS["STRUCT_ARRAY"], 0))
+    wrap_index = len(writer.struct_defs)
+    writer.struct_defs.append(wrap_def)
+
+    rows = [(0, 32769, 32769, 32768), (65535, 32769, 32769, 32768)]
+    blob = struct.pack("<I", len(rows))
+    for row in rows:
+        blob += struct.pack("<4H", *row)
+    wrap_offset = writer.alloc(struct.pack("<I", writer.alloc(blob)))
+
+    node = bytearray(16)
+    struct.pack_into("<I", node, 0, writer.alloc_ecstring("da2_rot48"))
+    node[12] = ROTATION48
+    struct.pack_into("<II", node, 4, (FLAGS["REFERENCE"] << 16) | wrap_index, wrap_offset)
+
+    nodes_ref = struct.unpack_from("<I", reader.data, reader.data_offset + 12)[0]
+    count = struct.unpack_from("<I", reader.data, reader.data_offset + nodes_ref)[0]
+    existing = bytes(writer.data_block[nodes_ref + 4 : nodes_ref + 4 + count * 16])
+    list_offset = writer.alloc(struct.pack("<I", count + 1) + existing + bytes(node))
+    struct.pack_into("<I", writer.data_block, 12, list_offset)
+    return writer.write()
+
+
+def test_patch_edits_a_48_bit_rotation_track():
+    raw = _quat48_clip()
+    before = ANIReader(raw).animation
+    node = before.by_name("da2_rot48")
+    assert node is not None and node.target == ROTATION48 and len(node.keys) == 2
+
+    target = (0.5, 0.5, 0.5, 0.5)
+
+    def values(anim_node):
+        if anim_node.name != "da2_rot48":
+            return None
+        return [t for t, _ in anim_node.keys], [target, None]
+
+    patched = patch_ani(raw, values)
+    assert len(patched) == len(raw)
+    after = ANIReader(patched).animation.by_name("da2_rot48")
+    dot = min(1.0, abs(sum(a * b for a, b in zip(after.keys[0][1], target))))
+    assert 2 * math.acos(dot) < 1e-3
+    assert after.keys[1][1] == node.keys[1][1]
 
 
 def test_target_48_is_a_rotation_with_three_u16_fields():
