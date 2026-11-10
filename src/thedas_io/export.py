@@ -198,6 +198,15 @@ def export_all(
             errors.append(f"{out}: renamed twice ({', '.join(ks)}); skipping extras")
     skip = {k for ks in taken.values() if len(ks) > 1 for k in ks[1:]}
 
+    # headless runs have no scene; the flag defaults on, so read it defensively
+    scene = getattr(getattr(bpy, "context", None), "scene", None)
+    split = bool(getattr(scene, "thedas_io_split_multi_mesh", True))
+    for k in keys:
+        item = ITEMS.get(k)
+        if item is None or item.get("kind") != "mmh":
+            continue
+        item["split_materials"] = split
+
     model_tints: dict = {}  # id(mmh item) -> its merged values
     mao_tints: dict = {}  # MAO MaterialObject name -> that material's values
     if tint:
@@ -479,7 +488,11 @@ def check_model(only: set | None = None) -> list:
         item = ITEMS[k]
         kind = item.get("kind")
         try:
-            if kind == "msh":
+            if kind == "mmh":
+                notes.extend(_check_mesh_multi_slot(item))
+                notes.extend(_check_material_transparency(item))
+                notes.extend(_check_tint_semantic_match(item))
+            elif kind == "msh":
                 notes.extend(_check_msh_item(item, mao_by_material))
             elif kind == "mao":
                 notes.extend(_check_mao_item(item))
@@ -574,7 +587,59 @@ def _check_msh_item(item: Item, mao_by_material: dict) -> list:
         for mat in _obj_materials(obj) if obj is not None else ():
             if mat.lower() not in mao_by_material:
                 notes.append(f"{label}: material {mat!r} has no MAO (renders untextured in game)")
+        if obj is not None and _is_blend_opaque_material(obj):
+            notes.append(
+                f"{label}: {obj.name or label} is a Blend material whose diffuse alpha varies; "
+                "DAO treats Blend as opaque unless the material is marked transparent"
+            )
     return notes
+
+
+def _is_blend_opaque_material(obj: Any) -> bool:
+    # a mesh object whose material uses a Blend shader group and a diffuse map with
+    # varying alpha trips the "Blend is opaque" note.
+    try:
+        mats = obj.data.materials
+    except (AttributeError, ReferenceError):
+        return False
+    wanted = {group_name(side) for side in SIDES}
+    for mat in mats or []:
+        if mat is None:
+            continue
+        try:
+            tree = mat.node_tree
+        except (AttributeError, ReferenceError):
+            continue
+        if tree is None:
+            continue
+        if not any(
+            node.type == "GROUP" and node.node_tree is not None and node.node_tree.name in wanted
+            for node in tree.nodes
+        ):
+            continue
+        try:
+            image = _diffuse_image(mat)
+        except (AttributeError, ReferenceError, TypeError):
+            continue
+        if image is None:
+            continue
+        if _image_alpha_varies(image):
+            return True
+    return False
+
+
+def _diffuse_image(mat: Any) -> Any | None:
+    try:
+        nodes = mat.node_tree.nodes
+    except (AttributeError, ReferenceError):
+        return None
+    for node in nodes:
+        if node.type != "TEX_IMAGE" or node.image is None:
+            continue
+        role = role_of(node.image.name)
+        if role == "diffuse":
+            return node.image
+    return None
 
 
 def _tri_area(points: Any) -> float:
@@ -660,6 +725,8 @@ def _check_texture_item(item: Item) -> list:
         notes.append(f"{name}: {w}x{h} is not a multiple of 4; DXT compression requires it")
     if w & (w - 1) or h & (h - 1):
         notes.append(f"note: {name}: {w}x{h} is not power-of-two")
+    if max(w, h) > 2048:
+        notes.append(f"note: {name}: {w}x{h} is over the 2k budget for its category")
     return notes
 
 
@@ -853,6 +920,144 @@ def _mao_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
     if binary:
         return write_mao_binary(live_parsed, item.get("raw") or b"")
     return write_mao(live_parsed).encode("utf-8")
+
+
+def _check_mesh_multi_slot(item: Item) -> list:
+    # warn when an imported mshh node's Blender object has more material slots
+    # than the engine will honour on one mshh node.
+    notes: list = []
+    for node, linked in (item.get("mesh_nodes") or []):
+        if linked is None or linked.type != "MESH":
+            continue
+        try:
+            n_slots = len(linked.data.materials)
+        except (AttributeError, ReferenceError):
+            continue
+        if n_slots <= 1:
+            continue
+        names = []
+        for m in linked.data.materials:
+            if m is not None:
+                names.append(m.name)
+        notes.append(
+            f"{item.get('file') or '?'} > {node.name or '?'} ({linked.name or '?'}): "
+            f"{n_slots} material slots; exporting as {n_slots} mshh nodes (one per slot)"
+        )
+        if not names:
+            continue
+        first = names[0]
+        for extra in names[1:]:
+            notes.append(
+                f"note: {item.get('file') or '?'} > {linked.name or '?'}: "
+                f"slot material {extra!r} (after {first!r}) only renders if the "
+                f"export split is enabled"
+            )
+    return notes
+
+
+def _check_material_transparency(item: Item) -> list:
+    # DAO "Blend" materials are opaque unless a semantic/mark makes them
+    # transparent. Flag a Blend shader whose diffuse alpha varies, because that
+    # is the most common false-transparent case users hit.
+    notes: list = []
+    wanted = {group_name(side) for side in SIDES}
+    for obj in item.get("meshes") or []:
+        if getattr(obj, "type", "") != "MESH":
+            continue
+        try:
+            mats = obj.data.materials
+        except (AttributeError, ReferenceError):
+            continue
+        for mat in mats or []:
+            if mat is None:
+                continue
+            try:
+                tree = mat.node_tree
+            except (AttributeError, ReferenceError):
+                continue
+            if tree is None:
+                continue
+            has_group = any(
+                node.type == "GROUP" and node.node_tree is not None and node.node_tree.name in wanted
+                for node in tree.nodes
+            )
+            if not has_group:
+                continue
+            # only flag materials whose diffuse input came from a texture with
+            # varying alpha, not a flat tint.
+            diff_node = None
+            for node in tree.nodes:
+                if node.type != "TEX_IMAGE" or node.image is None:
+                    continue
+                role = role_of(node.image.name)
+                if role == "diffuse":
+                    diff_node = node
+                    break
+            if diff_node is None:
+                continue
+            if _image_alpha_varies(diff_node.image):
+                notes.append(
+                    f"{item.get('file') or '?'} > {mat.name}: Blend material has a "
+                    f"diffuse map whose alpha varies; DAO treats Blend as opaque "
+                    f"unless the material is marked transparent"
+                )
+    return notes
+
+
+def _image_alpha_varies(image: Any) -> bool:
+    try:
+        pixels = image.pixels
+        count = len(pixels)
+    except (AttributeError, TypeError, ReferenceError):
+        return False
+    if not count:
+        return False
+    flat = np.empty(count, dtype=np.float32)
+    try:
+        pixels.foreach_get(flat)
+    except (AttributeError, TypeError, ReferenceError):
+        return False
+    vals = flat[3::4]
+    return bool(vals.size) and float(vals.max()) - float(vals.min()) > 1e-3
+
+
+def _check_tint_semantic_match(item: Item) -> list:
+    # a material whose prop.mat carries a tint but has no DAO DefaultSemantic is
+    # reported, because the tint path wants the semantic to line up.
+    notes: list = []
+    wanted = {group_name(side) for side in SIDES}
+    for obj in item.get("meshes") or []:
+        if getattr(obj, "type", "") != "MESH":
+            continue
+        try:
+            mats = obj.data.materials
+        except (AttributeError, ReferenceError):
+            continue
+        for mat in mats or []:
+            if mat is None:
+                continue
+            try:
+                tree = mat.node_tree
+            except (AttributeError, ReferenceError):
+                continue
+            if tree is None:
+                continue
+            has_group = any(
+                node.type == "GROUP" and node.node_tree is not None and node.node_tree.name in wanted
+                for node in tree.nodes
+            )
+            if not has_group:
+                continue
+            try:
+                semantic = mat.get("thedas_io_semantic") or ""
+            except (AttributeError, ReferenceError, TypeError):
+                semantic = ""
+            if not semantic.strip():
+                notes.append(
+                    f"{item.get('file') or '?'} > {mat.name}: tint group present but "
+                    f"no DefaultSemantic on the material; tint export may not bind"
+                )
+    return notes
 
 
 def _mao_mat_state(mat: Any, vectors: dict) -> dict | None:
@@ -1541,15 +1746,13 @@ def _expand_rows(decoded: dict, obj: Any, bstate: dict) -> dict:
 
 
 def _collapsed_rows(row_map: Any, triangles: Any) -> set:
-    """Rows whose Blender normal is meaningless, so trust the stored one.
-
-    Welding puts two source rows on one Blender vertex, which turns any
-    triangle carrying both into a zero-area one. Blender answers such a corner
-    with an arbitrary vector, changing between runs, so reading it back would
-    mark an untouched file as edited and then write the arbitrary value out.
-    Those rows keep their source normal instead: no drift is reported and the
-    stored bytes survive a re-encode.
-    """
+    # rows whose Blender normal is meaningless, so trust the stored one
+    # welding puts two source rows on one Blender vertex, which turns any
+    # triangle carrying both into a zero-area one; Blender answers such a
+    # corner with an arbitrary vector, changing between runs, so reading it
+    # back would mark an untouched file as edited and then write the arbitrary
+    # value out. those rows keep their source normal instead: no drift is
+    # reported and the stored bytes survive a re-encode
     if row_map is None:
         return set()
     collapsed: set = set()
@@ -2199,13 +2402,20 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
         if world is not None or name is not None:
             edits[path] = (world, name)
 
-    gff = GFFReader(item["raw"])
+    raw = item["raw"]
+    split_changed = False
+    if item.get("split_materials"):
+        split_raw = _apply_mmh_split(item)
+        if split_raw is not None:
+            raw, split_changed = split_raw, True
+
+    gff = GFFReader(raw)
     # from_reader, not from_bytes: that builds a second GFFReader over the
     # same bytes, and an mmh's data-block copy is not small
     writer = GFFWriter.from_reader(gff)
     patched = _use_variation_tint(gff, writer) if tint else False
     renamed = _patch_msh_ref(gff, writer, item, renames or {}) if renames else False
-    if not edits and not patched and not renamed:
+    if not edits and not patched and not renamed and not split_changed:
         return None
 
     bases = {path: (si, base) for path, si, base in _gff_paths(gff, 0, 0)}
@@ -2242,7 +2452,41 @@ def _mmh_bytes(item: Item, tint: dict | None = None, renames: dict | None = None
             _patch_node_name(gff, writer, base, new_name, node.name)
             patched = True
         out_world[path] = compose(pw, local)
-    return writer.write() if (patched or renamed) else None
+
+    return writer.write() if (patched or renamed or split_changed) else None
+
+
+def _apply_mmh_split(item: Item) -> bytes | None:
+    # one new mshh node per extra material slot on the imported object. The
+    # first slot keeps the original node; each later slot becomes its own node
+    # under the same parent, pointing at the same mesh and chunk refs, with the
+    # slot's material and a disambiguated name/chunk name.
+    from .mmh.description import MMHReader as Reader
+    from .mmh.description import MMHWriter as Writer
+
+    reader = Reader(item["raw"])
+    writer = Writer(reader)
+    # exports address a node by the name it was imported under; an mmh root can
+    # share a name with its child, so every match is split
+    offsets: dict = {}
+    for name, offset in writer.node_offsets():
+        offsets.setdefault(name, []).append(offset)
+
+    changed = False
+    for node, linked in (item.get("mesh_nodes") or []):
+        if linked is None or node is None:
+            continue
+        try:
+            mats = [m.name for m in linked.data.materials if m is not None]
+        except (AttributeError, ReferenceError):
+            continue
+        if len(mats) < 2:
+            continue
+        for offset in offsets.get(node.name) or ():
+            changed = writer.split_multi_mesh(offset, mats) or changed
+
+    return writer.write() if changed else None
+
 
 
 def _live_bone(tag_maps: dict, resolver: Any) -> Any:

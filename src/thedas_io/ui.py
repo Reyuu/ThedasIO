@@ -210,6 +210,7 @@ _SCENE_PROPS = (
     "thedas_io_collision_bone",
     "thedas_io_sp_split_packed",
     "thedas_io_sp_keep_resolution",
+    "thedas_io_split_multi_mesh",
     "thedas_io_game",
 )
 
@@ -312,6 +313,13 @@ def register() -> None:
         "exported DDS keeps the Substance size; the game "
         "build pipeline caps textures per category, so "
         "oversized maps are your responsibility",
+    )
+
+    bpy.types.Scene.thedas_io_split_multi_mesh = bpy.props.BoolProperty(  # type: ignore
+        default=True,
+        description="An object with several material slots exports one mshh "
+        "node per slot instead of one node with a single material. Off "
+        "keeps the old one-node behaviour and the extra slots are lost",
     )
 
     for prop in _STRING_PROPS:
