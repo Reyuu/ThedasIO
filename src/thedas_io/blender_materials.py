@@ -386,15 +386,15 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     uvmap = nodes.new("ShaderNodeTexCoord")
     uvmap.location = _POS_UV
     vector = uvmap.outputs["UV"]
-    # hair, beard and lash cards are single-sided geometry with alpha edges: the
-    # game renders them two-sided and alpha-tested, and culling them punches the
-    # rectangular holes seen over a scalp
+    # hair, beard and lash cards are alpha-tested cutouts: the map's alpha is
+    # the only shape they have, so they need the cutout path and the transparency
+    # surface settings even when nothing else about the material is see-through
     label = f"{mao.get('name') or ''} {mao.get('material') or ''}".lower()
     if any(token in label for token in ("_har_", "_brd_", "hair", "ulm")):
-        mat.use_backface_culling = False
         mat.show_transparent_back = True
         mat.blend_method = "CLIP"
         mat.alpha_threshold = 0.5
+        _transparent_surface(mat)
     base_feed = None
     normal_feed = None
     rough_feed = None
@@ -717,7 +717,22 @@ def _to_transparency(mat: Any, bsdf: Any, alpha_out: Any, cutout: bool = False) 
         mat.alpha_threshold = 0.5
     else:
         mat.blend_method = "BLEND"
+    _transparent_surface(mat)
     return invert.outputs["Color"]
+
+
+def _transparent_surface(mat: Any) -> None:
+    # EEVEE settings every DAO alpha material needs: cull the camera side of a
+    # card but keep its light-probe and shadow side open, shadow through the
+    # alpha instead of dropping the whole card, and let EEVEE trace refraction
+    # so overlapping cards sort against each other instead of the screen
+    mat.surface_render_method = "DITHERED"
+    mat.use_transparent_shadow = True
+    mat.use_backface_culling = True
+    mat.use_backface_culling_shadow = False
+    mat.use_backface_culling_lightprobe_volume = True
+    mat.use_raytrace_refraction = True
+    mat.thickness_mode = "SPHERE"
 
 
 # the game reads roughness out of the specular map's alpha; with no spec map the
