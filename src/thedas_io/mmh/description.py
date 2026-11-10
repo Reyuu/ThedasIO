@@ -231,7 +231,9 @@ def _child_rows(gff: Any, list_offset: int) -> list:
     return rows
 
 
-def _parent_list(gff: Any, node_si: int, target: int, struct_index: int = 0, inst: int = 0, seen: Any = None) -> Any:
+def _parent_list(
+    gff: Any, node_si: int, target: int, struct_index: int = 0, inst: int = 0, seen: Any = None
+) -> Any:
     # (parent instance, its 6999 field, that parent's rows) for the node at
     # `target`, found by walking the child lists from the root down
     if seen is None:

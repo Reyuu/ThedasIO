@@ -988,11 +988,14 @@ def test_export_list_sync_never_mutates_during_draw():
 def test_extension_combo_items_and_filter(tmp_path):
     import fake_bpy
 
-    assert [item[0] for item in ui._EXT_ITEMS] == [
-        "NONE", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"
-    ]
+    assert [item[0] for item in ui._EXT_ITEMS] == ["NONE", "MSH", "MMH", "ANI", "MOR", "MOP"]
     assert [item[1] for item in ui._EXT_ITEMS] == [
-        "(None)", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"
+        "(None)",
+        "MSH",
+        "MMH",
+        "ANI",
+        "MOR",
+        "MOP",
     ]
     from thedas_io import asset_browser
 

@@ -132,7 +132,6 @@ _FILL_ASSETS_CACHE: dict = {}  # scene -> (ext, name, package, game, limit, offs
 
 def invalidate_asset_cache(scene: Any = None) -> None:
     """Clear the asset fill cache for a scene (or all scenes if None)."""
-    global _FILL_ASSETS_CACHE
     if scene is None:
         _FILL_ASSETS_CACHE.clear()
     else:
@@ -485,10 +484,11 @@ class THEDAS_IO_OT_reset_db_path(bpy.types.Operator):
         scene = context.scene
         try:
             from .asset_db.scanner import _db_path
+
             game = getattr(scene, "thedas_io_game", "DAO")
             scene.thedas_io_db_path = str(_db_path(None, game))
             self.report({"INFO"}, f"Reset DB path to {game} default")
-        except Exception as e:
+        except (OSError, ValueError, KeyError, sqlite3.Error) as e:
             self.report({"ERROR"}, f"Failed to reset: {e}")
             return {"CANCELLED"}
         return {"FINISHED"}

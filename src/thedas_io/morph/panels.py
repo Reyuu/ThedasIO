@@ -41,7 +41,7 @@ class THEDAS_IO_PT_preset(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "ThedasIO"
     bl_parent_id = "THEDAS_IO_PT_assets"
-    bl_options: ClassVar[set] = {"DEFAULT_CLOSED"}
+    bl_options: ClassVar[set[str]] = {"DEFAULT_CLOSED"}  # type: ignore
 
     @classmethod
     def poll(cls, context: Any) -> bool:
@@ -65,9 +65,9 @@ class THEDAS_IO_PT_preset(bpy.types.Panel):
             if not part.get("file"):
                 row.label(text=name, icon="ERROR")
                 continue
-            row.operator(
-                "thedas_io.select_preset_part", text=name, icon="MESH_DATA"
-            ).index = int(part.get("index") or 0)
+            op = row.operator("thedas_io.select_preset_part", text=name, icon="MESH_DATA")
+            if op is not None:
+                op.index = int(part.get("index") or 0)
 
         tints = json.loads(armature.get("thedas_io_preset_tints") or "[]")
         if tints:

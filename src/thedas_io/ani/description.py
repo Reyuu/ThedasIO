@@ -12,7 +12,7 @@ import struct
 from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..gff40.description import FIELD_TYPES, FLAGS, GFFReader
 from ..gff40.labels import DATA as LABELS
@@ -159,7 +159,7 @@ def decode_key(target: int, raw: dict) -> Any:
     if target == ROTATION48:
         parts = [raw.get(L_KEY_DATA0), raw.get(L_KEY_DATA1), raw.get(L_KEY_DATA2)]
         if all(isinstance(p, int) for p in parts):
-            return decode_quat48(*parts)
+            return decode_quat48(cast(int, parts[0]), cast(int, parts[1]), cast(int, parts[2]))
     if target == ROTATION64 and isinstance(d, int):
         return decode_quat64(d)
 
@@ -278,6 +278,7 @@ def _decode_node(
             skipped.append((name or "?", f"bad key time {row.get(L_KEY_TIME)!r}"))
             continue
         if is_rotation(target):
+            needed: tuple[int, ...]
             if target == ROTATION48:
                 needed = (L_KEY_DATA0, L_KEY_DATA1, L_KEY_DATA2)
             else:
@@ -331,8 +332,9 @@ class ANIReader:
             for node in raw_nodes
             if (n := _decode_node(node, self.length, self.skipped, self.warnings)) is not None
         ]
+        name = self.name if isinstance(self.name, str) else ""
         self.animation = Animation(
-            self.name, self.length, self.additive, nodes, self.skipped, self.warnings
+            name, self.length, self.additive, nodes, self.skipped, self.warnings
         )
 
     @property

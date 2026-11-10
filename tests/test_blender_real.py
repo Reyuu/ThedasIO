@@ -2544,7 +2544,6 @@ def test_extension_filter_is_a_combo_box():
             ["ANI", "ANI"],
             ["MOR", "MOR"],
             ["MOP", "MOP"],
-            ["CUB", "CUB"],
         ],
         "default": "NONE",
         "rows": {"NONE": ["a.msh", "b.mmh"], "MSH": ["a.msh"], "MMH": ["b.mmh"]},
@@ -4464,7 +4463,7 @@ def test_mop_imports_the_head_it_overrides():
             "HM_UHM_BAS_FaceM1",
             "HM_ULM_BAS_LashesM1",
         ],
-        "exts": ["NONE", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"],
+        "exts": ["NONE", "MSH", "MMH", "ANI", "MOR", "MOP"],
     }
 
 

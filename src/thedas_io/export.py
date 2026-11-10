@@ -109,6 +109,8 @@ Item = TypedDict(
         "hosts": dict,
         "as": str,
         "as_tnt": str,
+        "mesh_nodes": list,
+        "split_materials": bool,
         "phy_raw": bytes,
         "phy_name": str,
         "phy_shapes": list,
@@ -306,7 +308,7 @@ def _ani_clips(item: Item) -> list:
         action
         for action in bpy.data.actions
         if str(action.get("thedas_io_ani_armature") or "") == arm.name
-        and "thedas_io_ani_base64" in action
+        and action.get("thedas_io_ani_base64") is not None
     ]
 
 
@@ -926,7 +928,7 @@ def _check_mesh_multi_slot(item: Item) -> list:
     # warn when an imported mshh node's Blender object has more material slots
     # than the engine will honour on one mshh node.
     notes: list = []
-    for node, linked in (item.get("mesh_nodes") or []):
+    for node, linked in item.get("mesh_nodes") or []:
         if linked is None or linked.type != "MESH":
             continue
         try:
@@ -978,7 +980,9 @@ def _check_material_transparency(item: Item) -> list:
             if tree is None:
                 continue
             has_group = any(
-                node.type == "GROUP" and node.node_tree is not None and node.node_tree.name in wanted
+                node.type == "GROUP"
+                and node.node_tree is not None
+                and node.node_tree.name in wanted
                 for node in tree.nodes
             )
             if not has_group:
@@ -1043,7 +1047,9 @@ def _check_tint_semantic_match(item: Item) -> list:
             if tree is None:
                 continue
             has_group = any(
-                node.type == "GROUP" and node.node_tree is not None and node.node_tree.name in wanted
+                node.type == "GROUP"
+                and node.node_tree is not None
+                and node.node_tree.name in wanted
                 for node in tree.nodes
             )
             if not has_group:
@@ -2473,7 +2479,7 @@ def _apply_mmh_split(item: Item) -> bytes | None:
         offsets.setdefault(name, []).append(offset)
 
     changed = False
-    for node, linked in (item.get("mesh_nodes") or []):
+    for node, linked in item.get("mesh_nodes") or []:
         if linked is None or node is None:
             continue
         try:
@@ -2486,7 +2492,6 @@ def _apply_mmh_split(item: Item) -> bytes | None:
             changed = writer.split_multi_mesh(offset, mats) or changed
 
     return writer.write() if changed else None
-
 
 
 def _live_bone(tag_maps: dict, resolver: Any) -> Any:

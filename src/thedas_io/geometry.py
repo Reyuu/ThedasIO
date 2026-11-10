@@ -494,7 +494,11 @@ def node_local(values: dict) -> tuple:
     trsl = values.get(6047) or (0.0, 0.0, 0.0, 1.0)
     rota = values.get(6048) or IDENTITY_QUAT
     scale = values.get(6278) or (1.0, 1.0, 1.0)
-    return (float(trsl[0]), float(trsl[1]), float(trsl[2])), tuple(float(x) for x in rota), tuple(float(x) for x in scale[:3])
+    return (
+        (float(trsl[0]), float(trsl[1]), float(trsl[2])),
+        tuple(float(x) for x in rota),
+        tuple(float(x) for x in scale[:3]),
+    )
 
 
 def bone_frame(quat: tuple) -> tuple:

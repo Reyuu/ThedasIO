@@ -27,7 +27,10 @@ def test_quat_rotate():
 
 def test_compose_identity():
     loc = (1.0, 2.0, 3.0)
-    assert compose(((0, 0, 0), (0, 0, 0, 1), (1.0, 1.0, 1.0)), (loc, (0, 0, 0, 1), (1.0, 1.0, 1.0)))[0] == loc
+    assert (
+        compose(((0, 0, 0), (0, 0, 0, 1), (1.0, 1.0, 1.0)), (loc, (0, 0, 0, 1), (1.0, 1.0, 1.0)))[0]
+        == loc
+    )
 
 
 def test_compose_applies_the_parent_rotation_after_the_local_one():

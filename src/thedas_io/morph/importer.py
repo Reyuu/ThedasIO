@@ -174,7 +174,10 @@ def apply_textures(
             if role is None or not res:
                 continue
             target = _texture_res(res)
-            path = resolve(target, row, db, local_only, game=game)
+            if row is None:
+                path = None
+            else:
+                path = resolve(target, row, db, local_only, game=game)
             if path is None:
                 missing.append(f"{name}:{param} ({target})")
                 continue
@@ -192,6 +195,8 @@ def _flat(rows: Any, index: int, default: float = 0.0) -> float:
     # flattened float array the toolset's morph sliders write
     if isinstance(rows, dict):
         row = rows.get(index // 4)
+        if row is None:
+            return default
         try:
             return float(row[index % 4])
         except (IndexError, TypeError, ValueError):
@@ -287,7 +292,7 @@ def apply_shapes(
         result = _import_row(context, row, db, local_only, emit)
         reg = ITEMS.pop(row["filename"], None)
         extra = (
-            [obj for obj in reg.get("meshes", ()) + [reg.get("armature")] if obj is not None]
+            [obj for obj in list(reg.get("meshes", ())) + [reg.get("armature")] if obj is not None]
             if reg
             else []
         )
@@ -414,7 +419,9 @@ def rig_meshes(armature: Any) -> list:
     for obj in bpy.data.objects:
         if obj.type != "MESH":
             continue
-        if any(m.type == "ARMATURE" and m.object is armature for m in obj.modifiers):
+        if any(
+            m.type == "ARMATURE" and getattr(m, "object", None) is armature for m in obj.modifiers
+        ):
             out.append(obj)
     return out
 
@@ -575,9 +582,13 @@ def apply_mop(
 def preset_armature(context: Any) -> Any:
     # the active rig when it carries a preset, else the first one that does
     active = getattr(context, "active_object", None)
-    if active is not None and active.type == "ARMATURE" and "thedas_io_preset" in active:
+    if (
+        active is not None
+        and active.type == "ARMATURE"
+        and active.get("thedas_io_preset") is not None
+    ):
         return active
     for obj in bpy.data.objects:
-        if obj.type == "ARMATURE" and "thedas_io_preset" in obj:
+        if obj.type == "ARMATURE" and obj.get("thedas_io_preset") is not None:
             return obj
     return None

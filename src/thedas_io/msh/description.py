@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from ..gff40.description import (
+    _SCALAR_FORMATS,
     FIELD_SIZE,
     FLAGS,
     HEADER_SIZE,
@@ -12,7 +13,6 @@ from ..gff40.description import (
     GFFStructDef,
     GFFWriter,
     label_name,
-    _SCALAR_FORMATS,
 )
 
 # msh layout: [header 28B][defs n*16B][fields m*12B][gap FF*][data]
@@ -492,7 +492,7 @@ class MSHWriter:
             struct.pack_into("<I", w.data_block, at[L_INDEX_FORMAT], mesh.index_format or 0)
         if L_INSTANCED_STREAM in at:
             w.data_block[at[L_INSTANCED_STREAM]] = mesh.instanced_stream or 0
-        
+
         # helper to overwrite existing scalar list in place if same size, else alloc new
         def _overwrite_scalar_list(label: int, new_values: list) -> bool:
             if label not in at:
@@ -511,9 +511,17 @@ class MSHWriter:
             if old_count != new_count:
                 return False  # size changed, must allocate new
             # overwrite in place
-            suffix = _SCALAR_FORMATS.get(gff.struct_defs[0].field_instances[
-                next(i for i, f in enumerate(gff.struct_defs[0].field_instances) if f.label_id == label)
-            ].type_id)
+            suffix = _SCALAR_FORMATS.get(
+                gff.struct_defs[0]
+                .field_instances[
+                    next(
+                        i
+                        for i, f in enumerate(gff.struct_defs[0].field_instances)
+                        if f.label_id == label
+                    )
+                ]
+                .type_id
+            )
             if suffix is None:
                 return False
             fmt = f"<{suffix}"
@@ -536,21 +544,21 @@ class MSHWriter:
         # vertex data
         vertex_changed = L_VERTEX_DATA in at and list(mesh.vertex_data) != orig["vertex"]
         index_changed = L_INDEX_DATA in at and list(mesh.index_data) != orig["index"]
-        
+
         # if vertex or index count changed, fall back to rebuilt for proper compaction
         vertex_count_changed = vertex_changed and len(mesh.vertex_data) != len(orig["vertex"])
         index_count_changed = index_changed and len(mesh.index_data) != len(orig["index"])
-        
+
         if vertex_count_changed or index_count_changed:
             return self._rebuilt()
-        
+
         # same-count edits: try in-place overwrite
         if vertex_changed:
             new_v = list(mesh.vertex_data)
             if not _overwrite_scalar_list(L_VERTEX_DATA, new_v):
                 ref = w.alloc_scalar_list(0, new_v)
                 struct.pack_into("<I", w.data_block, at[L_VERTEX_DATA], ref)
-        
+
         if index_changed:
             new_i = list(mesh.index_data)
             if not _overwrite_scalar_list(L_INDEX_DATA, new_i):

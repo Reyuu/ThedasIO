@@ -41,13 +41,14 @@ def proxy_material() -> Any:
     material = bpy.data.materials.get(PROXY_MATERIAL)
     if material is None:
         material = bpy.data.materials.new(PROXY_MATERIAL)
-    material.diffuse_color = (*PROXY_COLOR, PROXY_ALPHA)
+    material.diffuse_color = (*PROXY_COLOR, PROXY_ALPHA)  # type: ignore[assignment]  # bpy_prop_array is invariant
     try:
         material.blend_method = "BLEND"
     except (AttributeError, TypeError):
         pass
     material.use_nodes = True
-    bsdf = material.node_tree.nodes.get("Principled BSDF")
+    node_tree = material.node_tree
+    bsdf = node_tree.nodes.get("Principled BSDF") if node_tree is not None else None
     if bsdf is not None:
         bsdf.inputs["Base Color"].default_value = (*PROXY_COLOR, 1.0)
         bsdf.inputs["Alpha"].default_value = PROXY_ALPHA
@@ -148,7 +149,8 @@ def object_geometry(obj: Any, selected_only: bool = False) -> tuple[list, list]:
     except (AttributeError, RuntimeError):
         return [], []
     selected = selected_only and any(p.select for p in mesh.polygons)
-    verts, tris, remap = [], [], {}
+    verts: list[tuple[float, float, float]] = []
+    tris, remap = [], {}
     for tri in triangles:
         if selected and not mesh.polygons[tri.polygon_index].select:
             continue
@@ -177,11 +179,16 @@ def object_hull(obj: Any) -> tuple[list, list]:
         chosen = [v for v in bm.verts if v.select]
         if len(chosen) < 4:
             return [], []
-        result = bmesh.ops.convex_hull(bm, input=chosen, use_existing_faces=False)
+        result = bmesh.ops.convex_hull(
+            bm,
+            input=chosen,  # type: ignore[arg-type]  # bmesh.ops wants BMVert|BMEdge|BMFace; verts are fine at runtime
+            use_existing_faces=False,
+        )
         faces = [g for g in result["geom"] if isinstance(g, bmesh.types.BMFace)]
         if not faces:
             return [], []
-        verts, tris, remap = [], [], {}
+        verts: list[tuple[float, float, float]] = []
+        tris, remap = [], {}
         for face in faces:
             ids = []
             for v in face.verts:

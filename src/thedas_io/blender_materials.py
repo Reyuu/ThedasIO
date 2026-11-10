@@ -787,7 +787,8 @@ def _new_group(name: str) -> Any:
     tag(tree, "node_group")
     # the orphan sweep drops zero-user tagged groups; a template has no users
     # until something imports a material of its type
-    tree.use_fake_user = True
+    if tree is not None:
+        tree.use_fake_user = True
     return tree
 
 
@@ -888,7 +889,7 @@ def create_water_node_group() -> Any:
 
     links.new(gin.outputs["waterColor"], gout.inputs["Base Color"])
 
-    normals = []
+    normals: list[Any] = []
     for name in ("normal", "normal2", "normal3"):
         nmap = nodes.new("ShaderNodeNormalMap")
         nmap.location = (-520.0, 260.0 - 180.0 * len(normals))

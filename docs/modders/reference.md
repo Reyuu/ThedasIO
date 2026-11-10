@@ -23,7 +23,7 @@ Edit > Preferences > Add-ons > ThedasIO.
 | **Game** | Dragon Age: Origins or Dragon Age II. Each game has its own asset database and archive reader. |
 | **Source** (Game / Disk) | Game searches the asset database. Disk imports one file from your computer. |
 | **Weld seams** | Merges vertices that sit at the same position into one. On by default. Export accepts either layout. |
-| **Extension** | Filters the list to MSH, MMH, ANI, or CUB. (None) shows every extension. |
+| **Extension** | Filters the list to MSH, MMH, or ANI. (None) shows every extension. |
 | **File name** | Filters by name, matching any part of it. |
 | **Package** | Filters by archive file name. The list's Archive column shows the same package. |
 | **Search** | Applies the filters to the database. Does not rescan. |

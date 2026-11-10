@@ -409,9 +409,9 @@ def register() -> None:
         pres.append(bpy.app.handlers.persistent(_repack_textures))
 
 
-_LOAD_HANDLER = None
-_PRUNE_HANDLER = None
-_GROUP_TIMER = None
+_LOAD_HANDLER: Any = None
+_PRUNE_HANDLER: Any = None
+_GROUP_TIMER: Any = None
 
 
 def _autoload_db() -> None:

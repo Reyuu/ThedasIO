@@ -94,7 +94,7 @@ def cook_triangle_mesh(
     db_path: Any = None,
     game: Any = None,
     edge: float = DEFAULTS["edge"],
-    axis: int = DEFAULTS["axis"],
+    axis: int = int(DEFAULTS["axis"]),
     extent: float = DEFAULTS["extent"],
 ) -> bytes:
     # verts are (x, y, z), tris are (a, b, c) indices
