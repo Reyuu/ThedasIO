@@ -245,6 +245,15 @@ class THEDAS_IO_OT_import_asset(bpy.types.Operator):
                 self.report({"ERROR"}, f"Could not extract {item.filename}: {exc}")
                 return {"CANCELLED"}
             return _play_animation(context, raw, item.filename, 30.0, self.report)
+        if str(item.ext).lower().lstrip(".") in ("mor", "mop"):
+            from .morph.operators import run_preset
+
+            try:
+                raw = Path(str(extract(row))).read_bytes()
+            except Exception as exc:  # noqa: BLE001
+                self.report({"ERROR"}, f"Could not extract {item.filename}: {exc}")
+                return {"CANCELLED"}
+            return run_preset(context, raw, row, self.report)
         result = _import_row(
             context, row, _scene_db(scene), False, self.report, scene.thedas_io_weld
         )
@@ -279,6 +288,20 @@ class THEDAS_IO_OT_import_file(bpy.types.Operator):
                 self.report({"ERROR"}, f"Could not read {p.name}: {exc}")
                 return {"CANCELLED"}
             return _play_animation(context, raw, p.name, 30.0, self.report)
+        if p.suffix.lower() in (".mor", ".mop"):
+            from .morph.operators import run_preset
+
+            try:
+                raw = p.read_bytes()
+            except OSError as exc:
+                self.report({"ERROR"}, f"Could not read {p.name}: {exc}")
+                return {"CANCELLED"}
+            return run_preset(
+                context,
+                raw,
+                {"package": None, "filename": p.name, "ext": p.suffix, "path": str(p)},
+                self.report,
+            )
         row = {"package": None, "filename": p.name, "ext": p.suffix, "path": str(p)}
         result = _import_row(
             context,

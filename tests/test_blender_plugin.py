@@ -97,6 +97,9 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_pick_collision_bone,
             ui.THEDAS_IO_OT_load_animation,
             ui.THEDAS_IO_OT_export_animation,
+            ui.THEDAS_IO_OT_import_mor,
+            ui.THEDAS_IO_OT_import_mop,
+            ui.THEDAS_IO_OT_select_preset_part,
             ui.THEDAS_IO_OT_refresh_assets,
             ui.THEDAS_IO_OT_assets_page,
             ui.THEDAS_IO_OT_import_asset,
@@ -107,7 +110,7 @@ def test_every_input_has_a_tooltip():
             ui.THEDAS_IO_OT_import_substance,
             ui.THEDAS_IO_OT_reload_textures,
         ]
-        assert len(operators) == 15
+        assert len(operators) == 18
         for cls in operators:
             assert cls.bl_label, cls.bl_idname
             assert cls.bl_description, cls.bl_idname
@@ -207,6 +210,10 @@ def test_register_unregister():
         ui.THEDAS_IO_PT_collision,
         ui.THEDAS_IO_OT_load_animation,
         ui.THEDAS_IO_OT_export_animation,
+        ui.THEDAS_IO_OT_import_mor,
+        ui.THEDAS_IO_OT_import_mop,
+        ui.THEDAS_IO_OT_select_preset_part,
+        ui.THEDAS_IO_PT_preset,
         ui.THEDAS_IO_OT_refresh_assets,
         ui.THEDAS_IO_OT_assets_page,
         ui.THEDAS_IO_OT_import_asset,
@@ -981,8 +988,12 @@ def test_export_list_sync_never_mutates_during_draw():
 def test_extension_combo_items_and_filter(tmp_path):
     import fake_bpy
 
-    assert [item[0] for item in ui._EXT_ITEMS] == ["NONE", "MSH", "MMH", "ANI", "CUB"]
-    assert [item[1] for item in ui._EXT_ITEMS] == ["(None)", "MSH", "MMH", "ANI", "CUB"]
+    assert [item[0] for item in ui._EXT_ITEMS] == [
+        "NONE", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"
+    ]
+    assert [item[1] for item in ui._EXT_ITEMS] == [
+        "(None)", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"
+    ]
     from thedas_io import asset_browser
 
     assert asset_browser._ext_filter("NONE") is None

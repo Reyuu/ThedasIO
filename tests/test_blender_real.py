@@ -2542,6 +2542,8 @@ def test_extension_filter_is_a_combo_box():
             ["MSH", "MSH"],
             ["MMH", "MMH"],
             ["ANI", "ANI"],
+            ["MOR", "MOR"],
+            ["MOP", "MOP"],
             ["CUB", "CUB"],
         ],
         "default": "NONE",
@@ -4207,6 +4209,262 @@ def test_export_assets_writes_every_clip_the_armature_loaded():
         "files": ["c_dog.sit_p.ani", "c_dog.sit_p_b.ani"],
         "foreign_skipped": True,
         "own_edits": True,
+    }
+
+
+def test_import_preset_assembles_parts_on_one_rig():
+    # a .mor's parts import on their own rigs, then the first rig drives them
+    # all; the preset's tint rows land on the material groups, and a .mop
+    # patches only the rows it carries
+    assert run(
+        textwrap.dedent("""\
+        import json
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                bpy.context.preferences.use_preferences_save = False
+                bpy.context.scene.thedas_io_game = "DAO"
+                from thedas_io.morph.description import MORReader
+                from thedas_io.morph.importer import preset_armature
+
+                def socket(obj_name, group_name, field):
+                    for mat in bpy.data.objects[obj_name].data.materials:
+                        for node in mat.node_tree.nodes:
+                            group = getattr(node, "node_tree", None)
+                            if group is not None and group.name == group_name:
+                                return tuple(round(v, 3) for v in node.inputs[field].default_value)
+                    return None
+
+                def number(obj_name, group_name, field):
+                    for mat in bpy.data.objects[obj_name].data.materials:
+                        for node in mat.node_tree.nodes:
+                            group = getattr(node, "node_tree", None)
+                            if group is not None and group.name == group_name:
+                                return round(float(node.inputs[field].default_value), 2)
+                    return None
+
+                path = os.path.abspath(os.path.join("data", "hm_cir100_inn_pat.mor"))
+                out = {"res": sorted(bpy.ops.thedas_io.import_mor(filepath=path))}
+                armatures = [o for o in bpy.data.objects if o.type == "ARMATURE"]
+                meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+                master = preset_armature(bpy.context)
+                out["master"] = master.name if master else ""
+                out["parts"] = [p["name"] for p in json.loads(master["thedas_io_preset_parts"])]
+                out["meshes"] = sorted(o.name for o in meshes)
+                out["driven"] = all(
+                    any(m.type == "ARMATURE" and m.object is master for m in o.modifiers)
+                    for o in meshes
+                )
+                out["extra_hidden"] = all(
+                    o.hide_viewport and o.parent is master
+                    for o in armatures if o is not master
+                )
+                tints = json.loads(master["thedas_io_preset_tints"])
+                out["tints"] = [t["name"] for t in tints]
+                out["face_diffuse_a"] = socket(
+                    "HM_UHM_BAS_FaceM1", "DAO Tint Diffuse", "Diffuse A")
+
+                mop = os.path.abspath(os.path.join("data", "hm_hm1.mop"))
+                out["mop_res"] = sorted(bpy.ops.thedas_io.import_mop(filepath=mop))
+                out["mop_name"] = master.get("thedas_io_mop")
+                out["face_after"] = socket(
+                    "HM_UHM_BAS_FaceM1", "DAO Tint Diffuse", "Diffuse A")
+                out["parts_still"] = len(json.loads(master["thedas_io_preset_parts"]))
+
+                def image_of(obj_name, role):
+                    for mat in bpy.data.objects[obj_name].data.materials:
+                        for node in mat.node_tree.nodes:
+                            if node.type == "TEX_IMAGE" and node.get("thedas_io_role") == role:
+                                return node.image.name if node.image else ""
+                    return ""
+
+                out["age_normal"] = image_of(
+                    "HM_UHM_BAS_FaceM1", "ageNormal").split(".")[0]
+                out["age_diffuse"] = image_of(
+                    "HM_UHM_BAS_FaceM1", "ageDiffuse").split(".")[0]
+
+                return out
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "res": ["FINISHED"],
+        "master": "hm_uhm_basa_0.mmh",
+        "parts": ["HM_UHM_BASa_0", "hm_uem_basa_0", "hm_har_hc3a_0", "hm_ulm_basa_0"],
+        "meshes": [
+            "HM_HAR_HC3_HairM1",
+            "HM_HAR_HC3_HairM2",
+            "HM_UEM_BAS_EyesM1",
+            "HM_UHM_BAS_FaceM1",
+            "HM_ULM_BAS_LashesM1",
+        ],
+        "driven": True,
+        "extra_hidden": True,
+        "tints": ["t1_skn_003", "t3_eye_gry", "t3_har_dbr", "t1_stb_dbr", "t1_stb_dbr"],
+        "face_diffuse_a": [0.94, 0.86, 0.66, 1.0],
+        "mop_res": ["FINISHED"],
+        "mop_name": "hm1",
+        "face_after": [0.83, 0.78, 0.78, 1.0],
+        "parts_still": 4,
+        "age_normal": "uh_hed_olda_0n",
+        "age_diffuse": "uh_hed_olda_0d",
+    }
+
+
+def test_morph_shapes_become_shape_keys():
+    # a model param names a shape .mmh: its mesh lands as a shape key so the
+    # toolset's shape slider is Blender's key value, and the shape import leaves
+    # no objects behind
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                bpy.context.preferences.use_preferences_save = False
+                bpy.context.scene.thedas_io_game = "DAO"
+                from thedas_io.morph.description import MORReader
+                from thedas_io.morph.importer import (
+                    apply_shapes, import_preset, preset_armature, rig_meshes)
+                path = os.path.abspath(os.path.join("data", "hm_cir100_inn_pat.mor"))
+                row = {"package": None, "filename": "hm_cir100_inn_pat.mor",
+                       "ext": ".mor", "path": path}
+                import_preset(bpy.context, MORReader(open(path, "rb").read()), row,
+                              None, True, lambda level, message: None)
+                arm = preset_armature(bpy.context)
+                applied = apply_shapes(bpy.context, arm,
+                                       [("uhm_chm_09a_0", 0.5)], row, None, True,
+                                       "DAO", lambda level, message: None)
+                face = next(o for o in rig_meshes(arm) if o.name.endswith("_FaceM1"))
+                shape_keys = getattr(face.data, "shape_keys", None)
+                keys = []
+                if shape_keys is not None:
+                    keys = [(k.name, round(k.value, 2)) for k in shape_keys.key_blocks
+                            if k.name != "Basis"]
+                return {
+                    "applied": applied,
+                    "keys": keys,
+                    "leftover": sorted(o.name for o in bpy.data.objects
+                                       if "UHM_CHM" in o.name.upper()),
+                    "objects": len([o for o in bpy.data.objects if o.type == "ARMATURE"]),
+                }
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "applied": ["FaceM1:uhm_chm_09a_0"],
+        "keys": [["shape uhm_chm_09a_0", 0.5]],
+        "leftover": [],
+        "objects": 4,
+    }
+
+
+def test_tint_files_paint_their_nodes():
+    # a slot names a .tnt: loading it must write those ten colours into the
+    # node's tint groups, which is the path a .mop that only names tints needs
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                bpy.context.preferences.use_preferences_save = False
+                bpy.context.scene.thedas_io_game = "DAO"
+                from thedas_io.morph.description import MORReader
+                from thedas_io.morph.importer import (
+                    apply_tint_files, import_preset, preset_armature)
+
+                path = os.path.abspath(os.path.join("data", "hm_cir100_inn_pat.mor"))
+                row = {"package": None, "filename": "hm_cir100_inn_pat.mor",
+                       "ext": ".mor", "path": path}
+                import_preset(bpy.context, MORReader(open(path, "rb").read()), row,
+                              None, True, lambda level, message: None)
+                arm = preset_armature(bpy.context)
+                tint = os.path.abspath(os.path.join("data", "t1_skn_003.tnt"))
+
+                def socket(obj_name, field):
+                    mat = bpy.data.objects[obj_name].data.materials[0]
+                    for node in mat.node_tree.nodes:
+                        group = getattr(node, "node_tree", None)
+                        if group is not None and group.name == "DAO Tint Diffuse":
+                            return tuple(round(v, 3) for v in node.inputs[field].default_value)
+                    return None
+
+                out = {"before": socket("HM_UHM_BAS_FaceM1", "Diffuse R")}
+                out["applied"] = apply_tint_files(
+                    arm, [{"name": "t1_skn_003", "file": tint}],
+                    lambda level, message: None)
+                out["after"] = socket("HM_UHM_BAS_FaceM1", "Diffuse R")
+                return out
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "before": [0.0, 0.0, 0.0, 0.0],
+        "applied": ["FaceM1:t1_skn_003"],
+        "after": [1.0, 1.0, 1.0, 1.0],
+    }
+
+
+def test_mop_imports_the_head_it_overrides():
+    # picking a .mop with nothing imported builds the head from the mop's own
+    # parts, then applies the override; the asset list filter offers MOR/MOP
+    assert run(
+        textwrap.dedent("""\
+        import os
+        import sys
+        sys.path.insert(0, "src")
+        def main():
+            import bpy
+            import thedas_io as ext
+            ext.register()
+            try:
+                bpy.context.preferences.use_preferences_save = False
+                bpy.context.scene.thedas_io_game = "DAO"
+                from thedas_io import ui
+                from thedas_io.morph.importer import preset_armature, rig_meshes
+                from thedas_io.morph.operators import run_preset
+                path = os.path.abspath(os.path.join("data", "hm_hm1.mop"))
+                row = {"package": None, "filename": "hm_hm1.mop",
+                       "ext": ".mop", "path": path}
+                result = run_preset(bpy.context, open(path, "rb").read(), row,
+                                    lambda level, message: None)
+                arm = preset_armature(bpy.context)
+                return {
+                    "result": sorted(result),
+                    "master": arm.name if arm else "",
+                    "mop": arm.get("thedas_io_mop") if arm else "",
+                    "meshes": sorted(o.name for o in rig_meshes(arm)) if arm else [],
+                    "exts": [item[0] for item in ui._EXT_ITEMS],
+                }
+            finally:
+                ext.unregister()
+        """),
+    ) == {
+        "result": ["FINISHED"],
+        "master": "hm_uhm_basa_0.mmh",
+        "mop": "hm1",
+        "meshes": [
+            "HM_HAR_HB1_HairM1",
+            "HM_HAR_HB1_HairM2",
+            "HM_UEM_BAS_EyesM1",
+            "HM_UHM_BAS_FaceM1",
+            "HM_ULM_BAS_LashesM1",
+        ],
+        "exts": ["NONE", "MSH", "MMH", "ANI", "MOR", "MOP", "CUB"],
     }
 
 

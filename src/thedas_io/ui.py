@@ -54,6 +54,11 @@ from .importers import (
     THEDAS_IO_OT_import_file,
     _import_row,  # noqa: F401 - kept on the ui facade for tests
 )
+from .morph.operators import (
+    THEDAS_IO_OT_import_mop,
+    THEDAS_IO_OT_import_mor,
+)
+from .morph.panels import THEDAS_IO_OT_select_preset_part, THEDAS_IO_PT_preset
 from .panels import (
     THEDAS_IO_AddonPreferences,
     THEDAS_IO_AssetItem,
@@ -105,6 +110,10 @@ _CLASSES: tuple = (
     THEDAS_IO_PT_collision,
     THEDAS_IO_OT_load_animation,
     THEDAS_IO_OT_export_animation,
+    THEDAS_IO_OT_import_mor,
+    THEDAS_IO_OT_import_mop,
+    THEDAS_IO_OT_select_preset_part,
+    THEDAS_IO_PT_preset,
     THEDAS_IO_OT_refresh_assets,
     THEDAS_IO_OT_assets_page,
     THEDAS_IO_OT_import_asset,
@@ -164,13 +173,14 @@ _PROP_TEXT = {
         ),
     ),
 }
-# combo box beats free text, only msh/mmh have importers
+# combo box beats free text, one entry per importer
 _EXT_ITEMS = (
     ("NONE", "(None)", "Every extension"),
     ("MSH", "MSH", "Mesh (.msh) only"),
     ("MMH", "MMH", "Model hierarchy (.mmh) only"),
     ("ANI", "ANI", "Animation (.ani) only"),
-    ("CUB", "CUB", "Cutscene blend tree (.cub) only"),
+    ("MOR", "MOR", "Character preset (.mor) only"),
+    ("MOP", "MOP", "Morph preset override (.mop) only"),
 )
 _SCENE_PROPS = (
     "thedas_io_assets",

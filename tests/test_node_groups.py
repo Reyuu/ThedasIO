@@ -78,6 +78,8 @@ def test_node_groups_are_created_with_role_sockets():
                 "tattoo",
                 "browStubble",
                 "browStubbleNormal",
+                "browColour",
+                "tattooColour",
                 "AgeFactor",
                 "AgeNormalFactor",
                 "TattooFactor",
@@ -379,11 +381,11 @@ def test_character_mao_uses_group_with_gated_factors():
         "type": "character",
         "group_nodes": 1,
         "factors": {
-            "AgeFactor": 1.0,
-            "AgeNormalFactor": 0.5,
-            "TattooFactor": 1.0,
-            "BrowFactor": 1.0,
-            "BrowNormalFactor": 0.5,
+            "AgeFactor": 0.0,
+            "AgeNormalFactor": 0.0,
+            "TattooFactor": 0.0,
+            "BrowFactor": 0.0,
+            "BrowNormalFactor": 0.0,
         },
         "age_diffuse_linked": True,
         "age_normal_linked": True,
@@ -396,6 +398,107 @@ def test_character_mao_uses_group_with_gated_factors():
             "browStubbleNormal",
             "tattoo",
         ],
+    }
+
+
+def test_character_mao_without_face_maps_keeps_its_diffuse():
+    # an eye MAO classifies as character but carries none of the age/tattoo/brow
+    # maps: the empty group must not paint its default white over the diffuse
+    assert run(
+        textwrap.dedent("""\
+        import sys
+        def main():
+            sys.path.insert(0, "src")
+            import bpy
+            from thedas_io.blender_materials import build_material
+            from thedas_io.materials import classify_material
+
+            parsed = {
+                "name": "PN_EYE_NRMa",
+                "material": "PN_EYE_NRMa",
+                "semantic": "Eye",
+                "textures": {
+                    "mml_tDiffuse": "pn_eye_nrma_0d.dds",
+                    "mml_tTintMask": "pn_eye_nrma_0t.dds",
+                    "mml_tCorneaNormalMap": "pn_eye_nrmi_0n.dds",
+                },
+                "vectors": {},
+                "floats": {},
+                "extra": [],
+                "header": "",
+            }
+            images = {
+                semantic: bpy.data.images.new(semantic, 4, 4, alpha=True)
+                for semantic in parsed["textures"]
+            }
+            kind = classify_material(parsed)
+            mat = build_material("eye_mat", parsed, images)
+            feeds = {}
+            for node in mat.node_tree.nodes:
+                if node.type not in ("EEVEE_SPECULAR", "BSDF_PRINCIPLED"):
+                    continue
+                for link in node.inputs["Base Color"].links:
+                    feeds[node.type] = (
+                        link.from_node.type,
+                        getattr(getattr(link.from_node, "node_tree", None), "name", ""),
+                    )
+            return {"type": kind, "feeds": feeds}
+        """)
+    ) == {
+        "type": "character",
+        "feeds": {
+            "EEVEE_SPECULAR": ["GROUP", "DAO Tint Diffuse"],
+            "BSDF_PRINCIPLED": ["GROUP", "DAO Tint Diffuse"],
+        },
+    }
+
+
+def test_lashes_alpha_drives_transparency_and_roughness_is_flat():
+    # an eyelash map is a solid colour plus an alpha mask: the alpha has to reach
+    # both outputs inverted, and a material with no spec map uses one roughness
+    assert run(
+        textwrap.dedent("""\
+        import sys
+        def main():
+            sys.path.insert(0, "src")
+            import bpy
+            from thedas_io.blender_materials import DEFAULT_ROUGHNESS, build_material
+
+            parsed = {
+                "name": "PM_ULM_BAS",
+                "material": "PM_ULM_BAS",
+                "semantic": "Eyelash",
+                "textures": {"mml_tDiffuse": "pm_ulm_bas_0d.dds"},
+                "vectors": {},
+                "floats": {},
+                "extra": [],
+                "header": "",
+            }
+            image = bpy.data.images.new("pm_ulm_bas_0d.dds", 4, 4, alpha=True)
+            mat = build_material("lash_mat", parsed, {"mml_tDiffuse": image})
+            out = {}
+            for node in mat.node_tree.nodes:
+                if node.type not in ("EEVEE_SPECULAR", "BSDF_PRINCIPLED"):
+                    continue
+                socket = node.inputs["Transparency" if node.type == "EEVEE_SPECULAR" else "Alpha"]
+                source = socket.links[0].from_node if socket.is_linked else None
+                out[node.type] = {
+                    "inverted": source is not None and source.type == "INVERT",
+                    "from_alpha": source is not None
+                    and source.inputs["Color"].links[0].from_socket.name == "Alpha",
+                    "roughness": None
+                    if node.inputs["Roughness"].is_linked
+                    else round(node.inputs["Roughness"].default_value, 3),
+                }
+            out["blend"] = mat.blend_method
+            out["default"] = DEFAULT_ROUGHNESS
+            return out
+        """)
+    ) == {
+        "EEVEE_SPECULAR": {"inverted": True, "from_alpha": True, "roughness": 0.7},
+        "BSDF_PRINCIPLED": {"inverted": True, "from_alpha": True, "roughness": 0.7},
+        "blend": "BLEND",
+        "default": 0.7,
     }
 
 

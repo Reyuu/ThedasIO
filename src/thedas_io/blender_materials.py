@@ -272,7 +272,7 @@ def _apply_node_group(mat: Any, node_group: Any, parsed: dict, images: dict) -> 
                 tex_node = node
                 break
         if tex_node is None:
-            tex_node = _image_node(mat, image)
+            tex_node = _image_node(mat, image, role=role)
         _link(links, tex_node.outputs["Color"], socket)
         if socket_name == "normal":
             normal_tex = tex_node
@@ -281,6 +281,12 @@ def _apply_node_group(mat: Any, node_group: Any, parsed: dict, images: dict) -> 
         _scroll_water_uv(mat, normal_tex, parsed, group_node)
 
     bsdf_nodes = [node for node in nodes if node.type in ("EEVEE_SPECULAR", "BSDF_PRINCIPLED")]
+    # a group whose base colour is fed by nothing (an eye MAO classifies as
+    # character but carries no face maps) must not override the diffuse chain
+    # that is already wired: it would paint the default white over it
+    feed = group_node.inputs.get("Base Color")
+    if feed is not None and not feed.is_linked:
+        return
     for bsdf in bsdf_nodes:
         for out_name, candidates in _GROUP_OUTPUTS.items():
             out = group_node.outputs.get(out_name)
@@ -369,6 +375,9 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     out.target = "EEVEE"
     bsdf = nodes.new("ShaderNodeEeveeSpecular")
     bsdf.location = _POS_BSDF
+    # the game reads roughness out of the specular map's alpha; when there is no
+    # spec map the preview uses this flat value (was the node's 0.2 default)
+    bsdf.inputs["Roughness"].default_value = DEFAULT_ROUGHNESS
     links = mat.node_tree.links
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
     # no mapping node: the image is stored the right way up (see _blit), so the
@@ -377,6 +386,15 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     uvmap = nodes.new("ShaderNodeTexCoord")
     uvmap.location = _POS_UV
     vector = uvmap.outputs["UV"]
+    # hair, beard and lash cards are single-sided geometry with alpha edges: the
+    # game renders them two-sided and alpha-tested, and culling them punches the
+    # rectangular holes seen over a scalp
+    label = f"{mao.get('name') or ''} {mao.get('material') or ''}".lower()
+    if any(token in label for token in ("_har_", "_brd_", "hair", "ulm")):
+        mat.use_backface_culling = False
+        mat.show_transparent_back = True
+        mat.blend_method = "CLIP"
+        mat.alpha_threshold = 0.5
     base_feed = None
     normal_feed = None
     rough_feed = None
@@ -385,19 +403,20 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     diffuse = by_role.get("diffuse")
     spec = by_role.get("specular")
     if diffuse is not None:
-        tex_diffuse = _image_node(mat, diffuse, vector, _POS_TEX["diffuse"])
+        tex_diffuse = _image_node(mat, diffuse, vector, _POS_TEX["diffuse"], role="diffuse")
         base_feed = tex_diffuse.outputs["Color"]
-        if _has_alpha(diffuse):
-            if _transparent_semantic(mao):
-                trans_feed = _to_transparency(
-                    mat, bsdf, tex_diffuse.outputs["Alpha"], cutout=_cutout_semantic(mao)
-                )
-            elif spec is None:
-                # face-style map, alpha is the specular map
-                links.new(tex_diffuse.outputs["Alpha"], bsdf.inputs["Specular"])
+        # an alpha semantic (lashes, punchthrough) is transparent whatever the
+        # image reports: its alpha is the only shape the material has
+        if _transparent_semantic(mao):
+            trans_feed = _to_transparency(
+                mat, bsdf, tex_diffuse.outputs["Alpha"], cutout=_cutout_semantic(mao)
+            )
+        elif _has_alpha(diffuse) and spec is None:
+            # face-style map, alpha is the specular map
+            links.new(tex_diffuse.outputs["Alpha"], bsdf.inputs["Specular"])
             # opaque with spec map, alpha is not opacity
     for image in packed.values():
-        tex = _image_node(mat, image, vector, _POS_TEX["packed"])
+        tex = _image_node(mat, image, vector, _POS_TEX["packed"], role="packed")
         sep = nodes.new("ShaderNodeSeparateColor")
         sep.location = _POS_PACKED_SEP
         links.new(tex.outputs["Color"], sep.inputs["Color"])
@@ -435,7 +454,7 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
     tint_image = by_role.get("tint")
     tint_groups = {}
     if tint_image is not None and base_feed is not None:
-        tex = _image_node(mat, tint_image, vector, _POS_TEX["tint"])
+        tex = _image_node(mat, tint_image, vector, _POS_TEX["tint"], role="tint")
         for side in ("Diffuse", "Specular"):
             group = nodes.new("ShaderNodeGroup")
             group.node_tree = _tint_group(side)
@@ -462,7 +481,7 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
 
     normal = by_role.get("normal")
     if normal is not None:
-        tex = _image_node(mat, normal, vector, _POS_TEX["normal"])
+        tex = _image_node(mat, normal, vector, _POS_TEX["normal"], role="normal")
         nmap = nodes.new("ShaderNodeNormalMap")
         nmap.location = _POS_NMAP
         nmap.width = 160.0
@@ -472,15 +491,18 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
 
     # character age/tattoo/brow maps composite through their own group. Each
     # map is optional per MAO, so the group gates it on a factor socket: an
-    # unconnected input is a pass-through, not a black multiply.
+    # unconnected input is a pass-through, not a black multiply. The factors
+    # start at 0 and stay there: these maps are alternates a preset blends in,
+    # and turning them on for every face paints an old, stubbled, tattooed
+    # character on a young clean one.
     character = {
-        "ageDiffuse": (age_diffuse, "AgeFactor", 1.0),
-        "ageNormal": (age_normal, "AgeNormalFactor", 0.5),
-        "tattoo": (tattoo, "TattooFactor", 1.0),
-        "browStubble": (brow_stubble, "BrowFactor", 1.0),
-        "browStubbleNormal": (brow_stubble_normal, "BrowNormalFactor", 0.5),
+        "ageDiffuse": (age_diffuse, "AgeFactor"),
+        "ageNormal": (age_normal, "AgeNormalFactor"),
+        "tattoo": (tattoo, "TattooFactor"),
+        "browStubble": (brow_stubble, "BrowFactor"),
+        "browStubbleNormal": (brow_stubble_normal, "BrowNormalFactor"),
     }
-    if base_feed is not None and any(image is not None for image, _, _ in character.values()):
+    if base_feed is not None and any(image is not None for image, _ in character.values()):
         group = nodes.new("ShaderNodeGroup")
         group.node_tree = create_character_node_group()
         group.location = (700.0, 150.0)
@@ -488,20 +510,20 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
         links.new(base_feed, group.inputs["Base Color"])
         if normal_feed is not None:
             links.new(normal_feed, group.inputs["Normal"])
-        for role, (image, factor, amount) in character.items():
+        for role, (image, factor) in character.items():
             if image is None:
                 continue
             if role.endswith("Normal"):
-                tex = _image_node(mat, image, vector, (352.6, -300.0))
+                tex = _image_node(mat, image, vector, (352.6, -300.0), role=role)
                 nmap = nodes.new("ShaderNodeNormalMap")
                 nmap.location = (560.0, -300.0)
                 nmap.width = 160.0
                 links.new(tex.outputs["Color"], nmap.inputs["Color"])
                 links.new(nmap.outputs["Normal"], group.inputs[role])
             else:
-                tex = _image_node(mat, image, vector, (352.6, 150.0))
+                tex = _image_node(mat, image, vector, (352.6, 150.0), role=role)
                 links.new(tex.outputs["Color"], group.inputs[role])
-            group.inputs[factor].default_value = amount
+            group.inputs[factor].default_value = 0.0
         base_feed = group.outputs["Base Color"]
         normal_feed = group.outputs["Normal"]
         # the plain diffuse/normal chain already fed the BSDF; the group output
@@ -510,7 +532,7 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
         _link_force(links, normal_feed, bsdf.inputs["Normal"])
 
     if spec is not None:
-        tex = _image_node(mat, spec, vector, _POS_TEX["specular"])
+        tex = _image_node(mat, spec, vector, _POS_TEX["specular"], role="specular")
         tint_specular = tint_groups.get("Specular")
         if tint_specular is not None:
             # tint the highlight per mask channel, same as the base colour
@@ -533,13 +555,14 @@ def _wire_material(mat: Any, mao: dict, images: dict, color: Any = None, tint: A
 
     emission = by_role.get("emission")
     if emission is not None:
-        tex = _image_node(mat, emission, vector, _POS_TEX["emission"])
+        tex = _image_node(mat, emission, vector, _POS_TEX["emission"], role="emission")
         links.new(tex.outputs["Color"], bsdf.inputs["Emissive Color"])
         emission_feed = tex.outputs["Color"]
 
     # cycles output from same maps, export ignores links
     principled = nodes.new("ShaderNodeBsdfPrincipled")
     principled.location = _POS_PRINCIPLED
+    principled.inputs["Roughness"].default_value = DEFAULT_ROUGHNESS
     out_cycles = nodes.new("ShaderNodeOutputMaterial")
     out_cycles.location = _POS_OUT_CYCLES
     out_cycles.target = "CYCLES"
@@ -667,10 +690,14 @@ def _tint_group(side: str) -> Any:
     return tree
 
 
-def _image_node(mat: Any, image: Any, vector: Any = None, pos: Any = None) -> Any:
+def _image_node(mat: Any, image: Any, vector: Any = None, pos: Any = None, role: Any = None) -> Any:
     tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
     tex.image = image
     tex.width = 240.0
+    # the role a preset override names: a .mor/.mop says "mml_tAgeDiffuseMap",
+    # and this is how the importer finds the node again without guessing
+    if role:
+        tex["thedas_io_role"] = role
     if pos is not None:
         tex.location = pos
     if vector is not None:
@@ -693,8 +720,13 @@ def _to_transparency(mat: Any, bsdf: Any, alpha_out: Any, cutout: bool = False) 
     return invert.outputs["Color"]
 
 
-# transparent semantics blend, others ignore diffuse alpha
-_TRANSPARENT_SEMANTICS = ("alpha", "punchthrough", "addvpunchthrough")
+# the game reads roughness out of the specular map's alpha; with no spec map the
+# preview uses this flat value (EEVEE's specular node defaults to 0.2)
+DEFAULT_ROUGHNESS = 0.7
+
+# transparent semantics blend, others ignore diffuse alpha. lashes are cut-out
+# cards in the game and their diffuse alpha is the only opacity they carry.
+_TRANSPARENT_SEMANTICS = ("alpha", "punchthrough", "addvpunchthrough", "eyelash")
 # punchthrough semantics are alpha-tested not blended
 _CUTOUT_SEMANTICS = ("punchthrough", "addvpunchthrough")
 
@@ -733,6 +765,7 @@ def _has_alpha(image: Any) -> bool:
 
 
 # node group templates for material types
+
 
 def _new_group(name: str) -> Any:
     tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
@@ -899,6 +932,8 @@ def create_character_node_group() -> Any:
             ("tattoo", "NodeSocketColor"),
             ("browStubble", "NodeSocketColor"),
             ("browStubbleNormal", "NodeSocketVector"),
+            ("browColour", "NodeSocketColor", (0.1, 0.07, 0.05, 1.0)),
+            ("tattooColour", "NodeSocketColor", (0.0, 0.0, 0.0, 1.0)),
             ("AgeFactor", "NodeSocketFloat"),
             ("AgeNormalFactor", "NodeSocketFloat"),
             ("TattooFactor", "NodeSocketFloat"),
@@ -916,20 +951,36 @@ def create_character_node_group() -> Any:
     gout = nodes.new("NodeGroupOutput")
     gout.location = (520.0, 200.0)
 
+    # the blend skin texture is a second skin map mixed in by "Blend All
+    # Override" (mml_fAgeBlendWeight[11]); the tattoo and brow/stubble maps are
+    # tint masks that say where their colour goes, not colours of their own
     colour = gin.outputs["Base Color"]
-    for sample, factor, blend in (
-        ("ageDiffuse", "AgeFactor", "MULTIPLY"),
-        ("tattoo", "TattooFactor", "OVERLAY"),
-        ("browStubble", "BrowFactor", "MULTIPLY"),
+    blend = nodes.new("ShaderNodeMix")
+    blend.data_type = "RGBA"
+    blend.blend_type = "MIX"
+    blend.label = "ageDiffuse"
+    links.new(colour, blend.inputs["A"])
+    links.new(gin.outputs["ageDiffuse"], blend.inputs["B"])
+    links.new(gin.outputs["AgeFactor"], blend.inputs["Factor"])
+    colour = blend.outputs["Result"]
+
+    for sample, factor, tint in (
+        ("tattoo", "TattooFactor", "tattooColour"),
+        ("browStubble", "BrowFactor", "browColour"),
     ):
-        mix = nodes.new("ShaderNodeMix")
-        mix.data_type = "RGBA"
-        mix.blend_type = blend
-        mix.label = sample
-        links.new(colour, mix.inputs["A"])
-        links.new(gin.outputs[sample], mix.inputs["B"])
-        links.new(gin.outputs[factor], mix.inputs["Factor"])
-        colour = mix.outputs["Result"]
+        level = nodes.new("ShaderNodeMath")
+        level.operation = "MULTIPLY"
+        level.label = f"{sample} mask"
+        links.new(gin.outputs[sample], level.inputs[0])
+        links.new(gin.outputs[factor], level.inputs[1])
+        mask = nodes.new("ShaderNodeMix")
+        mask.data_type = "RGBA"
+        mask.blend_type = "MIX"
+        mask.label = sample
+        links.new(colour, mask.inputs["A"])
+        links.new(gin.outputs[tint], mask.inputs["B"])
+        links.new(level.outputs["Value"], mask.inputs["Factor"])
+        colour = mask.outputs["Result"]
     links.new(colour, gout.inputs["Base Color"])
 
     normal = gin.outputs["Normal"]

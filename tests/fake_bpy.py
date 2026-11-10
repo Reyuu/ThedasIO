@@ -108,6 +108,10 @@ class _Props:
     def FloatProperty(**kwargs):
         return _PropDef(**kwargs)
 
+    @staticmethod
+    def FloatVectorProperty(**kwargs):
+        return _PropDef(**kwargs)
+
 
 class _Types:
     Panel = Panel
