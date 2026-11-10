@@ -13,7 +13,7 @@ from typing import Any
 
 from mathutils import Matrix, Vector
 
-from .description import ROTATION32, ROTATION64, TRANSLATION, ANIReader, patch_ani
+from .description import TRANSLATION, ANIReader, is_rotation, patch_ani
 from .scene import _fcurves, _match, _quat, bones_by_export, rest_local
 
 # Blender holds the pose in float32, so an unedited key reads back up to
@@ -132,7 +132,7 @@ def export_action(context: Any, arm: Any, raw: bytes, fps: float) -> bytes:
 
         # vfx channels are not bone-driven, so nothing here can edit them; a
         # longer clip still needs their key times rescaled
-        if node.target not in (ROTATION32, ROTATION64, TRANSLATION):
+        if not (is_rotation(node.target) or node.target == TRANSLATION):
             if extending:
                 return own_times, [v for _, v in node.keys]
             return None

@@ -12,7 +12,7 @@ from typing import Any
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from .description import ROTATION32, ROTATION64, TRANSLATION
+from .description import ROTATION32, ROTATION64, TRANSLATION, is_rotation
 
 BONE_EXPORT_KEY = "thedas_io_xprt"
 BONE_NODE_POS = "thedas_io_node_pos"
@@ -119,7 +119,7 @@ def build_action(anim: Any, arm_obj: Any, fps: float = 30.0) -> bpy.types.Action
         bone = _match(by_export, node.name)
         if bone is None:
             continue
-        if node.target in (ROTATION32, ROTATION64):
+        if is_rotation(node.target):
             rot_channels.setdefault(bone, node)
         elif node.target == TRANSLATION:
             pos_channels.setdefault(bone, node)

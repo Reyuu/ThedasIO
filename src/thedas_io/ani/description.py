@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import struct
 from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +36,25 @@ L_KEY_DATA2 = _ID["GFF_ANIMATION_KEY_DATA2"]
 TIME_MAX = 65535
 
 ROTATION32 = 2
+ROTATION48 = 3
 ROTATION64 = 4
 TRANSLATION = 6
+ROTATIONS = (ROTATION32, ROTATION48, ROTATION64)
+
+
+def is_rotation(target: Any) -> bool:
+    return target in ROTATIONS
+
+
+def rotation_bits(target: Any) -> int | None:
+    if target == ROTATION32:
+        return 32
+    if target == ROTATION48:
+        return 48
+    if target == ROTATION64:
+        return 64
+    return None
+
 
 # GFF field type ids, needed wherever a value is written back by hand
 TYPE_U16 = 2
@@ -109,21 +127,50 @@ def decode_quat64(word: int) -> tuple:
     return _rebuild(word & INDEX_MASK, ratios)
 
 
+def decode_quat48(first: int, second: int, third: int) -> tuple:
+    # DA2/48-bit: three 16-bit parts, the dropped largest part's place in the
+    # first two low bits. Step is 2 / (sqrt2 * 65535), centre 32767.5.
+    step = 2.0 / (SQRT2 * 65535.0)
+    a = ((first & 0xFFFE) - 32767.5) * step
+    b = ((second & 0xFFFE) - 32767.5) * step
+    c = (third - 32767.5) * step
+    place = ((first & 1) << 1) | (second & 1)
+    return _rebuild(place, [a, b, c])
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def decode_key(target: int, raw: dict) -> Any:
     d = raw.get(L_KEY_DATA0)
     if target == ROTATION32 and isinstance(d, int):
         return decode_quat32(d)
+    if target == ROTATION48:
+        parts = [raw.get(L_KEY_DATA0), raw.get(L_KEY_DATA1), raw.get(L_KEY_DATA2)]
+        if all(isinstance(p, int) for p in parts):
+            return decode_quat48(*parts)
     if target == ROTATION64 and isinstance(d, int):
         return decode_quat64(d)
 
-    d1 = raw.get(L_KEY_DATA1) or 0.0
-    d2 = raw.get(L_KEY_DATA2) or 0.0
+    d1 = _to_float(raw.get(L_KEY_DATA1))
+    d2 = _to_float(raw.get(L_KEY_DATA2))
     if target == TRANSLATION:
-        return (float(d or 0.0), float(d1), float(d2))
+        return (_to_float(d), d1, d2)
 
     if isinstance(d, (int, float)):
         return float(d)
-    return (float(d or 0.0), float(d1), float(d2))
+    return (_to_float(d), d1, d2)
 
 
 class AnimNode:
@@ -134,7 +181,7 @@ class AnimNode:
 
     @property
     def kind(self) -> str:
-        if self.target in (ROTATION32, ROTATION64):
+        if is_rotation(self.target):
             return "rotation"
         if self.target == TRANSLATION:
             return "position"
@@ -152,12 +199,14 @@ class Animation:
         additive: Any,
         nodes: list,
         skipped: Any = (),
+        warnings: Any = (),
     ) -> None:
         self.name = name
         self.length = length
         self.additive = additive
         self.nodes = nodes
         self.skipped = list(skipped)
+        self.warnings = list(warnings)
 
     def by_name(self, export_name: str) -> AnimNode | None:
         for node in self.nodes:
@@ -169,48 +218,122 @@ class Animation:
         kinds: dict = {}
         for n in self.nodes:
             kinds[n.kind] = kinds.get(n.kind, 0) + 1
-        return {"name": self.name, "length": self.length, "nodes": len(self.nodes), "kinds": kinds}
+        return {
+            "name": self.name,
+            "length": self.length,
+            "nodes": len(self.nodes),
+            "kinds": kinds,
+            "skipped": len(self.skipped),
+            "warnings": len(self.warnings),
+        }
 
 
-def _decode_node(node: dict, length: float) -> AnimNode | None:
+def _decode_node(
+    node: dict,
+    length: float,
+    skipped: list | None = None,
+    warnings: list | None = None,
+) -> AnimNode | None:
+    if skipped is None:
+        skipped = []
+    if warnings is None:
+        warnings = []
     if not isinstance(node, dict):
+        skipped.append(("?", "node is not a struct"))
         return None
 
-    target = int(node.get(L_NODE_TARGET) or 0)
+    name = str(node.get(L_NODE_NAME) or "")
+    raw_target = node.get(L_NODE_TARGET)
+    if raw_target is None:
+        skipped.append((name or "?", "no target"))
+        return None
+    try:
+        target = int(raw_target)
+    except (TypeError, ValueError):
+        skipped.append((name or "?", f"bad target {raw_target!r}"))
+        return None
+    if target < 0:
+        skipped.append((name or "?", f"bad target {raw_target!r}"))
+        return None
     node_data = node.get(L_NODE_DATA)
     if not isinstance(node_data, dict):
+        skipped.append((name or "?", "no node data"))
         return None
 
     rows = (node_data.get("value") or {}).get(L_NODE_DATA)
     if not isinstance(rows, list):
+        skipped.append((name or "?", "no key list"))
         return None
 
     keys = []
     for row in rows:
         if not isinstance(row, dict):
+            skipped.append((name or "?", "key is not a struct"))
             continue
-        time = float(row.get(L_KEY_TIME) or 0) / TIME_MAX * length
-        keys.append((time, decode_key(target, row)))
+        if L_KEY_TIME not in row:
+            skipped.append((name or "?", "key has no time"))
+            continue
+        time = _to_float(row.get(L_KEY_TIME), -1.0)
+        if time < 0:
+            skipped.append((name or "?", f"bad key time {row.get(L_KEY_TIME)!r}"))
+            continue
+        if is_rotation(target):
+            if target == ROTATION48:
+                needed = (L_KEY_DATA0, L_KEY_DATA1, L_KEY_DATA2)
+            else:
+                needed = (L_KEY_DATA0,)
+            if not all(isinstance(row.get(label), int) for label in needed):
+                skipped.append((name or "?", "rotation key has no packed word"))
+                continue
+        try:
+            value = decode_key(target, row)
+        except (TypeError, ValueError, struct.error) as exc:
+            skipped.append((name or "?", f"key could not decode ({exc})"))
+            continue
+        keys.append((time / TIME_MAX * length, value))
 
     if not keys:
+        skipped.append((name or "?", "no keys"))
         return None
-    return AnimNode(str(node.get(L_NODE_NAME) or ""), target, keys)
+
+    times = [t for t, _ in keys]
+    if any(b < a for a, b in pairwise(times)):
+        warnings.append((name, "key times decrease"))
+
+    return AnimNode(name, target, keys)
 
 
 class ANIReader:
     def __init__(self, raw: bytes):
         self.raw = raw
         self.gff = GFFReader(raw)
+        if self.gff.file_type != b"ANI ":
+            raise ValueError(
+                f"not an ANI file (GFF file type {self.gff.file_type!r}, expected b'ANI ')"
+            )
         self.root = self.gff.get_from_data_block(0, 0)
+        if not isinstance(self.root, dict):
+            raise TypeError("ANI root is not a struct")
         self.name = self.root.get(L_NAME)
-        self.length = float(self.root.get(L_LENGTH) or 0.0)
+        self.length = _to_float(self.root.get(L_LENGTH))
         self.additive = bool(self.root.get(L_ADDITIVE))
+        self.version = self.gff.version
+        self.skipped: list = []
+        self.warnings: list = []
+        raw_nodes = self.root.get(L_NODES)
+        if raw_nodes is None:
+            raw_nodes = []
+        if not isinstance(raw_nodes, list):
+            self.skipped.append(("?", f"node list is {type(raw_nodes).__name__}"))
+            raw_nodes = []
         nodes = [
             n
-            for node in (self.root.get(L_NODES) or [])
-            if (n := _decode_node(node, self.length)) is not None
+            for node in raw_nodes
+            if (n := _decode_node(node, self.length, self.skipped, self.warnings)) is not None
         ]
-        self.animation = Animation(self.name, self.length, self.additive, nodes)
+        self.animation = Animation(
+            self.name, self.length, self.additive, nodes, self.skipped, self.warnings
+        )
 
     @property
     def nodes(self) -> list:
@@ -249,6 +372,21 @@ def encode_quat64(q: Any) -> int:
     idx, rest = _largest_first(q)
     fields = [_field_code(r, b) for r, b in zip(rest, Q64_BITS)]
     return _write_fields(fields, Q64_BITS, idx)
+
+
+def encode_quat48(q: Any) -> tuple:
+    # inverse of decode_quat48: drop the largest part, two low bits carry its place
+    idx, rest = _largest_first(q)
+    step = 2.0 / (SQRT2 * 65535.0)
+    codes = []
+    for ratio in rest:
+        code = round(ratio / step + 32767.5)
+        codes.append(max(0, min(65535, code)))
+    return (
+        (codes[0] & 0xFFFE) | ((idx >> 1) & 1),
+        (codes[1] & 0xFFFE) | (idx & 1),
+        codes[2],
+    )
 
 
 # ref_cell is the u32 pointing at the row list, first the first key struct,
@@ -339,7 +477,12 @@ def _put(buf: bytearray, at: int, type_id: int, value: Any) -> None:
 
 
 def _write_value(buf: bytearray, base: int, layout: _KeyLayout, target: int, value: Any) -> None:
-    if target in (ROTATION32, ROTATION64):
+    if is_rotation(target):
+        if target == ROTATION48:
+            words = encode_quat48(value)
+            for (rel, type_id), word in zip(layout.data_rel, words):
+                _put(buf, base + rel, type_id, word)
+            return
         if target == ROTATION32:
             word = encode_quat32(value)
         else:
