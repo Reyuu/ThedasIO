@@ -2,8 +2,7 @@
 
 1. Open the ThedasIO tab, Export panel.
 2. Tick the rows to export.
-3. Set Export to: the folder standalone files land in. Untouched resources come
-   out byte-identical to the source.
+3. Set Export to: the folder standalone files land in.
 4. Press **Check model** first. It reports what export would fix up silently or
    fail on: unweighted verts, missing materials and textures, degenerate faces,
    non-tri polygons, unapplied modifiers, shape keys and texture sizes.
@@ -15,7 +14,14 @@ Export writes a `.phy` beside a model when you have changed collision and PHY
 support is on. See [Collision](collision.md).
 
 Animations are exported separately with **Export Animation** in the same panel.
-See [Animation](animation.md).
+See [Animation](animation.md). Every `.ani` clip that was loaded with a model's
+armature rides along with that model's export, but only when its keys moved: an
+untouched clip re-encodes to its source bytes and is left out, so exporting an
+untouched model writes nothing new.
+
+Untouched resources come out byte-identical to the source. Export deduplicates
+repeated data, so an unedited mesh, material, or texture is never rewritten just
+because it was checked.
 
 ## Vertex groups and bones
 
@@ -77,6 +83,17 @@ not come out with a dead normal map. Untouched meshes are not rewritten at all.
 Turn it off to write the stored attribute values back instead, which is what you
 want if you author the frame yourself. If a `Frame *` attribute is deleted it is
 recreated from the mesh on export rather than exported empty.
+
+## Node scale
+
+**Export MMH node scale** is on by default in the add-on preferences. When it is
+on and the source `.mmh` carries a node scale (field 6278), export writes the
+edited local scale back into the node instead of keeping the source bytes. Turn
+it off to keep the legacy behavior of exporting only position and rotation.
+
+Node scale is per-node: a child node's scale is stored relative to its parent,
+so moving a parent does not rescale its children. Only meshes this export
+actually rewrites get the new scale; untouched `.mmh` files stay byte-identical.
 
 ## Rename and archive behaviour
 
